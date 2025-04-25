@@ -1,0 +1,46 @@
+# 📦 MODELES POUR FACTURATION
+# Fichier : app/models/model_facture.py
+
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Enum, Text
+from sqlalchemy.orm import relationship
+from datetime import datetime
+from enum import Enum as PyEnum
+from app.database import Base
+
+class TypeFacture(PyEnum):
+    achat = "achat"
+    vente = "vente"
+    devis = "devis"
+    proforma = "proforma"
+
+class Facture(Base):
+    __tablename__ = "factures"
+
+    id = Column(Integer, primary_key=True, index=True)
+    type = Column(Enum(TypeFacture), nullable=False)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=True)
+    fournisseur_id = Column(Integer, ForeignKey("fournisseurs.id"), nullable=True)
+    date_creation = Column(DateTime, default=datetime.utcnow)
+    statut = Column(String, default="brouillon")  # ex: brouillon, envoyé, payé, annulé
+    remarques = Column(Text, nullable=True)
+    total_ht = Column(Float, default=0.0)
+    total_ttc = Column(Float, default=0.0)
+    tva = Column(Float, default=0.0)
+
+    client = relationship("Client", backref="factures")
+    fournisseur = relationship("Fournisseur", backref="factures")
+    lignes = relationship("LigneFacture", back_populates="facture", cascade="all, delete")
+
+class LigneFacture(Base):
+    __tablename__ = "lignes_facture"
+
+    id = Column(Integer, primary_key=True, index=True)
+    facture_id = Column(Integer, ForeignKey("factures.id"))
+    produit_id = Column(Integer, ForeignKey("produits.id"))
+    description = Column(String, nullable=False)
+    quantite = Column(Integer, nullable=False)
+    prix_unitaire = Column(Float, nullable=False)
+    total_ligne = Column(Float, nullable=False)
+
+    facture = relationship("Facture", back_populates="lignes")
+    produit = relationship("Produit")

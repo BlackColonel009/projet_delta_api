@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+psycopg2-binary
+python-multipart
+SQLAlchemy
+alembic
+python-dotenv
+python-jose
+passlib[bcrypt]
+pydantic==2.10.6
+pydantic[email]
+fastapi-mail==1.4.2
+pydantic-settings==2.6.1
+weasyprint>=60.0
+
+

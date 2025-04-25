@@ -1,0 +1,70 @@
+    <!DOCTYPE html>
+    <html lang="fr">
+    <head>
+    <meta charset="UTF-8">
+    <title>Facture {{ facture.id }}</title>
+    <style>
+        body { font-family: Arial, sans-serif; font-size: 14px; }
+        .header { text-align: center; margin-bottom: 20px; }
+        .header h1 { margin: 0; }
+        .details, .lignes, .totaux { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        .details td, .lignes th, .lignes td, .totaux td { border: 1px solid #ccc; padding: 8px; }
+        .lignes th { background-color: #f0f0f0; }
+        .right { text-align: right; }
+        .totaux td { font-weight: bold; }
+    </style>
+    </head>
+    <body>
+    <div class="header">
+        <h1>Facture #{{ facture.id }}</h1>
+        <p>Type : {{ facture.type }}</p>
+        <p>Date : {{ facture.date_creation.strftime('%d/%m/%Y') }}</p>
+    </div>
+
+    <table class="details">
+        <tr>
+        <td><strong>Client :</strong><br>{{ facture.client.nom if facture.client else '---' }}</td>
+        <td><strong>Fournisseur :</strong><br>{{ facture.fournisseur.nom if facture.fournisseur else '---' }}</td>
+        </tr>
+        <tr>
+        <td colspan="2"><strong>Remarques :</strong><br>{{ facture.remarques or 'Aucune' }}</td>
+        </tr>
+    </table>
+
+    <table class="lignes">
+        <thead>
+        <tr>
+            <th>Description</th>
+            <th>Qté</th>
+            <th>Prix Unitaire</th>
+            <th>Total</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for ligne in facture.lignes %}
+        <tr>
+            <td>{{ ligne.description }}</td>
+            <td class="right">{{ ligne.quantite }}</td>
+            <td class="right">{{ '%.2f'|format(ligne.prix_unitaire) }} €</td>
+            <td class="right">{{ '%.2f'|format(ligne.total_ligne) }} €</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+
+    <table class="totaux">
+        <tr>
+        <td class="right">Total HT :</td>
+        <td class="right">{{ '%.2f'|format(facture.total_ht) }} €</td>
+        </tr>
+        <tr>
+        <td class="right">TVA ({{ facture.tva }}%) :</td>
+        <td class="right">{{ '%.2f'|format(facture.total_ttc - facture.total_ht) }} €</td>
+        </tr>
+        <tr>
+        <td class="right">Total TTC :</td>
+        <td class="right">{{ '%.2f'|format(facture.total_ttc) }} €</td>
+        </tr>
+    </table>
+    </body>
+    </html>
