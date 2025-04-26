@@ -16,6 +16,8 @@ class FactureCreate(BaseModel):
     remarques: Optional[str] = None
     tva: float = 0.0
     lignes: List[LigneFactureIn]
+    devise: str = "FCFA"
+
 
 class LigneFactureOut(LigneFactureIn):
     id: int

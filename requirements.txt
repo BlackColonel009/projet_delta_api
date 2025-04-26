@@ -11,6 +11,7 @@ pydantic==2.10.6
 pydantic[email]
 fastapi-mail==1.4.2
 pydantic-settings==2.6.1
-weasyprint>=60.0
+reportlab>=4.0.0
+
 
 

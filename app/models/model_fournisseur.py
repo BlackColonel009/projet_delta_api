@@ -4,6 +4,7 @@
 from sqlalchemy import Column, Integer, String, DateTime
 from datetime import datetime
 from app.database import Base
+from sqlalchemy.orm import relationship
 
 class Fournisseur(Base):
     __tablename__ = "fournisseurs"
@@ -15,6 +16,8 @@ class Fournisseur(Base):
     adresse = Column(String, nullable=True)
     type_fourniture = Column(String, nullable=True)
     date_creation = Column(DateTime, default=datetime.utcnow)
+
+    commandes = relationship("CommandeAchat", back_populates="fournisseur", cascade="all, delete")
 
     def __repr__(self):
         return f"<Fournisseur {self.nom}>"

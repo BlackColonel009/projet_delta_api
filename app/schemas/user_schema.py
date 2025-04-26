@@ -15,6 +15,7 @@ class RoleEnum(str, Enum):
     comptable = "comptable"
     commercial = "commercial"
     gestionnaire_stock = "gestionnaire_stock"
+    admin = "admin"
     
 class SubUserCreate(BaseModel):
     parent_email: EmailStr

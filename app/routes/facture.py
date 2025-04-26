@@ -8,6 +8,8 @@ from app.database import get_db
 from app.models.model_facture import Facture, LigneFacture, TypeFacture
 from app.models.model_produit import Produit
 from app.schemas.facture_schema import FactureOut, FactureCreate
+from fastapi.responses import FileResponse
+import os
 
 router = APIRouter(prefix="/factures", tags=["Facturation"])
 
@@ -69,3 +71,22 @@ def update_facture_statut(facture_id: int, statut: str, db: Session = Depends(ge
 @router.get("/", response_model=List[FactureOut])
 def list_factures(db: Session = Depends(get_db)):
     return db.query(Facture).all()
+
+
+
+@router.get("/{facture_id}/open")
+async def open_facture_pdf(facture_id: int):
+    """
+    📄 Ouvre un PDF de facture générée dans le navigateur
+    """
+    pdf_path = f"factures/facture_{facture_id}.pdf"
+
+    if not os.path.exists(pdf_path):
+        raise HTTPException(status_code=404, detail="Facture PDF non trouvée.")
+
+    return FileResponse(
+        path=pdf_path,
+        media_type="application/pdf",
+        filename=f"facture_{facture_id}.pdf",
+        headers={"Content-Disposition": f"inline; filename=facture_{facture_id}.pdf"}  # ➡️ inline pour ouvrir directement
+    )

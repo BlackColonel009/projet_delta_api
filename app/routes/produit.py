@@ -7,6 +7,7 @@ from app.schemas.produit_schema import ProduitCreate, ProduitOut
 from pydantic import BaseModel
 from datetime import datetime
 from app.utils.logger import log_action
+from app.utils.permissions import check_role
 from app.utils.security import get_current_user
 from app.models.model_user import User
 import shutil
@@ -35,7 +36,7 @@ def create_produit(
     emplacement: Optional[str] = Form("magasin"),
     image: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user=Depends(check_role(["admin", "gestionnaire_stock"]))
     ):
     # Enregistrement de l'image sur disque
     ext = image.filename.split(".")[-1]

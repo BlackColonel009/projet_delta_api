@@ -21,15 +21,18 @@ class Facture(Base):
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=True)
     fournisseur_id = Column(Integer, ForeignKey("fournisseurs.id"), nullable=True)
     date_creation = Column(DateTime, default=datetime.utcnow)
-    statut = Column(String, default="brouillon")  # ex: brouillon, envoyé, payé, annulé
+    statut = Column(String, default="en attente")  # ex: brouillon, envoyé, payé, annulé
     remarques = Column(Text, nullable=True)
     total_ht = Column(Float, default=0.0)
     total_ttc = Column(Float, default=0.0)
     tva = Column(Float, default=0.0)
+    devise = Column(String, default="FCFA")
+
 
     client = relationship("Client", backref="factures")
     fournisseur = relationship("Fournisseur", backref="factures")
     lignes = relationship("LigneFacture", back_populates="facture", cascade="all, delete")
+    paiements = relationship("Paiement", back_populates="facture", cascade="all, delete")
 
 class LigneFacture(Base):
     __tablename__ = "lignes_facture"

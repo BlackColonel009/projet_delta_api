@@ -1,6 +1,19 @@
 # app/config.py
-
+from fastapi_mail import ConnectionConfig
 from pydantic_settings import BaseSettings
+
+conf = ConnectionConfig(
+    MAIL_USERNAME="imlogang009@gmail.com",
+    MAIL_PASSWORD="voexesyjnnljrauk",
+    MAIL_FROM="imlogang009@gmail.com",
+    MAIL_PORT=587,
+    MAIL_SERVER="smtp.gmail.com",
+    MAIL_FROM_NAME="TRADE CARE",
+    MAIL_STARTTLS=True,
+    MAIL_SSL_TLS=False,
+    USE_CREDENTIALS=True
+)
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Projet DELTA"
@@ -20,3 +33,7 @@ class Settings(BaseSettings):
         env_file = ".env"
 
 settings = Settings()
+
+
+
+

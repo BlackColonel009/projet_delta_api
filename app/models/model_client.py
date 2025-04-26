@@ -4,6 +4,7 @@
 from sqlalchemy import Column, Integer, String, DateTime
 from datetime import datetime
 from app.database import Base
+from sqlalchemy.orm import relationship
 
 class Client(Base):
     __tablename__ = "clients"
@@ -15,6 +16,8 @@ class Client(Base):
     entreprise = Column(String, nullable=True)
     adresse = Column(String, nullable=True)
     date_creation = Column(DateTime, default=datetime.utcnow)
+
+    commandes = relationship("CommandeVente", back_populates="client")
 
     def __repr__(self):
         return f"<Client {self.nom}>"

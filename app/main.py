@@ -9,14 +9,17 @@ from app.routes import client
 from app.routes import produit
 from app.routes import categorie
 from app.routes import fournisseur
-from app.routes import achat
-from app.routes import vente
 from app.routes import intervention
 from app.routes import historique_intervention
 from app.routes import historique_general
+from app.routes import commande
 from app.routes import facture
 from app.routes import facture_pdf
+from app.routes import paiement
 from app.utils.logger import log_action
+from app.routes import dashboard_financier
+from app.routes import depense
+from app.routes import export_financier
 from app.utils.security import (
     hash_password, verify_password, create_access_token,
     get_current_user, get_current_sub_user,
@@ -52,10 +55,6 @@ app.include_router(categorie.router)
 
 app.include_router(fournisseur.router)
 
-app.include_router(achat.router)
-
-app.include_router(vente.router)
-
 app.include_router(intervention.router)
 
 app.include_router(historique_intervention.router)
@@ -66,9 +65,16 @@ app.include_router(facture.router)
 
 app.include_router(facture_pdf.router)
 
+app.include_router(commande.router_ventes)
+app.include_router(commande.router_achats)
 
+app.include_router(paiement.router)
 
+app.include_router(dashboard_financier.router)
 
+app.include_router(depense.router)
+
+app.include_router(export_financier.router)
 
 # Route de test
 @app.get("/", tags=["Test"])

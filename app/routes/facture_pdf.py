@@ -1,29 +1,93 @@
-# 📄 ROUTE POUR GÉNÉRER UN PDF DE FACTURE AVEC WEASYPRINT
-# Fichier : app/routes/facture_pdf.py
-
-from fastapi import APIRouter, Depends, HTTPException, Response
+import os
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from fastapi_mail import FastMail, MessageSchema, MessageType
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import cm
 from app.database import get_db
 from app.models.model_facture import Facture
-from app.models.model_facture import LigneFacture
-from jinja2 import Environment, FileSystemLoader
-from weasyprint import HTML
-import os
+from app.config import conf
 
-router = APIRouter(prefix="/factures", tags=["PDF"])
+router = APIRouter(prefix="/factures", tags=["Email"])
 
-TEMPLATE_DIR = os.path.join("app", "templates")
-env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
-
-@router.get("/{facture_id}/pdf")
-def generate_facture_pdf(facture_id: int, db: Session = Depends(get_db)):
+@router.post("/{facture_id}/send")
+async def send_facture_to_client(facture_id: int, db: Session = Depends(get_db)):
     facture = db.query(Facture).filter(Facture.id == facture_id).first()
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
 
-    template = env.get_template("facture_template.html")
-    rendered_html = template.render(facture=facture)
+    if not facture.client or not facture.client.email:
+        raise HTTPException(status_code=400, detail="Le client n'a pas d'adresse email")
 
-    pdf = HTML(string=rendered_html).write_pdf()
+    # 🔧 Créer le dossier si nécessaire
+    os.makedirs("factures", exist_ok=True)
 
-    return Response(content=pdf, media_type="application/pdf")
+    # 📄 Générer le fichier PDF
+    pdf_path = f"factures/facture_{facture.id}.pdf"
+    pdf = canvas.Canvas(pdf_path, pagesize=A4)
+    width, height = A4
+    y = height - 2 * cm
+
+    pdf.setFont("Helvetica-Bold", 16)
+    pdf.drawString(2 * cm, y, f"Facture #{facture.id} - {facture.type.value.upper()}")
+    y -= 1.2 * cm
+    pdf.setFont("Helvetica", 11)
+    pdf.drawString(2 * cm, y, f"Date : {facture.date_creation.strftime('%d/%m/%Y')}")
+    y -= 0.8 * cm
+
+    if facture.client:
+        pdf.drawString(2 * cm, y, f"Client : {facture.client.nom}")
+        y -= 0.6 * cm
+    if facture.fournisseur:
+        pdf.drawString(2 * cm, y, f"Fournisseur : {facture.fournisseur.nom}")
+        y -= 0.6 * cm
+
+    y -= 1 * cm
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(2 * cm, y, "Description")
+    pdf.drawString(9 * cm, y, "Qté")
+    pdf.drawString(11 * cm, y, "PU")
+    pdf.drawString(14 * cm, y, "Total")
+    y -= 0.4 * cm
+    pdf.line(2 * cm, y, 19 * cm, y)
+    y -= 0.5 * cm
+
+    pdf.setFont("Helvetica", 10)
+    for ligne in facture.lignes:
+        pdf.drawString(2 * cm, y, ligne.description)
+        pdf.drawRightString(10 * cm, y, str(ligne.quantite))
+        pdf.drawRightString(13 * cm, y, f"{ligne.prix_unitaire:.2f} €")
+        pdf.drawRightString(18 * cm, y, f"{ligne.total_ligne:.2f} €")
+        y -= 0.6 * cm
+        if y < 4 * cm:
+            pdf.showPage()
+            y = height - 3 * cm
+
+    y -= 1 * cm
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawRightString(15 * cm, y, "Total HT :")
+    pdf.drawRightString(19 * cm, y, f"{facture.total_ht:.2f} €")
+    y -= 0.5 * cm
+    pdf.drawRightString(15 * cm, y, f"TVA ({facture.tva:.0f}%) :")
+    pdf.drawRightString(19 * cm, y, f"{facture.total_ttc - facture.total_ht:.2f} €")
+    y -= 0.5 * cm
+    pdf.drawRightString(15 * cm, y, "Total TTC :")
+    pdf.drawRightString(19 * cm, y, f"{facture.total_ttc:.2f} €")
+
+    pdf.showPage()
+    pdf.save()
+
+    # 📧 Préparer l'e-mail avec le chemin du fichier
+    message = MessageSchema(
+        subject=f"Votre facture #{facture.id}",
+        recipients=[facture.client.email],
+        body=f"Bonjour, veuillez trouver en pièce jointe la facture #{facture.id}.",
+        subtype=MessageType.plain,
+        attachments=[pdf_path]
+    )
+
+    fm = FastMail(conf)
+    await fm.send_message(message)
+
+    return {"message": f"Facture #{facture.id} envoyée à {facture.client.email}"}
