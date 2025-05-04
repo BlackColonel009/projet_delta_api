@@ -1,6 +1,6 @@
 # 📦 MODELS POUR CommandeVente et CommandeAchat
 
-from sqlalchemy import Column, Integer, Float, String, ForeignKey, Boolean, DateTime
+from sqlalchemy import Column, ForeignKey, Integer, Float, String, ForeignKey, Boolean, DateTime
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
@@ -17,6 +17,12 @@ class CommandeVente(Base):
     tva_appliquee = Column(Boolean, default=False)
     statut = Column(String, default="en_attente")
 
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    
+    user = relationship("User", backref="commandes_ventes")
+
+
+
     client = relationship("Client", back_populates="commandes")
     lignes = relationship("LigneCommandeVente", back_populates="commande", cascade="all, delete")
 
@@ -31,6 +37,9 @@ class LigneCommandeVente(Base):
     quantite = Column(Integer, nullable=False)
     prix_unitaire = Column(Float, nullable=False)
     total_ligne = Column(Float, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    
+    user = relationship("User", backref="lignes_commandes_ventes")
 
     commande = relationship("CommandeVente", back_populates="lignes")
     produit = relationship("Produit")
@@ -47,6 +56,10 @@ class CommandeAchat(Base):
     tva = Column(Float, default=0)
     tva_appliquee = Column(Boolean, default=False)
     statut = Column(String, default="en_attente")
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    
+    user = relationship("User", backref="commandes_achats")
+
 
     fournisseur = relationship("Fournisseur", back_populates="commandes")
     lignes = relationship("LigneCommandeAchat", back_populates="commande", cascade="all, delete")
@@ -62,6 +75,10 @@ class LigneCommandeAchat(Base):
     quantite = Column(Integer, nullable=False)
     prix_unitaire = Column(Float, nullable=False)
     total_ligne = Column(Float, nullable=False)
+
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    
+    user = relationship("User", backref="lignes_commandes_achats")
 
     commande = relationship("CommandeAchat", back_populates="lignes")
     produit = relationship("Produit")

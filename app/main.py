@@ -20,6 +20,9 @@ from app.utils.logger import log_action
 from app.routes import dashboard_financier
 from app.routes import depense
 from app.routes import export_financier
+from app.routes import entreprise
+from app.routes import scanqr
+from app.routes import upload
 from app.utils.security import (
     hash_password, verify_password, create_access_token,
     get_current_user, get_current_sub_user,
@@ -75,6 +78,12 @@ app.include_router(dashboard_financier.router)
 app.include_router(depense.router)
 
 app.include_router(export_financier.router)
+
+app.include_router(entreprise.router)
+
+app.include_router(scanqr.router)
+
+app.include_router(upload.router)
 
 # Route de test
 @app.get("/", tags=["Test"])

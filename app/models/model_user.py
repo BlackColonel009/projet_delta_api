@@ -14,6 +14,8 @@ class User(Base):
     is_superuser = Column(Boolean, default=False)  # ✅ Nouvelle colonne
     avatar_url = Column(String, nullable=True)
     bio = Column(String, nullable=True)
+    username = Column(String, nullable=True)
+    societe_ou_entreprise = Column(String, nullable=True)
     account_type = Column(String, default="basic")
     created_at = Column(DateTime, default=datetime.utcnow)
 

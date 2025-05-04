@@ -24,6 +24,7 @@ class Intervention(Base):
     statut = Column(String, default="en cours")  # ex: en cours, terminé, annulé
     date_intervention = Column(DateTime, default=datetime.utcnow)
 
+
     # Relations
     client = relationship("Client", backref="interventions")
     employe = relationship("User", backref="interventions")

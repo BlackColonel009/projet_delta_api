@@ -1,7 +1,7 @@
 # 📦 MODELE CLIENT SQLALCHEMY
 # Fichier : app/models/model_client.py
 
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column, ForeignKey,  Integer, String, DateTime
 from datetime import datetime
 from app.database import Base
 from sqlalchemy.orm import relationship
@@ -16,7 +16,9 @@ class Client(Base):
     entreprise = Column(String, nullable=True)
     adresse = Column(String, nullable=True)
     date_creation = Column(DateTime, default=datetime.utcnow)
-
+    
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    user = relationship("User", backref="clients")
     commandes = relationship("CommandeVente", back_populates="client")
 
     def __repr__(self):

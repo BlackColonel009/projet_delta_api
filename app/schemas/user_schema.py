@@ -7,14 +7,15 @@ class UserCreate(BaseModel):
     password: str
     account_type: Optional[str] = "basic"
     is_main_user: bool = False
+    societe_ou_entreprise: Optional[str] = None  # ✅
     
 class RoleEnum(str, Enum):
-    technicien = "technicien"
-    secretaire = "secretaire"
-    caissier = "caissier"
-    comptable = "comptable"
-    commercial = "commercial"
-    gestionnaire_stock = "gestionnaire_stock"
+    technicien = "Technicien(ne)"
+    secretaire = "Secretaire"
+    caissier = "Caissier(e)"
+    comptable = "Comptable"
+    commercial = "Commerciale"
+    gestionnaire_stock = "Gestionnaire de stock"
     admin = "admin"
     
 class SubUserCreate(BaseModel):

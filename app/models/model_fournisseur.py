@@ -1,7 +1,7 @@
 # 📦 MODELE FOURNISSEUR SQLALCHEMY
 # Fichier : app/models/model_fournisseur.py
 
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column, ForeignKey, Integer, String, DateTime
 from datetime import datetime
 from app.database import Base
 from sqlalchemy.orm import relationship
@@ -16,7 +16,9 @@ class Fournisseur(Base):
     adresse = Column(String, nullable=True)
     type_fourniture = Column(String, nullable=True)
     date_creation = Column(DateTime, default=datetime.utcnow)
-
+    
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    user = relationship("User", backref="fournisseurs")
     commandes = relationship("CommandeAchat", back_populates="fournisseur", cascade="all, delete")
 
     def __repr__(self):

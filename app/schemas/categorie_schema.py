@@ -8,7 +8,9 @@ class CategorieCreate(BaseModel):
 
 class CategorieOut(CategorieCreate):
     id: int
+    nom: str
     date_creation: datetime
+    user_id: int
 
     class Config:
         from_attributes = True

@@ -28,7 +28,8 @@ def register_user(data: UserCreate, db: Session = Depends(get_db)):
         password_hash=hash_password(data.password),
         is_main_user=data.is_main_user,
         is_superuser=False,# par défaut
-        account_type=data.account_type  
+        account_type=data.account_type,
+        societe_ou_entreprise=data.societe_ou_entreprise  
     )
     db.add(new_user)
     db.commit()
@@ -49,6 +50,12 @@ def register_sub_user(
     # ✅ Vérifie que le rôle demandé est défini dans la table roles
     if not db.query(Role).filter(Role.name == data.role).first():
         raise HTTPException(status_code=400, detail="Rôle non autorisé")
+    
+    if not current_user.is_main_user:
+        raise HTTPException(
+            status_code=403,
+            detail="Seuls les utilisateurs gestionnaire ou leader peuvent créer des subusers."
+        )
     
     new_sub = SubUser(
         username=data.username,
@@ -92,21 +99,6 @@ def list_my_subusers(current_user: User = Depends(get_current_user), db: Session
     subusers = db.query(SubUser).filter(SubUser.parent_user_id == current_user.id).all()
     return subusers
 
-@router.delete("/delete/avatar", tags=["Fichiers"])
-def delete_avatar_file(current_user: User = Depends(get_current_user)):
-    """
-    🧽 Supprimer le fichier avatar actuel de l'utilisateur (si défini)
-    """
-    if not current_user.avatar_url:
-        raise HTTPException(status_code=404, detail="Aucun avatar défini.")
-
-    path = current_user.avatar_url.replace("/static", "upload")
-    if os.path.exists(path):
-        os.remove(path)
-    current_user.avatar_url = None
-    db = next(get_db())
-    db.commit()
-    return {"message": "Avatar supprimé avec succès."}
 
 
 # 🔄 Modifier ses propres informations (utilisateur principal)
@@ -116,8 +108,11 @@ def update_my_user(
     password: Optional[str] = Body(None),
     avatar_url: Optional[str] = Body(None),
     bio: Optional[str] = Body(None),
+    societe_ou_entreprise: Optional[str] = Body(None),
+    username: Optional[str] = Body(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
+    
 ):
     if email:
         current_user.email = email
@@ -127,6 +122,10 @@ def update_my_user(
         current_user.avatar_url = avatar_url
     if bio:
         current_user.bio = bio
+    if societe_ou_entreprise:
+        current_user.societe_ou_entreprise = societe_ou_entreprise
+    if username:
+        current_user.username = username
     db.commit()
     return {"message": "Informations utilisateur mises à jour avec succès."}
 
@@ -228,7 +227,7 @@ def get_user_by_id(user_id: int, current_super: User = Depends(require_super_use
 def get_my_profile(
     current_user: User = Depends(get_current_user)
     ):
-    return {"id": current_user.id, "email": current_user.email, "is_superuser": current_user.is_superuser, "bio": current_user.bio, "avatar_url": current_user.avatar_url, "is_main_user": current_user.is_main_user}
+    return {"id": current_user.id, "email": current_user.email, "is_superuser": current_user.is_superuser, "bio": current_user.bio, "avatar_url": current_user.avatar_url, "is_main_user": current_user.is_main_user,  "username": current_user.username}
 
 # 📋 Voir son propre profil (sous-utilisateur connecté)
 @router.get("/me-sub", tags=["SubUsers"])

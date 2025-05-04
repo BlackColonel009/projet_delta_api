@@ -17,6 +17,7 @@ class Historique(Base):
     details = Column(Text, nullable=True)  # description facultative ou JSON brut
     date_action = Column(DateTime, default=datetime.utcnow)
 
+    
     user = relationship("User", backref="historiques")
 
     def __repr__(self):

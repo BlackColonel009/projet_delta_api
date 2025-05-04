@@ -1,7 +1,7 @@
 # 📦 MODELES POUR FACTURATION
 # Fichier : app/models/model_facture.py
 
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Enum, Text
+from sqlalchemy import Column, ForeignKey, Integer, String, Float, DateTime, ForeignKey, Enum, Text
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from enum import Enum as PyEnum
@@ -27,7 +27,9 @@ class Facture(Base):
     total_ttc = Column(Float, default=0.0)
     tva = Column(Float, default=0.0)
     devise = Column(String, default="FCFA")
-
+    
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    user = relationship("User", backref="factures")
 
     client = relationship("Client", backref="factures")
     fournisseur = relationship("Fournisseur", backref="factures")
@@ -44,6 +46,11 @@ class LigneFacture(Base):
     quantite = Column(Integer, nullable=False)
     prix_unitaire = Column(Float, nullable=False)
     total_ligne = Column(Float, nullable=False)
+    
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    user = relationship("User", backref="lignes_facture")
+
+
 
     facture = relationship("Facture", back_populates="lignes")
     produit = relationship("Produit")

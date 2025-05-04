@@ -1,9 +1,20 @@
-from fastapi import File, UploadFile
+from fastapi import File, UploadFile, Depends
+from app.utils.security import get_current_user
+from sqlalchemy.orm import Session
+from app.database import get_db
+from app.models.model_user import User, SubUser
 import shutil
 import os
 from uuid import uuid4
+from fastapi import APIRouter
+from app.utils.security import (
+    hash_password, verify_password, create_access_token,
+    get_current_user, get_current_sub_user, require_role, 
+    require_super_user, require_any_role, require_main_user)
 
-@router.post("/upload/avatar", tags=["Fichiers"])
+router = APIRouter(prefix="/upload", tags=["Fichiers"])
+
+@router.post("/avatar-user", tags=["Fichiers"])
 def upload_avatar_for_user(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
@@ -29,7 +40,7 @@ def upload_avatar_for_user(
     return {"avatar_url": url, "message": "Avatar uploaded and linked successfully."}
 
 
-@router.post("/upload/avatar-sub", tags=["Fichiers"])
+@router.post("/avatar-sub", tags=["Fichiers"])
 def upload_avatar_for_subuser(
     file: UploadFile = File(...),
     current_sub: SubUser = Depends(get_current_sub_user),
@@ -54,27 +65,33 @@ def upload_avatar_for_subuser(
 
     return {"avatar_url": url, "message": "Avatar uploaded and linked successfully."}
 
-@router.post("/upload/avatar-sub", tags=["Fichiers"])
-def upload_avatar_for_subuser(
-    file: UploadFile = File(...),
-    current_sub: SubUser = Depends(get_current_sub_user),
-    db: Session = Depends(get_db)
+# 👤 Avatar de l'utilisateur principal
+@router.get("/avatar-user", tags=["Fichiers"])
+def get_avatar_user(
+    current_user: User = Depends(get_current_user),
 ):
+    return {"avatar_url": current_user.avatar_url}
+
+
+# 👤 Avatar du sub-user connecté
+@router.get("/avatar-sub", tags=["Fichiers"])
+def get_avatar_subuser(
+    current_sub: SubUser = Depends(get_current_sub_user),
+):
+    return {"avatar_url": current_sub.avatar_url}
+
+@router.delete("/delete/avatar", tags=["Fichiers"])
+def delete_avatar_file(current_user: User = Depends(get_current_user)):
     """
-    📤 Upload d'un avatar pour sub-user + mise à jour automatique du champ avatar_url
+    🧽 Supprimer le fichier avatar actuel de l'utilisateur (si défini)
     """
-    from uuid import uuid4
-    import os, shutil
+    if not current_user.avatar_url:
+        raise HTTPException(status_code=404, detail="Aucun avatar défini.")
 
-    ext = file.filename.split(".")[-1]
-    filename = f"{uuid4()}.{ext}"
-    path = os.path.join("upload", "avatars", filename)
-
-    with open(path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    url = f"/static/avatars/{filename}"
-    current_sub.avatar_url = url
+    path = current_user.avatar_url.replace("/static", "upload")
+    if os.path.exists(path):
+        os.remove(path)
+    current_user.avatar_url = None
+    db = next(get_db())
     db.commit()
-
-    return {"avatar_url": url, "message": "Avatar uploaded and linked successfully."}
+    return {"message": "Avatar supprimé avec succès."}

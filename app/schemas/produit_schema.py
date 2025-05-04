@@ -2,6 +2,7 @@ from typing import List, Optional
 from pydantic import BaseModel, EmailStr
 from datetime import datetime
 from fastapi import Form
+from app.schemas.categorie_schema import CategorieOut
 # 🧾 Schéma de création / mise à jour
 
 class ProduitCreate:
@@ -41,6 +42,7 @@ class ProduitOut(BaseModel):
     id: int
     nom: str
     categorie_id: int
+    categorie: Optional[CategorieOut]  # <--- pour récupérer nom, etc.
     prix_achat: float
     prix_vente: float
     fournisseur_id: Optional[int]

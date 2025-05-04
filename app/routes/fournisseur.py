@@ -1,18 +1,21 @@
-
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
 from app.models.model_fournisseur import Fournisseur
-from app.schemas.fournisseur_schema import FournisseurCreate, FournisseurOut 
+from app.schemas.fournisseur_schema import FournisseurCreate, FournisseurOut
+from app.utils.security import get_current_user
 
 router = APIRouter(prefix="/fournisseurs", tags=["Fournisseurs"])
 
-
 # ➕ Créer un fournisseur
 @router.post("/", response_model=FournisseurOut)
-def create_fournisseur(data: FournisseurCreate, db: Session = Depends(get_db)):
-    fournisseur = Fournisseur(**data.dict())
+def create_fournisseur(
+    data: FournisseurCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    fournisseur = Fournisseur(**data.dict(), user_id=current_user.id)
     db.add(fournisseur)
     db.commit()
     db.refresh(fournisseur)
@@ -20,21 +23,39 @@ def create_fournisseur(data: FournisseurCreate, db: Session = Depends(get_db)):
 
 # 📋 Lister tous les fournisseurs
 @router.get("/", response_model=List[FournisseurOut])
-def list_fournisseurs(db: Session = Depends(get_db)):
-    return db.query(Fournisseur).all()
+def list_fournisseurs(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    return db.query(Fournisseur).filter(Fournisseur.user_id == current_user.id).all()
 
 # 🔍 Voir un fournisseur par ID
 @router.get("/{fournisseur_id}", response_model=FournisseurOut)
-def get_fournisseur(fournisseur_id: int, db: Session = Depends(get_db)):
-    fournisseur = db.query(Fournisseur).filter(Fournisseur.id == fournisseur_id).first()
+def get_fournisseur(
+    fournisseur_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    fournisseur = db.query(Fournisseur).filter(
+        Fournisseur.id == fournisseur_id,
+        Fournisseur.user_id == current_user.id
+    ).first()
     if not fournisseur:
         raise HTTPException(status_code=404, detail="Fournisseur non trouvé")
     return fournisseur
 
 # 🔄 Modifier un fournisseur
 @router.put("/{fournisseur_id}", response_model=FournisseurOut)
-def update_fournisseur(fournisseur_id: int, data: FournisseurCreate, db: Session = Depends(get_db)):
-    fournisseur = db.query(Fournisseur).filter(Fournisseur.id == fournisseur_id).first()
+def update_fournisseur(
+    fournisseur_id: int,
+    data: FournisseurCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    fournisseur = db.query(Fournisseur).filter(
+        Fournisseur.id == fournisseur_id,
+        Fournisseur.user_id == current_user.id
+    ).first()
     if not fournisseur:
         raise HTTPException(status_code=404, detail="Fournisseur non trouvé")
     for key, value in data.dict().items():
@@ -45,8 +66,15 @@ def update_fournisseur(fournisseur_id: int, data: FournisseurCreate, db: Session
 
 # ❌ Supprimer un fournisseur
 @router.delete("/{fournisseur_id}")
-def delete_fournisseur(fournisseur_id: int, db: Session = Depends(get_db)):
-    fournisseur = db.query(Fournisseur).filter(Fournisseur.id == fournisseur_id).first()
+def delete_fournisseur(
+    fournisseur_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    fournisseur = db.query(Fournisseur).filter(
+        Fournisseur.id == fournisseur_id,
+        Fournisseur.user_id == current_user.id
+    ).first()
     if not fournisseur:
         raise HTTPException(status_code=404, detail="Fournisseur non trouvé")
     db.delete(fournisseur)

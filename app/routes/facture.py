@@ -3,19 +3,23 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List
 from app.database import get_db
-from app.models.model_facture import Facture, LigneFacture, TypeFacture
-from app.models.model_produit import Produit
+from app.models.model_facture import Facture, LigneFacture
 from app.schemas.facture_schema import FactureOut, FactureCreate
 from fastapi.responses import FileResponse
+from app.utils.security import get_current_user
 import os
 
 router = APIRouter(prefix="/factures", tags=["Facturation"])
 
 # ➕ Créer une facture complète
 @router.post("/", response_model=FactureOut)
-def create_facture(data: FactureCreate, db: Session = Depends(get_db)):
+def create_facture(
+    data: FactureCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
     total_ht = sum(l.quantite * l.prix_unitaire for l in data.lignes)
     total_ttc = total_ht * (1 + data.tva / 100)
 
@@ -26,7 +30,8 @@ def create_facture(data: FactureCreate, db: Session = Depends(get_db)):
         remarques=data.remarques,
         tva=data.tva,
         total_ht=total_ht,
-        total_ttc=total_ttc
+        total_ttc=total_ttc,
+        user_id=current_user.id  # 🔐 Liaison sécurisée
     )
 
     db.add(facture)
@@ -49,38 +54,61 @@ def create_facture(data: FactureCreate, db: Session = Depends(get_db)):
 
 # 🔍 Lire une facture avec ses lignes
 @router.get("/{facture_id}", response_model=FactureOut)
-def get_facture(facture_id: int, db: Session = Depends(get_db)):
-    facture = db.query(Facture).filter(Facture.id == facture_id).first()
+def get_facture(
+    facture_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    facture = db.query(Facture).filter(
+        Facture.id == facture_id,
+        Facture.user_id == current_user.id
+    ).first()
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
     return facture
 
-
 # 🔄 Mettre à jour le statut d'une facture
 @router.patch("/{facture_id}/statut", response_model=dict)
-def update_facture_statut(facture_id: int, statut: str, db: Session = Depends(get_db)):
-    facture = db.query(Facture).filter(Facture.id == facture_id).first()
+def update_facture_statut(
+    facture_id: int,
+    statut: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    facture = db.query(Facture).filter(
+        Facture.id == facture_id,
+        Facture.user_id == current_user.id
+    ).first()
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
     facture.statut = statut
     db.commit()
     return {"message": f"Statut de la facture #{facture_id} mis à jour en '{statut}'"}
 
-
-# 📋 Lister toutes les factures
+# 📋 Lister toutes les factures de l'utilisateur connecté
 @router.get("/", response_model=List[FactureOut])
-def list_factures(db: Session = Depends(get_db)):
-    return db.query(Facture).all()
+def list_factures(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    return db.query(Facture).filter(Facture.user_id == current_user.id).all()
 
-
-
+# 📄 Ouvre un PDF de facture générée dans le navigateur
 @router.get("/{facture_id}/open")
-async def open_facture_pdf(facture_id: int):
-    """
-    📄 Ouvre un PDF de facture générée dans le navigateur
-    """
-    pdf_path = f"factures/facture_{facture_id}.pdf"
+async def open_facture_pdf(
+    facture_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    # Sécurité : vérifier que l'utilisateur est bien propriétaire
+    facture = db.query(Facture).filter(
+        Facture.id == facture_id,
+        Facture.user_id == current_user.id
+    ).first()
+    if not facture:
+        raise HTTPException(status_code=404, detail="Facture non trouvée")
 
+    pdf_path = f"factures/facture_{facture_id}.pdf"
     if not os.path.exists(pdf_path):
         raise HTTPException(status_code=404, detail="Facture PDF non trouvée.")
 
@@ -88,5 +116,5 @@ async def open_facture_pdf(facture_id: int):
         path=pdf_path,
         media_type="application/pdf",
         filename=f"facture_{facture_id}.pdf",
-        headers={"Content-Disposition": f"inline; filename=facture_{facture_id}.pdf"}  # ➡️ inline pour ouvrir directement
+        headers={"Content-Disposition": f"inline; filename=facture_{facture_id}.pdf"}
     )

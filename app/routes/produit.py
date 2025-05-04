@@ -13,10 +13,8 @@ from app.models.model_user import User
 import shutil
 import os
 
-
 router = APIRouter(prefix="/produits", tags=["Produits"])
 
-# ➕ Créer un produit
 # ➕ Créer un produit avec image (multipart)
 @router.post("/", response_model=dict)
 def create_produit(
@@ -37,12 +35,13 @@ def create_produit(
     image: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user=Depends(check_role(["admin", "gestionnaire_stock"]))
-    ):
+):
     # Enregistrement de l'image sur disque
     ext = image.filename.split(".")[-1]
     image_filename = f"{datetime.utcnow().timestamp()}.{ext}"
-    image_path = os.path.join("upload", "produits", image_filename)
-    os.makedirs(os.path.dirname(image_path), exist_ok=True)
+    upload_dir = os.path.join(os.getcwd(), "upload", "produits")
+    os.makedirs(upload_dir, exist_ok=True)
+    image_path = os.path.join(upload_dir, image_filename)
     with open(image_path, "wb") as buffer:
         shutil.copyfileobj(image.file, buffer)
 
@@ -80,14 +79,21 @@ def create_produit(
     return {"message": "Produit créé avec succès", "produit_id": produit.id}
 
 
-# 📋 Lister tous les produits
+# 📋 Lister tous les produits actifs
 @router.get("/", response_model=List[ProduitOut])
-def list_produits(db: Session = Depends(get_db)):
+def list_produits(
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role(["admin", "gestionnaire_stock", "technicien"]))
+):
     return db.query(Produit).filter(Produit.date_suppression == None).all()
 
 # 🔍 Voir un produit par ID
 @router.get("/{produit_id}", response_model=ProduitOut)
-def get_produit(produit_id: int, db: Session = Depends(get_db)):
+def get_produit(
+    produit_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role(["admin", "gestionnaire_stock", "technicien"]))
+):
     produit = db.query(Produit).filter(Produit.id == produit_id, Produit.date_suppression == None).first()
     if not produit:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
@@ -113,29 +119,28 @@ def update_produit(
     emplacement: Optional[str] = Form("magasin"),
     image: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-    ):
+    current_user=Depends(check_role(["admin", "gestionnaire_stock"]))
+):
     produit = db.query(Produit).filter(Produit.id == produit_id).first()
     if not produit:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
 
-    # Gérer l'image si fournie
     if image:
         if produit.image_url:
             old_path = produit.image_url.replace("/static", "upload")
-            if os.path.exists(old_path):
-                os.remove(old_path)
+            old_abs_path = os.path.join(os.getcwd(), old_path)
+            if os.path.exists(old_abs_path):
+                os.remove(old_abs_path)
 
         ext = image.filename.split(".")[-1]
         image_filename = f"{datetime.utcnow().timestamp()}.{ext}"
-        image_path = os.path.join("upload", "produits", image_filename)
-        os.makedirs(os.path.dirname(image_path), exist_ok=True)
+        upload_dir = os.path.join(os.getcwd(), "upload", "produits")
+        image_path = os.path.join(upload_dir, image_filename)
         with open(image_path, "wb") as buffer:
             shutil.copyfileobj(image.file, buffer)
-
         produit.image_url = f"/static/produits/{image_filename}"
 
-    # Mise à jour des champs
+    # Mettre à jour les autres champs
     produit.nom = nom
     produit.categorie_id = categorie_id
     produit.prix_achat = prix_achat
@@ -170,25 +175,61 @@ def update_produit(
 def delete_produit(
     produit_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-    ):
+    current_user=Depends(check_role(["admin", "gestionnaire_stock"]))
+):
     produit = db.query(Produit).filter(Produit.id == produit_id).first()
     if not produit:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
     produit.date_suppression = datetime.utcnow()
     db.commit()
-    
+
     log_action(
         db=db,
         user_id=current_user.id,
-        action=" Produit supprimé!",
+        action="Produit supprimé",
         type_entite="produit",
         entite_id=produit.id,
-        details=f"Produit au nom: {produit.nom} à été supprimé"
+        details=f"Produit au nom: {produit.nom} supprimé logiquement"
     )
+
     return {"message": "Produit supprimé (logiquement)"}
 
-# 📋 Voir les produits supprimés (soft delete)
+# 📋 Voir les produits supprimés
 @router.get("/supprimes", response_model=List[ProduitOut])
-def list_deleted_produits(db: Session = Depends(get_db)):
+def list_deleted_produits(
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role(["admin"]))
+):
     return db.query(Produit).filter(Produit.date_suppression.isnot(None)).all()
+
+# 📦 Scan QR code (vente ou ajout rapide)
+@router.post("/scan_qr")
+def scan_qr_code(
+    data: dict,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role(["admin", "gestionnaire_stock", "technicien", "caissier"]))
+):
+    tracabilite = data.get("tracabilite")
+    if not tracabilite:
+        raise HTTPException(status_code=400, detail="Tracabilité manquante.")
+
+    produit = db.query(Produit).filter(Produit.tracabilite == tracabilite).first()
+
+    if produit:
+        return {
+            "action": "vente",
+            "produit_id": produit.id,
+            "nom": produit.nom,
+            "prix_vente": produit.prix_vente,
+            "message": "Produit trouvé. Souhaitez-vous lancer une vente ?"
+        }
+    else:
+        return {
+            "action": "ajout",
+            "pre_remplir": {
+                "nom": data.get("nom_produit"),
+                "tracabilite": tracabilite,
+                "societe": data.get("societe")
+            },
+            "message": "Produit non trouvé. Voulez-vous l'ajouter ?"
+        }
