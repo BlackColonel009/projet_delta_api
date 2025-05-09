@@ -26,7 +26,7 @@ class Produit(Base):
     emplacement = Column(String, default="magasin")
     image_url = Column(String, nullable=True)
     stock_min = Column(Integer, default=0)
-
+    
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     user = relationship("User", backref="produits")
 
@@ -37,6 +37,8 @@ class Produit(Base):
     # Relations (à ajouter si besoin)
     categorie = relationship("Categorie", backref="produits")
     fournisseur = relationship("Fournisseur", backref="produits")
+
+    unites = relationship("UniteProduit", back_populates="produit", cascade="all, delete")
 
     def __repr__(self):
         return f"<Produit {self.nom}>"

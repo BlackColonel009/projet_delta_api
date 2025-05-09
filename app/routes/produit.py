@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Body, File, Form, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Body, File, Form, UploadFile 
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.database import get_db
@@ -10,6 +10,8 @@ from app.utils.logger import log_action
 from app.utils.permissions import check_role
 from app.utils.security import get_current_user
 from app.models.model_user import User
+from app.schemas.user_schema import RoleEnum
+from app.models.model_unite_produit import UniteProduit
 import shutil
 import os
 
@@ -34,8 +36,9 @@ def create_produit(
     emplacement: Optional[str] = Form("magasin"),
     image: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user=Depends(check_role(["admin", "gestionnaire_stock"]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     # Enregistrement de l'image sur disque
     ext = image.filename.split(".")[-1]
     image_filename = f"{datetime.utcnow().timestamp()}.{ext}"
@@ -60,21 +63,36 @@ def create_produit(
         is_installe=is_installe,
         tracabilite=tracabilite,
         emplacement=emplacement,
-        image_url=f"/static/produits/{image_filename}"
+        image_url=f"/static/produits/{image_filename}",
+        user_id=parent_user_id
     )
 
     db.add(produit)
     db.commit()
     db.refresh(produit)
+    # Après la création du produit
+    for i in range(1, quantite + 1):
+        qr_code = f"TRAC-{produit.id}-{str(i).zfill(4)}"
+        unite = UniteProduit(
+            produit_id=produit.id,
+            tracabilite=qr_code,
+            statut="disponible"
+        )
+        db.add(unite)
+    # 3. Commit final des unités
+    db.commit()
+
 
     log_action(
         db=db,
-        user_id=current_user.id,
-        action="Ajout Produit",
+        current_user=current_user,
+        action="Ajout produit avec unités",
         type_entite="produit",
         entite_id=produit.id,
-        details=f"Produit: {produit.nom}, Quantité: {produit.quantite}"
+        details=f"{quantite} unités créées avec QR pour produit {produit.nom}"
     )
+
+
 
     return {"message": "Produit créé avec succès", "produit_id": produit.id}
 
@@ -83,16 +101,17 @@ def create_produit(
 @router.get("/", response_model=List[ProduitOut])
 def list_produits(
     db: Session = Depends(get_db),
-    current_user=Depends(check_role(["admin", "gestionnaire_stock", "technicien"]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    return db.query(Produit).filter(Produit.date_suppression == None).all()
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    return db.query(Produit).filter(Produit.date_suppression == None, Produit.user_id == parent_user_id).all()
 
 # 🔍 Voir un produit par ID
 @router.get("/{produit_id}", response_model=ProduitOut)
 def get_produit(
     produit_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role(["admin", "gestionnaire_stock", "technicien"]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
     produit = db.query(Produit).filter(Produit.id == produit_id, Produit.date_suppression == None).first()
     if not produit:
@@ -119,8 +138,9 @@ def update_produit(
     emplacement: Optional[str] = Form("magasin"),
     image: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
-    current_user=Depends(check_role(["admin", "gestionnaire_stock"]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
+    
     produit = db.query(Produit).filter(Produit.id == produit_id).first()
     if not produit:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
@@ -161,12 +181,13 @@ def update_produit(
 
     log_action(
         db=db,
-        user_id=current_user.id,
+        current_user=current_user,
         action="Modification Produit",
         type_entite="produit",
         entite_id=produit.id,
         details=f"Produit de nom: {produit.nom} mis à jour (avec ou sans image)"
     )
+
 
     return {"message": "Produit modifié avec succès."}
 
@@ -175,8 +196,9 @@ def update_produit(
 def delete_produit(
     produit_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role(["admin", "gestionnaire_stock"]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     produit = db.query(Produit).filter(Produit.id == produit_id).first()
     if not produit:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
@@ -185,12 +207,13 @@ def delete_produit(
 
     log_action(
         db=db,
-        user_id=current_user.id,
-        action="Produit supprimé",
+        current_user=current_user,
+        action="Suppression Produit",
         type_entite="produit",
         entite_id=produit.id,
-        details=f"Produit au nom: {produit.nom} supprimé logiquement"
+        details=f"Produit {produit.nom} supprimé logiquement"
     )
+
 
     return {"message": "Produit supprimé (logiquement)"}
 
@@ -198,17 +221,18 @@ def delete_produit(
 @router.get("/supprimes", response_model=List[ProduitOut])
 def list_deleted_produits(
     db: Session = Depends(get_db),
-    current_user=Depends(check_role(["admin"]))
+    current_user=Depends(check_role([RoleEnum.admin]))
 ):
     return db.query(Produit).filter(Produit.date_suppression.isnot(None)).all()
 
-# 📦 Scan QR code (vente ou ajout rapide)
+# 🛆 Scan QR code (vente ou ajout rapide)
 @router.post("/scan_qr")
 def scan_qr_code(
     data: dict,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role(["admin", "gestionnaire_stock", "technicien", "caissier"]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock, RoleEnum.technicien, RoleEnum.caissier]))
 ):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     tracabilite = data.get("tracabilite")
     if not tracabilite:
         raise HTTPException(status_code=400, detail="Tracabilité manquante.")
@@ -223,6 +247,16 @@ def scan_qr_code(
             "prix_vente": produit.prix_vente,
             "message": "Produit trouvé. Souhaitez-vous lancer une vente ?"
         }
+        
+        log_action(
+            db=db,
+            current_user=current_user,
+            action="Scan QR produit existant",
+            type_entite="produit",
+            entite_id=produit.id,
+            details=f"Scan de {produit.nom} déclenchant une vente"
+        )
+
     else:
         return {
             "action": "ajout",
@@ -233,3 +267,12 @@ def scan_qr_code(
             },
             "message": "Produit non trouvé. Voulez-vous l'ajouter ?"
         }
+        
+        log_action(
+            db=db,
+            current_user=current_user,
+            action="Scan QR inconnu",
+            type_entite="produit",
+            details=f"Scan QR avec tracabilité {tracabilite} — produit non trouvé"
+        )
+

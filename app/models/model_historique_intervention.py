@@ -15,7 +15,10 @@ class HistoriqueIntervention(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     action = Column(Text, nullable=True)  # Exemple : "réparé", "diagnostiqué", "changé RAM"
     date_action = Column(DateTime, default=datetime.utcnow)
+    sub_user_id = Column(Integer, ForeignKey("sub_users.id"), nullable=True)
 
+
+    sub_user = relationship("SubUser", backref="historiques_interventions")
     intervention = relationship("Intervention", backref="historiques_interventions")
     produit = relationship("Produit", backref="historiques_interventions")
     user = relationship("User", backref="historiques_interventions")

@@ -21,6 +21,10 @@ class User(Base):
 
     sub_users = relationship("SubUser", back_populates="parent_user", cascade="all, delete")
 
+    historiques = relationship("Historique", back_populates="user", overlaps="historiques_user")
+    historiques_user = relationship("Historique", foreign_keys="[Historique.user_id]", overlaps="historiques")
+
+
 class SubUser(Base):
     __tablename__ = "sub_users"
 
@@ -31,6 +35,9 @@ class SubUser(Base):
     avatar_url = Column(String, nullable=True)
     bio = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    
+
     parent_user_id = Column(Integer, ForeignKey("users.id"))
     parent_user = relationship("User", back_populates="sub_users")
+
+    historiques = relationship("Historique", back_populates="sub_user", overlaps="historiques_sub")
+    historiques_sub = relationship("Historique", foreign_keys="[Historique.sub_user_id]", overlaps="historiques")

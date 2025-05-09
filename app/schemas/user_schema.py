@@ -8,7 +8,7 @@ class UserCreate(BaseModel):
     account_type: Optional[str] = "basic"
     is_main_user: bool = False
     societe_ou_entreprise: Optional[str] = None  # ✅
-    
+
 class RoleEnum(str, Enum):
     technicien = "Technicien(ne)"
     secretaire = "Secretaire"
@@ -23,6 +23,8 @@ class SubUserCreate(BaseModel):
     username: str
     password: str
     role: RoleEnum
+    
+
 
 class UserLogin(BaseModel):
     email: EmailStr

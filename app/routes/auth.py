@@ -3,7 +3,6 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status, Body
 from sqlalchemy.orm import Session
-from fastapi.security import OAuth2PasswordBearer
 from fastapi.security import OAuth2PasswordRequestForm
 from typing import List, Optional
 from app.schemas.user_schema import UserCreate, SubUserCreate, UserLogin, GroupUserLogin
@@ -15,10 +14,11 @@ from app.utils.security import (
     require_super_user, require_any_role, require_main_user
 )
 from app.database import get_db
+from app.utils.logger import log_action
 
 router = APIRouter()
 
-# 🔒 Route pour créer un utilisateur principal (Single user)
+# 🔒 Créer un utilisateur principal (Single user)
 @router.post("/register", tags=["Authentification"])
 def register_user(data: UserCreate, db: Session = Depends(get_db)):
     if db.query(User).filter(User.email == data.email).first():
@@ -27,36 +27,39 @@ def register_user(data: UserCreate, db: Session = Depends(get_db)):
         email=data.email,
         password_hash=hash_password(data.password),
         is_main_user=data.is_main_user,
-        is_superuser=False,# par défaut
+        is_superuser=False,
         account_type=data.account_type,
-        societe_ou_entreprise=data.societe_ou_entreprise  
+        societe_ou_entreprise=data.societe_ou_entreprise
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+
+    log_action(
+        db=db,
+        user_id=new_user.id,
+        action="Inscription utilisateur",
+        type_entite="utilisateur",
+        entite_id=new_user.id,
+        details=f"Nouvel utilisateur inscrit : {new_user.email}"
+    )
+
     return {"message": "User created successfully"}
 
-# 🔒 Route pour créer un sous-utilisateur sous un utilisateur principal
+# 🔒 Créer un sous-utilisateur sous un utilisateur principal
 @router.post("/register_sub", tags=["Authentification"])
 def register_sub_user(
-    data: SubUserCreate, 
+    data: SubUserCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_main_user)  # ✅ protection ici
+    current_user: User = Depends(require_main_user)
 ):
     parent = db.query(User).filter(User.email == data.parent_email).first()
     if not parent:
         raise HTTPException(status_code=404, detail="Parent user not found")
-    
-    # ✅ Vérifie que le rôle demandé est défini dans la table roles
+
     if not db.query(Role).filter(Role.name == data.role).first():
         raise HTTPException(status_code=400, detail="Rôle non autorisé")
-    
-    if not current_user.is_main_user:
-        raise HTTPException(
-            status_code=403,
-            detail="Seuls les utilisateurs gestionnaire ou leader peuvent créer des subusers."
-        )
-    
+
     new_sub = SubUser(
         username=data.username,
         password_hash=hash_password(data.password),
@@ -66,42 +69,94 @@ def register_sub_user(
     db.add(new_sub)
     db.commit()
     db.refresh(new_sub)
+
+    log_action(
+        db=db,
+        user_id=parent.id,
+        action="Ajout sub-user",
+        type_entite="sub-user",
+        entite_id=new_sub.id,
+        details=f"SubUser ajouté : {new_sub.username} pour le parent {parent.email}"
+    )
+
     return {"message": "Sub-user created successfully"}
 
-
-# 🔑 Connexion utilisateur principal (Single User)
+# 🔑 Connexion utilisateur principal
 @router.post("/login", tags=["Authentification"])
 def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    """
-    🔐 Login route compatible avec OAuth2PasswordRequestForm (Swagger /docs + applis)
-    """
     user = db.query(User).filter(User.email == form_data.username).first()
     if not user or not verify_password(form_data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
+
     access_token = create_access_token({"sub": user.email, "super": user.is_superuser})
+
+    # ✅ Simulation d’un current_user (car pas encore dans un Depends)
+    class UserTokenProxy:
+        def __init__(self, user_obj):
+            self.id = user_obj.id
+            self.is_main_user = True
+
+    fake_current_user = UserTokenProxy(user)
+
+    log_action(
+        db=db,
+        current_user=fake_current_user,
+        action="Connexion utilisateur",
+        type_entite="utilisateur",
+        entite_id=user.id,
+        details=f"L'utilisateur {user.email} s'est connecté"
+    )
+
     return {"access_token": access_token, "token_type": "bearer"}
 
-# 🔑 Connexion sous-utilisateur avec email du parent
+
+# 🔑 Connexion sous-utilisateur
 @router.post("/group_login")
 def login_sub_user(data: GroupUserLogin, db: Session = Depends(get_db)):
     parent = db.query(User).filter(User.email == data.parent_email).first()
     if not parent:
         raise HTTPException(status_code=404, detail="Parent user not found")
-    sub = db.query(SubUser).filter(SubUser.username == data.username, SubUser.parent_user_id == parent.id).first()
+
+    sub = db.query(SubUser).filter(
+        SubUser.username == data.username,
+        SubUser.parent_user_id == parent.id
+    ).first()
+
     if not sub or not verify_password(data.password, sub.password_hash):
         raise HTTPException(status_code=400, detail="Invalid sub-user credentials")
-    token = create_access_token({"sub": f"{parent.email}:{sub.username}", "role": sub.role})
+
+    token = create_access_token({
+        "sub": f"{parent.email}:{sub.username}",
+        "role": sub.role
+    })
+
+    # ✅ Appel avec current_user simulé (sub-user)
+    class SubUserTokenProxy:
+        def __init__(self, sub_id, parent_id):
+            self.id = sub_id
+            self.parent_user_id = parent_id
+            self.is_main_user = False
+
+    fake_current_user = SubUserTokenProxy(sub.id, parent.id)
+
+    log_action(
+        db=db,
+        current_user=fake_current_user,
+        action="Connexion sub-user",
+        type_entite="sub-user",
+        entite_id=sub.id,
+        details=f"Le sub-user {sub.username} s'est connecté via {parent.email}"
+    )
+
     return {"access_token": token, "token_type": "bearer"}
 
-# 👀 Afficher les sous-utilisateurs liés à un utilisateur principal
+
+# 👀 Lister mes sub-users
 @router.get("/my_subusers", tags=["SubUsers"])
 def list_my_subusers(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    subusers = db.query(SubUser).filter(SubUser.parent_user_id == current_user.id).all()
-    return subusers
+    return db.query(SubUser).filter(SubUser.parent_user_id == current_user.id).all()
 
-
-
-# 🔄 Modifier ses propres informations (utilisateur principal)
+# 🔄 Modifier infos principal
 @router.put("/me", tags=["Users"])
 def update_my_user(
     email: Optional[str] = Body(None),
@@ -112,24 +167,27 @@ def update_my_user(
     username: Optional[str] = Body(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
-    
 ):
-    if email:
-        current_user.email = email
-    if password:
-        current_user.password_hash = hash_password(password)
-    if avatar_url:
-        current_user.avatar_url = avatar_url
-    if bio:
-        current_user.bio = bio
-    if societe_ou_entreprise:
-        current_user.societe_ou_entreprise = societe_ou_entreprise
-    if username:
-        current_user.username = username
+    if email: current_user.email = email
+    if password: current_user.password_hash = hash_password(password)
+    if avatar_url: current_user.avatar_url = avatar_url
+    if bio: current_user.bio = bio
+    if societe_ou_entreprise: current_user.societe_ou_entreprise = societe_ou_entreprise
+    if username: current_user.username = username
     db.commit()
+
+    log_action(
+        db=db,
+        current_user=current_user,
+        action="Modification utilisateur principal",
+        type_entite="utilisateur",
+        entite_id=current_user.id,
+        details="Mise à jour de ses propres informations"
+    )
+
     return {"message": "Informations utilisateur mises à jour avec succès."}
 
-# 🔄 Modifier ses propres informations (sous-utilisateur connecté)
+# 🔄 Modifier infos subuser
 @router.put("/me-sub", tags=["SubUsers"])
 def update_my_subuser(
     avatar_url: Optional[str] = Body(None),
@@ -137,18 +195,25 @@ def update_my_subuser(
     db: Session = Depends(get_db),
     current_sub: SubUser = Depends(get_current_sub_user)
 ):
-    """
-    ✏️ Route pour un sub-user : ne peut modifier que sa bio et son avatar
-    """
     if avatar_url:
         current_sub.avatar_url = avatar_url
-    if bio:
+    if bio is not None:
         current_sub.bio = bio
 
     db.commit()
+
+    log_action(
+        db=db,
+        sub_user_id=current_sub.id,  # ✅ Utilise le bon champ
+        action="Modification profil sub-user",
+        type_entite="sub-user",
+        entite_id=current_sub.id,
+        details=f"Sub-user {current_sub.username} a modifié son profil"
+    )
+
     return {"message": "Profil sous-utilisateur mis à jour avec succès."}
 
-
+# 🔧 Modifier un subuser (parent)
 @router.put("/subuser/{sub_id}", tags=["SubUsers"])
 def update_subuser(
     sub_id: int,
@@ -160,9 +225,7 @@ def update_subuser(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """
-    🔧 Route pour le parent : permet de modifier entièrement un sub-user qu'il a créé
-    """
+    
     sub = db.query(SubUser).filter(SubUser.id == sub_id, SubUser.parent_user_id == current_user.id).first()
     if not sub:
         raise HTTPException(status_code=404, detail="Sub-user not found")
@@ -172,12 +235,20 @@ def update_subuser(
     if role: sub.role = role
     if avatar_url: sub.avatar_url = avatar_url
     if bio: sub.bio = bio
-
     db.commit()
+
+    log_action(
+        db=db,
+        user_id=current_user.id,
+        action="Mise à jour sub-user",
+        type_entite="sub-user",
+        entite_id=sub.id,
+        details=f"Sub-user {sub.username} mis à jour"
+    )
+
     return {"message": "Sub-user updated successfully"}
 
-
-# ❌ Supprimer un sous-utilisateur
+# ❌ Supprimer subuser
 @router.delete("/subuser/{sub_id}", tags=["SubUsers"])
 def delete_subuser(sub_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     sub = db.query(SubUser).filter(SubUser.id == sub_id, SubUser.parent_user_id == current_user.id).first()
@@ -185,19 +256,37 @@ def delete_subuser(sub_id: int, current_user: User = Depends(get_current_user), 
         raise HTTPException(status_code=404, detail="Sub-user not found")
     db.delete(sub)
     db.commit()
+
+    log_action(
+        db=db,
+        user_id=current_user.id,
+        action="Suppression sub-user",
+        type_entite="sub-user",
+        entite_id=sub.id,
+        details=f"Sub-user {sub.username} supprimé"
+    )
+
     return {"message": "Sub-user deleted successfully"}
 
-# 🗑 Supprimer son propre compte (user principal + subusers)
+# 🗑 Supprimer son propre compte
 @router.delete("/me", tags=["Users"])
-def delete_own_account(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)):
+def delete_own_account(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     db.query(SubUser).filter(SubUser.parent_user_id == current_user.id).delete()
     db.delete(current_user)
     db.commit()
+
+    log_action(
+        db=db,
+        user_id=current_user.id,
+        action="Suppression de compte",
+        type_entite="utilisateur",
+        entite_id=current_user.id,
+        details="L'utilisateur a supprimé son compte"
+    )
+
     return {"message": "Your account and all sub-users have been deleted."}
 
-# 👑 SUPERVISÉ - Supprimer un user (par un superUser uniquement)
+# 👑 Supprimer un user par le superuser
 @router.delete("/super/delete_user/{user_id}", tags=["Admin"])
 def super_delete_user(user_id: int, current_super: User = Depends(require_super_user), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == user_id).first()
@@ -206,15 +295,24 @@ def super_delete_user(user_id: int, current_super: User = Depends(require_super_
     db.query(SubUser).filter(SubUser.parent_user_id == user.id).delete()
     db.delete(user)
     db.commit()
+
+    log_action(
+        db=db,
+        user_id=current_super.id,
+        action="Suppression user par superuser",
+        type_entite="utilisateur",
+        entite_id=user_id,
+        details=f"User {user.email} supprimé par superadmin"
+    )
+
     return {"message": "User and sub-users deleted by super admin."}
 
-# 📋 Liste de tous les utilisateurs (réservé au super admin)
+# 📋 Lister tous les users
 @router.get("/users", tags=["Admin"])
 def list_all_users(current_super: User = Depends(require_super_user), db: Session = Depends(get_db)):
-    users = db.query(User).all()
-    return users
+    return db.query(User).all()
 
-# 📋 Obtenir un utilisateur par son ID (réservé au super admin)
+# 📃 Voir un user
 @router.get("/user/{user_id}", tags=["Admin"])
 def get_user_by_id(user_id: int, current_super: User = Depends(require_super_user), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == user_id).first()
@@ -222,14 +320,29 @@ def get_user_by_id(user_id: int, current_super: User = Depends(require_super_use
         raise HTTPException(status_code=404, detail="User not found")
     return user
 
-# 📋 Voir son propre profil (utilisateur principal connecté)
+# 👁 Voir son profil
 @router.get("/me", tags=["Users"])
-def get_my_profile(
-    current_user: User = Depends(get_current_user)
-    ):
-    return {"id": current_user.id, "email": current_user.email, "is_superuser": current_user.is_superuser, "bio": current_user.bio, "avatar_url": current_user.avatar_url, "is_main_user": current_user.is_main_user,  "username": current_user.username}
+def get_my_profile(current_user: User = Depends(get_current_user)):
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "is_superuser": current_user.is_superuser,
+        "bio": current_user.bio,
+        "avatar_url": current_user.avatar_url,
+        "is_main_user": current_user.is_main_user,
+        "username": current_user.username,
+        "societe_ou_entreprise": current_user.societe_ou_entreprise,
+        "account_type": current_user.account_type
+    }
 
-# 📋 Voir son propre profil (sous-utilisateur connecté)
+# 👁 Voir son profil subuser
 @router.get("/me-sub", tags=["SubUsers"])
 def get_my_subuser_profile(current_sub: SubUser = Depends(get_current_sub_user)):
-    return {"id": current_sub.id, "username": current_sub.username, "role": current_sub.role, "bio": current_sub.bio, "avatar_url": current_sub.avatar_url}
+    return {
+        "id": current_sub.id,
+        "username": current_sub.username,
+        "role": current_sub.role,
+        "bio": current_sub.bio,
+        "avatar_url": current_sub.avatar_url
+    }
+

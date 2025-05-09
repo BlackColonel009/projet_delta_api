@@ -4,6 +4,7 @@ from typing import List, Optional
 class LigneCommandeVenteCreate(BaseModel):
     produit_id: int
     quantite: int
+    unite_id: Optional[int] = None
 
 class CommandeVenteCreate(BaseModel):
     client_id: int

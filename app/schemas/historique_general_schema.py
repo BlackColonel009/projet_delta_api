@@ -3,6 +3,20 @@ from typing import List, Optional
 from datetime import datetime
 # 🧾 Schéma
 
+class MiniSubUser(BaseModel):
+    id: int
+    username: str
+    role: str
+    class Config:
+        from_attributes = True
+        
+class UserMiniOut(BaseModel):
+    id: int
+    email: str
+
+    class Config:
+        from_attributes = True
+
 class HistoriqueCreate(BaseModel):
     action: str
     type_entite: str
@@ -13,6 +27,9 @@ class HistoriqueCreate(BaseModel):
 class HistoriqueOut(HistoriqueCreate):
     id: int
     date_action: datetime
+    user: UserMiniOut
+    sub_user: Optional[MiniSubUser] = None
 
     class Config:
         from_attributes = True
+        

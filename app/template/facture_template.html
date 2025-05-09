@@ -1,70 +1,134 @@
-    <!DOCTYPE html>
-    <html lang="fr">
-    <head>
-    <meta charset="UTF-8">
-    <title>Facture {{ facture.id }}</title>
-    <style>
-        body { font-family: Arial, sans-serif; font-size: 14px; }
-        .header { text-align: center; margin-bottom: 20px; }
-        .header h1 { margin: 0; }
-        .details, .lignes, .totaux { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        .details td, .lignes th, .lignes td, .totaux td { border: 1px solid #ccc; padding: 8px; }
-        .lignes th { background-color: #f0f0f0; }
-        .right { text-align: right; }
-        .totaux td { font-weight: bold; }
-    </style>
-    </head>
-    <body>
-    <div class="header">
-        <h1>Facture #{{ facture.id }}</h1>
-        <p>Type : {{ facture.type }}</p>
-        <p>Date : {{ facture.date_creation.strftime('%d/%m/%Y') }}</p>
-    </div>
+<!DOCTYPE html>
+<html lang="fr">
 
-    <table class="details">
+<head>
+    <meta charset="UTF-8">
+    <title>Facture #{{ facture.id }}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            font-size: 13px;
+            margin: 0;
+            padding: 40px;
+            background: #e6f7f9;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+
+        th,
+        td {
+            border: 1px solid #ccc;
+            padding: 8px;
+        }
+
+        .header-title {
+            font-size: 22px;
+            color: #003366;
+        }
+
+        .section {
+            margin-top: 20px;
+        }
+
+        .right {
+            text-align: right;
+        }
+
+        .totaux {
+            width: 300px;
+            float: right;
+            margin-top: 20px;
+            border-collapse: collapse;
+        }
+
+        .totaux td {
+            padding: 6px;
+        }
+
+        .totaux td:first-child {
+            font-weight: bold;
+        }
+
+        .highlight {
+            background-color: #d9f0f2;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- EN-TÊTE en tableau (3 colonnes) -->
+    <table>
         <tr>
-        <td><strong>Client :</strong><br>{{ facture.client.nom if facture.client else '---' }}</td>
-        <td><strong>Fournisseur :</strong><br>{{ facture.fournisseur.nom if facture.fournisseur else '---' }}</td>
-        </tr>
-        <tr>
-        <td colspan="2"><strong>Remarques :</strong><br>{{ facture.remarques or 'Aucune' }}</td>
+            <td>
+                <span class="header-title">FACTURE</span><br>
+                <strong>Date :</strong> {{ facture.date_creation.strftime('%d/%m/%Y') }}<br>
+                <strong>N° :</strong> {{ facture.id }}
+            </td>
+            <td></td>
+            <td>
+                <strong>Votre société</strong><br>
+                {{ societe.nom }}<br>
+                {{ societe.adresse }}<br>
+                Tél : {{ societe.telephone }}<br>
+                Email : {{ societe.email }}
+            </td>
         </tr>
     </table>
 
-    <table class="lignes">
+    <!-- Infos client -->
+    <div class="section">
+        <strong>Facturé à :</strong><br>
+        {{ facture.client.nom }}<br>
+        {{ facture.client.adresse }}<br>
+        Tél : {{ facture.client.telephone }}<br>
+        Email : {{ facture.client.email }}
+    </div>
+
+    <!-- Tableau des lignes -->
+    <table>
         <thead>
-        <tr>
-            <th>Description</th>
-            <th>Qté</th>
-            <th>Prix Unitaire</th>
-            <th>Total</th>
-        </tr>
+            <tr>
+                <th>Description</th>
+                <th class="right">Qté</th>
+                <th class="right">PU</th>
+                <th class="right">Total</th>
+            </tr>
         </thead>
         <tbody>
-        {% for ligne in facture.lignes %}
-        <tr>
-            <td>{{ ligne.description }}</td>
-            <td class="right">{{ ligne.quantite }}</td>
-            <td class="right">{{ '%.2f'|format(ligne.prix_unitaire) }} €</td>
-            <td class="right">{{ '%.2f'|format(ligne.total_ligne) }} €</td>
-        </tr>
-        {% endfor %}
+            {% for ligne in facture.lignes %}
+            <tr>
+                <td>{{ ligne.description }}</td>
+                <td class="right">{{ ligne.quantite }}</td>
+                <td class="right">{{ '%.2f'|format(ligne.prix_unitaire) }} €</td>
+                <td class="right">{{ '%.2f'|format(ligne.total_ligne) }} €</td>
+            </tr>
+            {% endfor %}
         </tbody>
     </table>
 
+    <!-- Totaux -->
     <table class="totaux">
-        <tr>
-        <td class="right">Total HT :</td>
-        <td class="right">{{ '%.2f'|format(facture.total_ht) }} €</td>
+        <tr class="highlight">
+            <td>Total HT :</td>
+            <td class="right">{{ '%.2f'|format(facture.total_ht) }} €</td>
         </tr>
-        <tr>
-        <td class="right">TVA ({{ facture.tva }}%) :</td>
-        <td class="right">{{ '%.2f'|format(facture.total_ttc - facture.total_ht) }} €</td>
+        {% if facture.tva > 0 %}
+        <tr class="highlight">
+            <td>TVA ({{ facture.tva }}%) :</td>
+            <td class="right">{{ '%.2f'|format(facture.total_ttc - facture.total_ht) }} €</td>
         </tr>
-        <tr>
-        <td class="right">Total TTC :</td>
-        <td class="right">{{ '%.2f'|format(facture.total_ttc) }} €</td>
+        {% endif %}
+        <tr class="highlight">
+            <td>Total TTC :</td>
+            <td class="right">{{ '%.2f'|format(facture.total_ttc) }} {{ facture.devise }}</td>
         </tr>
     </table>
-    </body>
-    </html>
+
+</body>
+
+</html>

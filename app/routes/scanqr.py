@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from io import BytesIO
@@ -15,6 +15,11 @@ from app.schemas.scanqr_schema import ScanQRInput, ProduitCreateViaScan, VenteTr
 from app.database import get_db
 from app.utils.security import get_current_user
 from app.utils.permissions import check_role
+from app.schemas.user_schema import RoleEnum
+from app.utils.logger import log_action
+from app.models.model_unite_produit import UniteProduit
+
+
 
 router = APIRouter(prefix="/scanqr", tags=["QR-Code"])
 
@@ -25,12 +30,12 @@ def generate_qr_codes(
     modele_nom_produit: str = Query("Produit", description="Modèle de nom de produit de base"),
     societe: str = Query(..., description="Nom de la société associée"),
     db: Session = Depends(get_db),
-    current_user=Depends(check_role(["admin", "gestionnaire_stock"]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
-    x, y = 2 * cm, height - 3 * cm
+    x, y = 2 * cm, height - 5 * cm
 
     for i in range(1, nombre + 1):
         tracabilite = f"{prefixe}{str(i).zfill(5)}"
@@ -64,21 +69,34 @@ def generate_qr_codes(
     pdf.save()
     buffer.seek(0)
     filename = f"qr-produits-{datetime.now().strftime('%d-%m-%Y')}.pdf"
+    
+    
+    log_action(
+        db=db,
+        current_user=current_user,
+        action="Génération QR codes",
+        type_entite="qr_code",
+        details=f"{nombre} QR codes générés avec le préfixe '{prefixe}' pour la société '{societe}'"
+    )
+
+    
+    
     return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
+
 @router.post("/scan_and_check")
-def scan_and_check(data: ScanQRInput, db: Session = Depends(get_db)):
-    produit = db.query(Produit).filter(Produit.tracabilite == data.tracabilite).first()
-    if produit:
-        return {
-            "action": "vente",
-            "produit_id": produit.id,
-            "nom": produit.nom,
-            "prix_vente": produit.prix_vente,
-            "quantite": produit.quantite,
-            "message": "Produit trouvé. Souhaitez-vous lancer une vente ?"
-        }
-    else:
+def scan_and_check(data: ScanQRInput, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    unite = db.query(UniteProduit).filter(UniteProduit.tracabilite == data.tracabilite).first()
+
+    # ➕ Cas : QR inconnu
+    if not unite:
+        log_action(
+            db=db,
+            current_user=current_user,
+            action="Scan QR inconnu",
+            type_entite="unite_produit",
+            details=f"QR scanné inconnu : {data.tracabilite}"
+        )
         return {
             "action": "ajout",
             "pre_remplir": {
@@ -86,14 +104,49 @@ def scan_and_check(data: ScanQRInput, db: Session = Depends(get_db)):
                 "tracabilite": data.tracabilite,
                 "societe": data.societe
             },
-            "message": "Produit non trouvé. Voulez-vous l'ajouter ?"
+            "message": "Unité non trouvée. Voulez-vous l’ajouter ?"
         }
+
+    produit = unite.produit
+
+    if produit.date_suppression is not None:
+        log_action(
+            db=db,
+            current_user=current_user,
+            action="Scan QR refusé",
+            type_entite="unite_produit",
+            entite_id=unite.id,
+            details=f"QR scanné sur produit supprimé : {unite.tracabilite}"
+        )
+        raise HTTPException(status_code=410, detail="Produit supprimé. QR Code inutilisable.")
+
+    # ✅ Cas : unité valide
+    log_action(
+        db=db,
+        current_user=current_user,
+        action="Scan QR valide",
+        type_entite="unite_produit",
+        entite_id=unite.id,
+        details=f"QR scanné OK : {produit.nom} / {unite.tracabilite}"
+    )
+
+    return {
+        "action": "vente",
+        "produit_id": produit.id,
+        "unite_id": unite.id,
+        "nom": produit.nom,
+        "prix_vente": produit.prix_vente,
+        "quantite": 1,
+        "tracabilite": unite.tracabilite,
+        "message": "Unité trouvée. Souhaitez-vous lancer une vente ?"
+    }
+
 
 @router.post("/confirm_add_after_scan")
 def confirm_add_after_scan(
     data: ProduitCreateViaScan,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role(["admin", "gestionnaire_stock"]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
     produit_existant = db.query(Produit).filter(Produit.tracabilite == data.tracabilite).first()
     if produit_existant:
@@ -139,15 +192,23 @@ def find_product_by_tracabilite(tracabilite: str, db: Session = Depends(get_db))
         "tracabilite": produit.tracabilite
     }
 
+from app.models.model_unite_produit import UniteProduit
+from app.utils.logger import log_action
+
 @router.post("/creer_par_tracabilite")
 def creer_vente_par_tracabilite(
     data: VenteTracabiliteInput,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role(["admin", "gestionnaire_stock"]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    produit = db.query(Produit).filter(Produit.tracabilite == data.tracabilite).first()
-    if not produit:
-        raise HTTPException(status_code=404, detail="Produit non trouvé.")
+    unite = db.query(UniteProduit).filter(UniteProduit.tracabilite == data.tracabilite).first()
+    if not unite:
+        raise HTTPException(status_code=404, detail="Unité non trouvée.")
+
+    if unite.statut != "disponible":
+        raise HTTPException(status_code=400, detail=f"Unité déjà utilisée : statut = {unite.statut}")
+
+    produit = unite.produit
 
     if produit.quantite < data.quantite:
         raise HTTPException(status_code=400, detail="Stock insuffisant pour cette vente.")
@@ -179,8 +240,24 @@ def creer_vente_par_tracabilite(
         total_ligne=total_ht
     )
     db.add(ligne)
+
+    # ✅ Marquer l’unité comme vendue
+    unite.statut = "vendu"
+
+    # ✅ Diminuer le stock produit (si encore utilisé en doublon)
     produit.quantite -= data.quantite
+
     db.commit()
+
+    # ✅ Log
+    log_action(
+        db=db,
+        current_user=current_user,
+        action="Vente par QR",
+        type_entite="unite_produit",
+        entite_id=unite.id,
+        details=f"Unité {unite.tracabilite} vendue (produit: {produit.nom}, quantité: {data.quantite})"
+    )
 
     return {
         "message": "Vente réalisée avec succès.",
@@ -189,5 +266,6 @@ def creer_vente_par_tracabilite(
         "quantite_vendue": data.quantite,
         "total_ht": round(total_ht, 2),
         "total_ttc": round(total_ttc, 2),
-        "stock_restant": produit.quantite
+        "stock_restant": produit.quantite,
+        "tracabilite": unite.tracabilite
     }

@@ -9,6 +9,8 @@ from app.models.model_facture import Facture, LigneFacture
 from app.schemas.facture_schema import FactureOut, FactureCreate
 from fastapi.responses import FileResponse
 from app.utils.security import get_current_user
+from app.utils.permissions import check_role
+from app.schemas.user_schema import RoleEnum
 import os
 
 router = APIRouter(prefix="/factures", tags=["Facturation"])
@@ -18,8 +20,9 @@ router = APIRouter(prefix="/factures", tags=["Facturation"])
 def create_facture(
     data: FactureCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     total_ht = sum(l.quantite * l.prix_unitaire for l in data.lignes)
     total_ttc = total_ht * (1 + data.tva / 100)
 
@@ -31,7 +34,7 @@ def create_facture(
         tva=data.tva,
         total_ht=total_ht,
         total_ttc=total_ttc,
-        user_id=current_user.id  # 🔐 Liaison sécurisée
+        user_id=parent_user_id  # 🔐 Liaison sécurisée
     )
 
     db.add(facture)
@@ -57,11 +60,12 @@ def create_facture(
 def get_facture(
     facture_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     facture = db.query(Facture).filter(
         Facture.id == facture_id,
-        Facture.user_id == current_user.id
+        Facture.user_id == parent_user_id
     ).first()
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
@@ -73,11 +77,12 @@ def update_facture_statut(
     facture_id: int,
     statut: str,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     facture = db.query(Facture).filter(
         Facture.id == facture_id,
-        Facture.user_id == current_user.id
+        Facture.user_id == parent_user_id
     ).first()
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
@@ -89,26 +94,28 @@ def update_facture_statut(
 @router.get("/", response_model=List[FactureOut])
 def list_factures(
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    return db.query(Facture).filter(Facture.user_id == current_user.id).all()
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    return db.query(Facture).filter(Facture.user_id == parent_user_id).all()
 
 # 📄 Ouvre un PDF de facture générée dans le navigateur
 @router.get("/{facture_id}/open")
 async def open_facture_pdf(
     facture_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     # Sécurité : vérifier que l'utilisateur est bien propriétaire
     facture = db.query(Facture).filter(
         Facture.id == facture_id,
-        Facture.user_id == current_user.id
+        Facture.user_id == parent_user_id
     ).first()
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
 
-    pdf_path = f"factures/facture_{facture_id}.pdf"
+    pdf_path = f"file/facture_{facture_id}.pdf"
     if not os.path.exists(pdf_path):
         raise HTTPException(status_code=404, detail="Facture PDF non trouvée.")
 

@@ -6,6 +6,9 @@ from app.models.model_intervention import Intervention, intervention_produits
 from app.schemas.intervention_schema import InterventionOut, InterventionCreate
 from app.utils.security import get_current_user
 from app.utils.permissions import check_role
+from app.schemas.user_schema import RoleEnum
+from app.utils.logger import log_action
+
 
 router = APIRouter(prefix="/interventions", tags=["Interventions"])
 
@@ -14,8 +17,9 @@ router = APIRouter(prefix="/interventions", tags=["Interventions"])
 def create_intervention(
     data: InterventionCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role(["admin", "technicien"]))  # 🔐 contrôle de rôle
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.technicien]))
 ):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     from app.models.model_produit import Produit
 
     intervention = Intervention(
@@ -23,7 +27,7 @@ def create_intervention(
         employe_id=data.employe_id,
         description=data.description,
         statut=data.statut,
-        user_id=current_user.id
+        user_id=parent_user_id
     )
 
     produits = db.query(Produit).filter(Produit.id.in_(data.produits_ids)).all()
@@ -32,6 +36,16 @@ def create_intervention(
     db.add(intervention)
     db.commit()
     db.refresh(intervention)
+    
+    log_action(
+        db=db,
+        current_user=current_user,
+        action="Ajout intervention",
+        type_entite="intervention",
+        entite_id=intervention.id,
+        details=f"Intervention pour client {intervention.client_id} par employé {intervention.employe_id} — {intervention.statut}"
+    )
+
 
     return InterventionOut(
         id=intervention.id,
@@ -47,9 +61,10 @@ def create_intervention(
 @router.get("/", response_model=List[InterventionOut])
 def list_interventions(
     db: Session = Depends(get_db),
-    current_user=Depends(check_role(["admin", "technicien"]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.technicien]))
 ):
-    interventions = db.query(Intervention).filter(Intervention.user_id == current_user.id).all()
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    interventions = db.query(Intervention).filter(Intervention.employe_id == parent_user_id).all()
     return [
         InterventionOut(
             id=i.id,
@@ -67,11 +82,12 @@ def list_interventions(
 def get_intervention(
     intervention_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role(["admin", "technicien"]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.technicien]))
 ):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     i = db.query(Intervention).filter(
         Intervention.id == intervention_id,
-        Intervention.user_id == current_user.id
+        Intervention.user_id == parent_user_id
     ).first()
     if not i:
         raise HTTPException(status_code=404, detail="Intervention non trouvée")
@@ -90,14 +106,26 @@ def get_intervention(
 def delete_intervention(
     intervention_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role(["admin", "technicien"]))
-):
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.technicien]))
+):  
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     i = db.query(Intervention).filter(
         Intervention.id == intervention_id,
-        Intervention.user_id == current_user.id
+        Intervention.user_id == parent_user_id
     ).first()
     if not i:
         raise HTTPException(status_code=404, detail="Intervention non trouvée")
     db.delete(i)
     db.commit()
+    
+    log_action(
+        db=db,
+        current_user=current_user,
+        action="Suppression intervention",
+        type_entite="intervention",
+        entite_id=i.id,
+        details=f"Intervention #{i.id} supprimée"
+    )
+
+    
     return {"message": "Intervention supprimée avec succès"}

@@ -11,6 +11,8 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.units import cm
 from io import BytesIO
 import datetime
+from app.utils.permissions import check_role
+from app.schemas.user_schema import RoleEnum
 
 router = APIRouter(prefix="/export", tags=["Exports Financiers"])
 
@@ -18,8 +20,9 @@ router = APIRouter(prefix="/export", tags=["Exports Financiers"])
 @router.get("/rapport-complet")
 def export_rapport_complet(
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -47,9 +50,9 @@ def export_rapport_complet(
     y -= 2 * cm
 
     # 🔐 Résumé général
-    total_ventes = db.query(func.sum(CommandeVente.total_ttc)).filter(CommandeVente.user_id == current_user.id).scalar() or 0
-    total_achats = db.query(func.sum(CommandeAchat.total_ttc)).filter(CommandeAchat.user_id == current_user.id).scalar() or 0
-    total_depenses = db.query(func.sum(Depense.montant)).filter(Depense.user_id == current_user.id).scalar() or 0
+    total_ventes = db.query(func.sum(CommandeVente.total_ttc)).filter(CommandeVente.user_id == parent_user_id).scalar() or 0
+    total_achats = db.query(func.sum(CommandeAchat.total_ttc)).filter(CommandeAchat.user_id == parent_user_id).scalar() or 0
+    total_depenses = db.query(func.sum(Depense.montant)).filter(Depense.user_id == parent_user_id).scalar() or 0
     benefice_net = total_ventes - total_achats - total_depenses
 
     pdf.setFont("Helvetica-Bold", 13)
@@ -67,7 +70,7 @@ def export_rapport_complet(
     pdf.showPage()
 
     ### ➡ Détail Ventes
-    ventes = db.query(CommandeVente).filter(CommandeVente.user_id == current_user.id).order_by(CommandeVente.date_commande.desc()).all()
+    ventes = db.query(CommandeVente).filter(CommandeVente.user_id == parent_user_id).order_by(CommandeVente.date_commande.desc()).all()
     pdf.setFont("Helvetica-Bold", 14)
     pdf.drawString(2 * cm, height - 2 * cm, "Détail des Ventes")
     y = height - 3 * cm
@@ -83,7 +86,7 @@ def export_rapport_complet(
     pdf.showPage()
 
     ### ➡ Détail Achats
-    achats = db.query(CommandeAchat).filter(CommandeAchat.user_id == current_user.id).order_by(CommandeAchat.date_commande.desc()).all()
+    achats = db.query(CommandeAchat).filter(CommandeAchat.user_id == parent_user_id).order_by(CommandeAchat.date_commande.desc()).all()
     pdf.setFont("Helvetica-Bold", 14)
     pdf.drawString(2 * cm, height - 2 * cm, "Détail des Achats")
     y = height - 3 * cm
@@ -99,7 +102,7 @@ def export_rapport_complet(
     pdf.showPage()
 
     ### ➡ Détail Dépenses
-    depenses = db.query(Depense).filter(Depense.user_id == current_user.id).order_by(Depense.date_depense.desc()).all()
+    depenses = db.query(Depense).filter(Depense.user_id == parent_user_id).order_by(Depense.date_depense.desc()).all()
     pdf.setFont("Helvetica-Bold", 14)
     pdf.drawString(2 * cm, height - 2 * cm, "Détail des Dépenses")
     y = height - 3 * cm
@@ -123,8 +126,9 @@ def export_rapport_complet(
 @router.get("/rapport-depenses")
 def export_rapport_depenses(
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -133,7 +137,7 @@ def export_rapport_depenses(
     pdf.drawString(2 * cm, y, "Rapport des Dépenses")
     y -= 1.5 * cm
 
-    depenses = db.query(Depense).filter(Depense.user_id == current_user.id).order_by(Depense.date_depense.desc()).all()
+    depenses = db.query(Depense).filter(Depense.user_id == parent_user_id).order_by(Depense.date_depense.desc()).all()
     pdf.setFont("Helvetica", 10)
     for d in depenses:
         pdf.drawString(2 * cm, y, f"Dépense ID: {d.id} | Libelle: {d.libelle} | Montant: {d.montant:.2f} FCFA | Catégorie: {d.categorie} | Date: {d.date_depense.strftime('%d/%m/%Y')}")
@@ -152,8 +156,9 @@ def export_rapport_depenses(
 @router.get("/rapport-ventes")
 def export_rapport_ventes(
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -162,7 +167,7 @@ def export_rapport_ventes(
     pdf.drawString(2 * cm, y, "Rapport des Ventes")
     y -= 1.5 * cm
 
-    ventes = db.query(CommandeVente).filter(CommandeVente.user_id == current_user.id).order_by(CommandeVente.date_commande.desc()).all()
+    ventes = db.query(CommandeVente).filter(CommandeVente.user_id == parent_user_id).order_by(CommandeVente.date_commande.desc()).all()
     pdf.setFont("Helvetica", 10)
     for v in ventes:
         client_nom = v.client.nom if v.client else "Inconnu"
@@ -182,8 +187,9 @@ def export_rapport_ventes(
 @router.get("/rapport-achats")
 def export_rapport_achats(
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -192,7 +198,7 @@ def export_rapport_achats(
     pdf.drawString(2 * cm, y, "Rapport des Achats")
     y -= 1.5 * cm
 
-    achats = db.query(CommandeAchat).filter(CommandeAchat.user_id == current_user.id).order_by(CommandeAchat.date_commande.desc()).all()
+    achats = db.query(CommandeAchat).filter(CommandeAchat.user_id == parent_user_id).order_by(CommandeAchat.date_commande.desc()).all()
     pdf.setFont("Helvetica", 10)
     for a in achats:
         fournisseur_nom = a.fournisseur.nom if a.fournisseur else "Inconnu"

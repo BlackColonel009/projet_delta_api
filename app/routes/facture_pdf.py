@@ -3,26 +3,31 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from fastapi_mail import FastMail, MessageSchema, MessageType
 from reportlab.lib.pagesizes import A4
+from fastapi.responses import FileResponse
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import cm
 from app.database import get_db
 from app.models.model_facture import Facture
 from app.utils.security import get_current_user
 from app.config import conf
+from app.utils.permissions import check_role
+from app.schemas.user_schema import RoleEnum
 
 router = APIRouter(prefix="/factures", tags=["Email"])
+
 
 # 📧 Envoyer une facture par mail au client
 @router.post("/{facture_id}/send")
 async def send_facture_to_client(
     facture_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     # 🔐 Sécurité : s'assurer que la facture appartient au bon utilisateur
     facture = db.query(Facture).filter(
         Facture.id == facture_id,
-        Facture.user_id == current_user.id
+        Facture.user_id == parent_user_id
     ).first()
 
     if not facture:
@@ -32,10 +37,10 @@ async def send_facture_to_client(
         raise HTTPException(status_code=400, detail="Le client n'a pas d'adresse email")
 
     # 🔧 Créer le dossier si nécessaire
-    os.makedirs("factures", exist_ok=True)
+    os.makedirs("file", exist_ok=True)
 
     # 📄 Générer le fichier PDF
-    pdf_path = f"factures/facture_{facture.id}.pdf"
+    pdf_path = f"file/facture_{facture.id}.pdf"
     pdf = canvas.Canvas(pdf_path, pagesize=A4)
     width, height = A4
     y = height - 2 * cm
@@ -102,3 +107,5 @@ async def send_facture_to_client(
     await fm.send_message(message)
 
     return {"message": f"Facture #{facture.id} envoyée à {facture.client.email}"}
+
+

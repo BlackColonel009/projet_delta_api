@@ -68,6 +68,44 @@ async def get_current_sub_user(token: str = Depends(oauth2_scheme), db: Session 
     except JWTError:
         raise credentials_exception
 
+# ✅ Reccuperer les sous-utilisateur, utilisateur et utilisateur manager
+async def get_active_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    credentials_exception = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        sub = payload.get("sub")
+        if not sub:
+            raise credentials_exception
+
+        # Sub-user : sub = "parent_email:username"
+        if ":" in sub:
+            parent_email, username = sub.split(":")
+            parent = db.query(User).filter(User.email == parent_email).first()
+            if not parent:
+                raise credentials_exception
+            sub_user = db.query(SubUser).filter(
+                SubUser.username == username,
+                SubUser.parent_user_id == parent.id
+            ).first()
+            if not sub_user:
+                raise credentials_exception
+
+            # On ajoute dynamiquement quelques attributs utiles
+            sub_user.parent_email = parent_email
+            sub_user.is_main_user = False
+            return sub_user
+
+        # Main user
+        user = db.query(User).filter(User.email == sub).first()
+        if not user:
+            raise credentials_exception
+        user.parent_email = user.email  # lui-même
+        user.is_main_user = True
+        return user
+
+    except JWTError:
+        raise credentials_exception
+
 
 # 🔐 Vérifie si un utilisateur est super admin
 async def require_super_user(current_user: User = Depends(get_current_user)) -> User:

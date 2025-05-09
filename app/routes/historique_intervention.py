@@ -6,6 +6,7 @@ from app.database import get_db
 from app.models.model_historique_intervention import HistoriqueIntervention
 from app.schemas.historique_intervention_schema import HistInterventionOut, HistInterventionCreate
 from app.utils.security import get_current_user
+from app.utils.permissions import technicien_required
 
 router = APIRouter(prefix="/historiques/interventions", tags=["Historique Interventions"])
 
@@ -14,9 +15,10 @@ router = APIRouter(prefix="/historiques/interventions", tags=["Historique Interv
 def create_historique_intervention(
     data: HistInterventionCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user= Depends(technicien_required())
 ):
-    h = HistoriqueIntervention(**data.dict(), user_id=current_user.id)
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    h = HistoriqueIntervention(**data.dict(), user_id=parent_user_id)
     db.add(h)
     db.commit()
     db.refresh(h)
@@ -30,9 +32,10 @@ def list_historiques_interventions(
     produit_id: Optional[int] = Query(None),
     intervention_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user= Depends(technicien_required())
 ):
-    query = db.query(HistoriqueIntervention).filter(HistoriqueIntervention.user_id == current_user.id)
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    query = db.query(HistoriqueIntervention).filter(HistoriqueIntervention.user_id == parent_user_id)
     
     if start:
         query = query.filter(HistoriqueIntervention.date_action >= start)

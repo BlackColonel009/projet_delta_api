@@ -23,6 +23,8 @@ from app.routes import export_financier
 from app.routes import entreprise
 from app.routes import scanqr
 from app.routes import upload
+from app.routes import File 
+from app.routes import unite_produit
 from app.utils.security import (
     hash_password, verify_password, create_access_token,
     get_current_user, get_current_sub_user,
@@ -84,6 +86,12 @@ app.include_router(entreprise.router)
 app.include_router(scanqr.router)
 
 app.include_router(upload.router)
+
+app.include_router(unite_produit.router)
+
+# ou facture_pdf selon ton fichier
+app.include_router(File.router)
+
 
 # Route de test
 @app.get("/", tags=["Test"])
