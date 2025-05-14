@@ -117,3 +117,38 @@ Historique des modifications financières (sécurité et audit interne).
 
 
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+
+double convertMontant({
+  required double montant,
+  required String from,
+  required String to,
+}) {
+  const taux = {
+    "€": 1.0,
+    "\$": 1.07,
+    "F CFA": 655.0,
+  };
+
+  final fromRate = taux[from] ?? 1.0;
+  final toRate = taux[to] ?? 1.0;
+
+  return montant * toRate / fromRate;
+}
+
+
+final totalHTUSD = convertMontant(
+  montant: totalHT,
+  from: selectedDevise, // la devise de base
+  to: "\$",
+);
+
+final totalHTFCFA = convertMontant(
+  montant: totalHT,
+  from: selectedDevise,
+  to: "F CFA",
+);
+
+
+String formatMontant(double montant, String devise) =>
+    "${montant.toStringAsFixed(2)} $devise";

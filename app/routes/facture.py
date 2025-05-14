@@ -91,13 +91,42 @@ def update_facture_statut(
     return {"message": f"Statut de la facture #{facture_id} mis à jour en '{statut}'"}
 
 # 📋 Lister toutes les factures de l'utilisateur connecté
+# 📋 Lister toutes les factures de l'utilisateur connecté avec total_paye
 @router.get("/", response_model=List[FactureOut])
 def list_factures(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    return db.query(Facture).filter(Facture.user_id == parent_user_id).all()
+    parent_user_id = (
+        current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    )
+
+    factures = db.query(Facture).filter(Facture.user_id == parent_user_id).all()
+    result = []
+
+    for f in factures:
+        # 🔢 Calcul du total payé à partir des paiements liés
+        total_paye = sum(p.montant for p in f.paiements) if f.paiements else 0.0
+
+        # 🔁 Construction manuelle de chaque entrée enrichie
+        result.append(FactureOut(
+            id=f.id,
+            total_ttc=f.total_ttc,
+            statut=f.statut,
+            total_ht=f.total_ht,
+            tva=f.tva,
+            type=f.type,
+            client_id=f.client_id,
+            fournisseur_id=f.fournisseur_id,
+            date_creation=f.date_creation,
+            remarques=f.remarques,
+            total_paye=total_paye,
+            client=f.client,        # 🟢 Ajouté ici
+            lignes=f.lignes         # 🟢 Ajouté ici
+        ))
+
+
+    return result
 
 # 📄 Ouvre un PDF de facture générée dans le navigateur
 @router.get("/{facture_id}/open")

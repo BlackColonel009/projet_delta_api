@@ -36,7 +36,7 @@ def create_commande_vente(
     commande = CommandeVente(
         client_id=data.client_id,
         tva_appliquee=data.tva_appliquee,
-        user_id=current_user.id
+        user_id=parent_user_id
     )
     db.add(commande)
     db.commit()
@@ -102,7 +102,7 @@ def create_commande_vente(
         details=f"Commande #{commande.id} pour Client {client.nom} — Total TTC: {commande.total_ttc:.2f} €"
     )
 
-    generate_facture_from_commande(db, commande, "vente")
+    # generate_facture_from_commande(db, commande, "vente")
     facture = generate_facture_from_commande(db, commande, "vente")
     pdf_path = generate_facture_pdf(facture)
     filename = os.path.basename(pdf_path)
@@ -127,7 +127,7 @@ def create_commande_achat(
     commande = CommandeAchat(
         fournisseur_id=data.fournisseur_id,
         tva_appliquee=data.tva_appliquee,
-        user_id=current_user.id  # 🔐 Liaison sécurisée
+        user_id=parent_user_id  # 🔐 Liaison sécurisée
     )
     db.add(commande)
     db.commit()

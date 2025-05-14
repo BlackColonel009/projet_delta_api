@@ -20,7 +20,6 @@ from app.utils.logger import log_action
 from app.models.model_unite_produit import UniteProduit
 
 
-
 router = APIRouter(prefix="/scanqr", tags=["QR-Code"])
 
 @router.post("/generate_qr")
@@ -85,61 +84,59 @@ def generate_qr_codes(
 
 
 @router.post("/scan_and_check")
-def scan_and_check(data: ScanQRInput, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def scan_and_check(
+    data: ScanQRInput,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    # 🔍 Étape 1 : Recherche dans UniteProduit
     unite = db.query(UniteProduit).filter(UniteProduit.tracabilite == data.tracabilite).first()
 
-    # ➕ Cas : QR inconnu
-    if not unite:
-        log_action(
-            db=db,
-            current_user=current_user,
-            action="Scan QR inconnu",
-            type_entite="unite_produit",
-            details=f"QR scanné inconnu : {data.tracabilite}"
-        )
+    if unite:
+        produit = unite.produit
+        if produit.date_suppression:
+            raise HTTPException(status_code=410, detail="Produit supprimé. QR Code inutilisable.")
+
         return {
-            "action": "ajout",
-            "pre_remplir": {
-                "nom": data.nom_produit,
-                "tracabilite": data.tracabilite,
-                "societe": data.societe
-            },
-            "message": "Unité non trouvée. Voulez-vous l’ajouter ?"
+            "action": "vente",
+            "produit_id": produit.id,
+            "unite_id": unite.id,
+            "nom": produit.nom,
+            "prix_vente": produit.prix_vente,
+            "quantite": 1,
+            "tracabilite": unite.tracabilite,
+            "message": "Unité trouvée. Souhaitez-vous lancer une vente ?"
         }
 
-    produit = unite.produit
+    # 🔍 Étape 2 : S'il n'est pas en UniteProduit, vérifie Produit
+    produit = db.query(Produit).filter(Produit.tracabilite == data.tracabilite).first()
 
-    if produit.date_suppression is not None:
-        log_action(
-            db=db,
-            current_user=current_user,
-            action="Scan QR refusé",
-            type_entite="unite_produit",
-            entite_id=unite.id,
-            details=f"QR scanné sur produit supprimé : {unite.tracabilite}"
-        )
-        raise HTTPException(status_code=410, detail="Produit supprimé. QR Code inutilisable.")
+    if produit:
+        if produit.date_suppression:
+            raise HTTPException(status_code=410, detail="Produit supprimé. QR Code inutilisable.")
 
-    # ✅ Cas : unité valide
-    log_action(
-        db=db,
-        current_user=current_user,
-        action="Scan QR valide",
-        type_entite="unite_produit",
-        entite_id=unite.id,
-        details=f"QR scanné OK : {produit.nom} / {unite.tracabilite}"
-    )
+        return {
+            "action": "vente_directe",
+            "produit_id": produit.id,
+            "nom": produit.nom,
+            "prix_vente": produit.prix_vente,
+            "quantite": produit.quantite,
+            "tracabilite": produit.tracabilite,
+            "message": "Produit trouvé sans unité spécifique. Souhaitez-vous lancer une vente ?"
+        }
 
+    # 🚫 QR totalement inconnu
     return {
-        "action": "vente",
-        "produit_id": produit.id,
-        "unite_id": unite.id,
-        "nom": produit.nom,
-        "prix_vente": produit.prix_vente,
-        "quantite": 1,
-        "tracabilite": unite.tracabilite,
-        "message": "Unité trouvée. Souhaitez-vous lancer une vente ?"
+        "action": "ajout",
+        "pre_remplir": {
+            "nom": data.nom_produit,
+            "tracabilite": data.tracabilite,
+            "societe": data.societe
+        },
+        "message": "Unité non trouvée. Voulez-vous l’ajouter ?"
     }
+
+
 
 
 @router.post("/confirm_add_after_scan")
@@ -192,8 +189,7 @@ def find_product_by_tracabilite(tracabilite: str, db: Session = Depends(get_db))
         "tracabilite": produit.tracabilite
     }
 
-from app.models.model_unite_produit import UniteProduit
-from app.utils.logger import log_action
+
 
 @router.post("/creer_par_tracabilite")
 def creer_vente_par_tracabilite(

@@ -31,7 +31,8 @@ class Facture(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     user = relationship("User", backref="factures")
 
-    client = relationship("Client", backref="factures")
+    client = relationship("Client", back_populates="factures")
+
     fournisseur = relationship("Fournisseur", backref="factures")
     lignes = relationship("LigneFacture", back_populates="facture", cascade="all, delete")
     paiements = relationship("Paiement", back_populates="facture", cascade="all, delete")

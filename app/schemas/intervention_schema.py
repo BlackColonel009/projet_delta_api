@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 # 🧾 Schéma de création
 class InterventionCreate(BaseModel):
@@ -9,6 +9,10 @@ class InterventionCreate(BaseModel):
     description: str | None = None
     statut: str | None = "en cours"
     produits_ids: List[int] = []
+    produit_ex: Optional[str] = None
+    caracteristique_ex: Optional[str] = None
+    commentaire_ex: Optional[str] = None
+
 
 class InterventionOut(BaseModel):
     id: int
@@ -18,6 +22,10 @@ class InterventionOut(BaseModel):
     statut: str
     date_intervention: datetime
     produits_ids: List[int]
+    produit_ex: Optional[str] = None
+    caracteristique_ex: Optional[str] = None
+    commentaire_ex: Optional[str] = None
+
 
     class Config:
         from_attributes = True

@@ -24,7 +24,8 @@ def generate_facture_from_commande(db: Session, commande, commande_type: str):
         fournisseur_id=commande.fournisseur_id if commande_type == "achat" else None,
         total_ht=commande.total_ht,
         tva=commande.tva,
-        total_ttc=commande.total_ttc
+        total_ttc=commande.total_ttc,
+        user_id=commande.user_id
     )
     db.add(facture)
     db.commit()
@@ -69,6 +70,7 @@ def generate_facture_pdf(facture):
     """
     🖨 Génère un PDF à partir d’un template HTML avec WeasyPrint.
     """
+    devise = facture.user.devise if facture.user.devise else "€"
     # Créer le répertoire si nécessaire
     os.makedirs("file", exist_ok=True)
     pdf_path = f"file/facture_{facture.id}.pdf"
@@ -82,6 +84,7 @@ def generate_facture_pdf(facture):
 
     # 2. Contexte des données
     html_content = template.render(
+        devise=devise,
         facture=facture,
         societe={"nom": "Trade Care", "adresse": "Rue X, Ville", "telephone": "90000000", "email": "contact@care.tg"},
         vendeur={"nom": "Jean Dupont", "poste": "Commercial"},

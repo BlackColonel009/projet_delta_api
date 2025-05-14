@@ -23,7 +23,9 @@ class Intervention(Base):
     description = Column(Text, nullable=True)
     statut = Column(String, default="en cours")  # ex: en cours, terminé, annulé
     date_intervention = Column(DateTime, default=datetime.utcnow)
-
+    produit_ex = Column(String, nullable=True)
+    caracteristique_ex = Column(Text, nullable=True)
+    commentaire_ex = Column(Text, nullable=True)
 
     # Relations
     client = relationship("Client", backref="interventions")

@@ -8,6 +8,10 @@ from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
 from app.utils.logger import log_action
+from typing import Optional
+from sqlalchemy import DateTime
+from datetime import date
+
 
 
 router = APIRouter(prefix="/interventions", tags=["Interventions"])
@@ -15,6 +19,7 @@ router = APIRouter(prefix="/interventions", tags=["Interventions"])
 # ➕ Créer une intervention
 @router.post("/", response_model=InterventionOut)
 def create_intervention(
+    
     data: InterventionCreate,
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.technicien]))
@@ -27,8 +32,12 @@ def create_intervention(
         employe_id=data.employe_id,
         description=data.description,
         statut=data.statut,
-        user_id=parent_user_id
+        user_id=parent_user_id,
+        produit_ex=data.produit_ex,
+        caracteristique_ex=data.caracteristique_ex,
+        commentaire_ex=data.commentaire_ex
     )
+
 
     produits = db.query(Produit).filter(Produit.id.in_(data.produits_ids)).all()
     intervention.produits = produits
@@ -54,17 +63,46 @@ def create_intervention(
         description=intervention.description,
         statut=intervention.statut,
         date_intervention=intervention.date_intervention,
-        produits_ids=[p.id for p in produits]
+        produits_ids=[p.id for p in produits],
+        produit_ex=intervention.produit_ex,
+        caracteristique_ex=intervention.caracteristique_ex,
+        commentaire_ex=intervention.commentaire_ex,
+
     )
 
 # 📋 Lister toutes les interventions
 @router.get("/", response_model=List[InterventionOut])
 def list_interventions(
+    page: int = 1,
+    limit: int = 10,
+    date_min: Optional[date] = None,
+    date_max: Optional[date] = None,
+    employe_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.technicien]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    interventions = db.query(Intervention).filter(Intervention.employe_id == parent_user_id).all()
+    offset = (page - 1) * limit
+    query = db.query(Intervention).filter(
+        Intervention.employe_id == (
+            current_user.parent_user_id if not current_user.is_main_user else current_user.id
+        )
+    )
+
+    if employe_id:
+        query = query.filter(Intervention.employe_id == employe_id)
+    if date_min:
+        query = query.filter(Intervention.date_intervention >= date_min)
+    if date_max:
+        query = query.filter(Intervention.date_intervention <= date_max)
+
+    interventions = (
+        query.order_by(Intervention.date_intervention.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+        
     return [
         InterventionOut(
             id=i.id,
@@ -73,9 +111,13 @@ def list_interventions(
             description=i.description,
             statut=i.statut,
             date_intervention=i.date_intervention,
-            produits_ids=[p.id for p in i.produits]
+            produits_ids=[p.id for p in i.produits],
+            produit_ex=i.produit_ex,
+            caracteristique_ex=i.caracteristique_ex,
+            commentaire_ex=i.commentaire_ex
         ) for i in interventions
     ]
+
 
 # 🔍 Voir une intervention par ID
 @router.get("/{intervention_id}", response_model=InterventionOut)

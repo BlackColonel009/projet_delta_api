@@ -104,8 +104,8 @@
             <tr>
                 <td>{{ ligne.description }}</td>
                 <td class="right">{{ ligne.quantite }}</td>
-                <td class="right">{{ '%.2f'|format(ligne.prix_unitaire) }} €</td>
-                <td class="right">{{ '%.2f'|format(ligne.total_ligne) }} €</td>
+                <td class="right">{{ '%.2f'|format(ligne.prix_unitaire) }} {{ devise }}</td>
+                <td class="right">{{ '%.2f'|format(ligne.total_ligne) }} {{ devise }}</td>
             </tr>
             {% endfor %}
         </tbody>
@@ -115,12 +115,12 @@
     <table class="totaux">
         <tr class="highlight">
             <td>Total HT :</td>
-            <td class="right">{{ '%.2f'|format(facture.total_ht) }} €</td>
+            <td class="right">{{ '%.2f'|format(facture.total_ht) }} {{ devise }}</td>
         </tr>
         {% if facture.tva > 0 %}
         <tr class="highlight">
             <td>TVA ({{ facture.tva }}%) :</td>
-            <td class="right">{{ '%.2f'|format(facture.total_ttc - facture.total_ht) }} €</td>
+            <td class="right">{{ '%.2f'|format(facture.total_ttc - facture.total_ht) }} {{ devise }}</td>
         </tr>
         {% endif %}
         <tr class="highlight">
@@ -128,6 +128,8 @@
             <td class="right">{{ '%.2f'|format(facture.total_ttc) }} {{ facture.devise }}</td>
         </tr>
     </table>
+    <p style="font-size: 12px;">Tous les montants sont en {{ devise }}</p>
+
 
 </body>
 

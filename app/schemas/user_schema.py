@@ -8,7 +8,8 @@ class UserCreate(BaseModel):
     account_type: Optional[str] = "basic"
     is_main_user: bool = False
     societe_ou_entreprise: Optional[str] = None  # ✅
-
+    devise: Optional[str] = "€"
+    
 class RoleEnum(str, Enum):
     technicien = "Technicien(ne)"
     secretaire = "Secretaire"

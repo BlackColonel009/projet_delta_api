@@ -29,20 +29,21 @@ def register_user(data: UserCreate, db: Session = Depends(get_db)):
         is_main_user=data.is_main_user,
         is_superuser=False,
         account_type=data.account_type,
-        societe_ou_entreprise=data.societe_ou_entreprise
+        societe_ou_entreprise=data.societe_ou_entreprise,
+        devise=data.devise or "€", 
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
-    log_action(
-        db=db,
-        user_id=new_user.id,
-        action="Inscription utilisateur",
-        type_entite="utilisateur",
-        entite_id=new_user.id,
-        details=f"Nouvel utilisateur inscrit : {new_user.email}"
-    )
+    # log_action(
+    #     db=db,
+    #     current_user=current_user,
+    #     action="Inscription utilisateur",
+    #     type_entite="utilisateur",
+    #     entite_id=new_user.id,
+    #     details=f"Nouvel utilisateur inscrit : {new_user.email}"
+    # )
 
     return {"message": "User created successfully"}
 
@@ -70,14 +71,14 @@ def register_sub_user(
     db.commit()
     db.refresh(new_sub)
 
-    log_action(
-        db=db,
-        user_id=parent.id,
-        action="Ajout sub-user",
-        type_entite="sub-user",
-        entite_id=new_sub.id,
-        details=f"SubUser ajouté : {new_sub.username} pour le parent {parent.email}"
-    )
+    # log_action(
+    #     db=db,
+    #     current_user=current_user,
+    #     action="Ajout sub-user",
+    #     type_entite="sub-user",
+    #     entite_id=new_sub.id,
+    #     details=f"SubUser ajouté : {new_sub.username} pour le parent {parent.email}"
+    # )
 
     return {"message": "Sub-user created successfully"}
 
@@ -165,6 +166,7 @@ def update_my_user(
     bio: Optional[str] = Body(None),
     societe_ou_entreprise: Optional[str] = Body(None),
     username: Optional[str] = Body(None),
+    devise: Optional[str] = Body(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -174,6 +176,7 @@ def update_my_user(
     if bio: current_user.bio = bio
     if societe_ou_entreprise: current_user.societe_ou_entreprise = societe_ou_entreprise
     if username: current_user.username = username
+    if devise: current_user.devise = devise
     db.commit()
 
     log_action(
@@ -190,28 +193,36 @@ def update_my_user(
 # 🔄 Modifier infos subuser
 @router.put("/me-sub", tags=["SubUsers"])
 def update_my_subuser(
-    avatar_url: Optional[str] = Body(None),
     bio: Optional[str] = Body(None),
+    avatar_url: Optional[str] = Body(None),
     db: Session = Depends(get_db),
     current_sub: SubUser = Depends(get_current_sub_user)
 ):
-    if avatar_url:
-        current_sub.avatar_url = avatar_url
     if bio is not None:
         current_sub.bio = bio
-
+    if avatar_url is not None:
+        current_sub.avatar_url = avatar_url
     db.commit()
+    db.refresh(current_sub)
+    
+    # log_action(
+    #     db=db,
+    #     sub_user_id=current_sub.id,  # ✅ Utilise le bon champ
+    #     action="Modification profil sub-user",
+    #     type_entite="sub-user",
+    #     entite_id=current_sub.id,
+    #     details=f"Sub-user {current_sub.username} a modifié son profil"
+    # )
 
-    log_action(
-        db=db,
-        sub_user_id=current_sub.id,  # ✅ Utilise le bon champ
-        action="Modification profil sub-user",
-        type_entite="sub-user",
-        entite_id=current_sub.id,
-        details=f"Sub-user {current_sub.username} a modifié son profil"
-    )
+    return {
+        "id": current_sub.id,
+        "username": current_sub.username,
+        "role": current_sub.role,
+        "bio": current_sub.bio,
+        "avatar_url": current_sub.avatar_url
+    }
 
-    return {"message": "Profil sous-utilisateur mis à jour avec succès."}
+
 
 # 🔧 Modifier un subuser (parent)
 @router.put("/subuser/{sub_id}", tags=["SubUsers"])
@@ -239,7 +250,7 @@ def update_subuser(
 
     log_action(
         db=db,
-        user_id=current_user.id,
+        current_user=current_user,
         action="Mise à jour sub-user",
         type_entite="sub-user",
         entite_id=sub.id,
@@ -259,7 +270,7 @@ def delete_subuser(sub_id: int, current_user: User = Depends(get_current_user), 
 
     log_action(
         db=db,
-        user_id=current_user.id,
+        current_user=current_user,
         action="Suppression sub-user",
         type_entite="sub-user",
         entite_id=sub.id,
@@ -277,7 +288,7 @@ def delete_own_account(current_user: User = Depends(get_current_user), db: Sessi
 
     log_action(
         db=db,
-        user_id=current_user.id,
+        current_user=current_user,
         action="Suppression de compte",
         type_entite="utilisateur",
         entite_id=current_user.id,
@@ -296,14 +307,14 @@ def super_delete_user(user_id: int, current_super: User = Depends(require_super_
     db.delete(user)
     db.commit()
 
-    log_action(
-        db=db,
-        user_id=current_super.id,
-        action="Suppression user par superuser",
-        type_entite="utilisateur",
-        entite_id=user_id,
-        details=f"User {user.email} supprimé par superadmin"
-    )
+    # log_action(
+    #     db=db,
+    #     current_user=current_user,
+    #     action="Suppression user par superuser",
+    #     type_entite="utilisateur",
+    #     entite_id=user_id,
+    #     details=f"User {user.email} supprimé par superadmin"
+    # )
 
     return {"message": "User and sub-users deleted by super admin."}
 
@@ -332,7 +343,8 @@ def get_my_profile(current_user: User = Depends(get_current_user)):
         "is_main_user": current_user.is_main_user,
         "username": current_user.username,
         "societe_ou_entreprise": current_user.societe_ou_entreprise,
-        "account_type": current_user.account_type
+        "account_type": current_user.account_type,
+        "devise": current_user.devise,
     }
 
 # 👁 Voir son profil subuser

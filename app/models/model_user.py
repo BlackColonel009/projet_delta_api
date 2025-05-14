@@ -18,13 +18,16 @@ class User(Base):
     societe_ou_entreprise = Column(String, nullable=True)
     account_type = Column(String, default="basic")
     created_at = Column(DateTime, default=datetime.utcnow)
-
+    devise = Column(String, default="€")
+    
     sub_users = relationship("SubUser", back_populates="parent_user", cascade="all, delete")
 
     historiques = relationship("Historique", back_populates="user", overlaps="historiques_user")
     historiques_user = relationship("Historique", foreign_keys="[Historique.user_id]", overlaps="historiques")
 
+    
 
+    
 class SubUser(Base):
     __tablename__ = "sub_users"
 
@@ -41,3 +44,11 @@ class SubUser(Base):
 
     historiques = relationship("Historique", back_populates="sub_user", overlaps="historiques_sub")
     historiques_sub = relationship("Historique", foreign_keys="[Historique.sub_user_id]", overlaps="historiques")
+
+
+
+# ✅ À placer tout en bas du fichier, après les classes
+from sqlalchemy.orm import relationship
+
+User.rapports = relationship("Rapport", back_populates="user", lazy="dynamic")
+SubUser.rapports = relationship("Rapport", back_populates="sub_user", lazy="dynamic")
