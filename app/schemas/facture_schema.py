@@ -41,6 +41,7 @@ class FactureOut(BaseModel):
     total_paye: float
     tva: float
     lignes: List[LigneFactureOut]
+    total_paye: float
 
     class Config:
         from_attributes = True

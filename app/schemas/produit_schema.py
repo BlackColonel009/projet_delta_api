@@ -5,6 +5,7 @@ from fastapi import Form
 from app.schemas.categorie_schema import CategorieOut
 # 🧾 Schéma de création / mise à jour
 
+
 class ProduitCreate:
     def __init__(
         self,
@@ -22,6 +23,7 @@ class ProduitCreate:
         is_installe: Optional[bool] = Form(False),
         tracabilite: Optional[str] = Form(None),
         emplacement: Optional[str] = Form("magasin"),
+        scanned_barcodes: Optional[List[str]] = Form(None),  # ✅ correction ici
     ):
         self.nom = nom
         self.categorie_id = categorie_id
@@ -37,6 +39,8 @@ class ProduitCreate:
         self.is_installe = is_installe
         self.tracabilite = tracabilite
         self.emplacement = emplacement
+        self.scanned_barcodes = scanned_barcodes or []  # ✅ pour éviter None
+
 
 class ProduitOut(BaseModel):
     id: int

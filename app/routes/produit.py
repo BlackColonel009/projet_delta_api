@@ -35,6 +35,7 @@ def create_produit(
     tracabilite: Optional[str] = Form(None),
     emplacement: Optional[str] = Form("magasin"),
     image: UploadFile = File(...),
+    scanned_barcodes: List[str] = Form(default=[]),
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
@@ -70,16 +71,27 @@ def create_produit(
     db.add(produit)
     db.commit()
     db.refresh(produit)
-    # Après la création du produit
-    for i in range(1, quantite + 1):
-        qr_code = f"TRAC-{produit.id}-{str(i).zfill(4)}"
-        unite = UniteProduit(
-            produit_id=produit.id,
-            tracabilite=qr_code,
-            statut="disponible"
-        )
-        db.add(unite)
-    # 3. Commit final des unités
+    # Si des codes-barres ont été scannés, on les utilise
+    if scanned_barcodes:
+        for code in scanned_barcodes:
+            unite = UniteProduit(
+                produit_id=produit.id,
+                tracabilite=generate_random_qr_code(),
+                code_barre=code,
+                statut="disponible"
+            )
+            db.add(unite)
+    else:
+        # Sinon, on génère automatiquement N unités
+        for i in range(1, quantite + 1):
+            qr_code = f"TRAC-{produit.id}-{str(i).zfill(4)}"
+            unite = UniteProduit(
+                produit_id=produit.id,
+                tracabilite=qr_code,
+                statut="disponible"
+            )
+            db.add(unite)
+
     db.commit()
 
 

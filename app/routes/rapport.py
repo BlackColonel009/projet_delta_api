@@ -110,22 +110,22 @@ def list_rapports(
         .all()
 
     result = []
-    
-    auteur = None
-    avatar_url = None
-    role = "Main user"
-    
     for r in rapports:
-        # print("🧠 R:", r.id, r.user_id, r.sub_user_id, r.user, r.sub_user)
-
-        auteur = None
         if r.sub_user:
             auteur = r.sub_user.username
             avatar_url = r.sub_user.avatar_url
             role = r.sub_user.role
+            # print(f"🧪 sub_user_avatar: {avatar_url}")
         elif r.user:
             auteur = r.user.username or r.user.email
             avatar_url = r.user.avatar_url
+            role = "Main user"
+        else:
+            auteur = "Inconnu"
+            avatar_url = None
+            role = "Inconnu"
+        
+
 
         result.append({
             "id": r.id,
@@ -133,7 +133,7 @@ def list_rapports(
             "date_creation": r.date_creation,
             "user_id": r.user_id,
             "sub_user_id": r.sub_user_id,
-            "auteur": auteur or "Utilisateur",
+            "auteur": auteur,
             "avatar_url": avatar_url,
             "role": role
         })

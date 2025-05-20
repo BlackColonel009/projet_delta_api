@@ -19,6 +19,9 @@ class Historique(Base):
     date_action = Column(DateTime, default=datetime.utcnow)
     sub_user_id = Column(Integer, ForeignKey("sub_users.id"), nullable=True)
 
+    nom_user = Column(String, nullable=True)
+    nom_sub_user = Column(String, nullable=True)
+
     user = relationship("User", back_populates="historiques", overlaps="historiques_user")
     sub_user = relationship("SubUser", back_populates="historiques", overlaps="historiques_sub")
     def __repr__(self):

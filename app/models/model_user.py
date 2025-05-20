@@ -19,6 +19,7 @@ class User(Base):
     account_type = Column(String, default="basic")
     created_at = Column(DateTime, default=datetime.utcnow)
     devise = Column(String, default="€")
+    telephone = Column(String, nullable=True)
     
     sub_users = relationship("SubUser", back_populates="parent_user", cascade="all, delete")
 
@@ -38,6 +39,7 @@ class SubUser(Base):
     avatar_url = Column(String, nullable=True)
     bio = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    telephone = Column(String, nullable=True)
 
     parent_user_id = Column(Integer, ForeignKey("users.id"))
     parent_user = relationship("User", back_populates="sub_users")

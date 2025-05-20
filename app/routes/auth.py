@@ -64,6 +64,7 @@ def register_sub_user(
     new_sub = SubUser(
         username=data.username,
         password_hash=hash_password(data.password),
+        bio = data.bio,
         role=data.role,
         parent_user_id=parent.id
     )
@@ -167,6 +168,7 @@ def update_my_user(
     societe_ou_entreprise: Optional[str] = Body(None),
     username: Optional[str] = Body(None),
     devise: Optional[str] = Body(None),
+    telephone: Optional[str] = Body(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -177,6 +179,7 @@ def update_my_user(
     if societe_ou_entreprise: current_user.societe_ou_entreprise = societe_ou_entreprise
     if username: current_user.username = username
     if devise: current_user.devise = devise
+    if telephone: current_user.telephone = telephone
     db.commit()
 
     log_action(
@@ -195,6 +198,7 @@ def update_my_user(
 def update_my_subuser(
     bio: Optional[str] = Body(None),
     avatar_url: Optional[str] = Body(None),
+    telephone: Optional[str] = Body(None),
     db: Session = Depends(get_db),
     current_sub: SubUser = Depends(get_current_sub_user)
 ):
@@ -202,6 +206,8 @@ def update_my_subuser(
         current_sub.bio = bio
     if avatar_url is not None:
         current_sub.avatar_url = avatar_url
+    if telephone is not None:
+        current_sub.telephone = telephone
     db.commit()
     db.refresh(current_sub)
     
@@ -219,7 +225,8 @@ def update_my_subuser(
         "username": current_sub.username,
         "role": current_sub.role,
         "bio": current_sub.bio,
-        "avatar_url": current_sub.avatar_url
+        "avatar_url": current_sub.avatar_url,
+        "telephone": current_sub.telephone
     }
 
 
@@ -233,6 +240,7 @@ def update_subuser(
     role: Optional[str] = Body(None),
     avatar_url: Optional[str] = Body(None),
     bio: Optional[str] = Body(None),
+    telephone : Optional[str] = Body(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -246,6 +254,7 @@ def update_subuser(
     if role: sub.role = role
     if avatar_url: sub.avatar_url = avatar_url
     if bio: sub.bio = bio
+    if telephone: sub.telephone = telephone
     db.commit()
 
     log_action(
@@ -345,16 +354,20 @@ def get_my_profile(current_user: User = Depends(get_current_user)):
         "societe_ou_entreprise": current_user.societe_ou_entreprise,
         "account_type": current_user.account_type,
         "devise": current_user.devise,
+        "telephone" : current_user.telephone,
     }
 
 # 👁 Voir son profil subuser
 @router.get("/me-sub", tags=["SubUsers"])
-def get_my_subuser_profile(current_sub: SubUser = Depends(get_current_sub_user)):
+def get_my_subuser_profile(current_sub: SubUser = Depends(get_current_sub_user),  db: Session = Depends(get_db)):
+    parent = db.query(User).filter(User.id == current_sub.parent_user_id).first()
     return {
         "id": current_sub.id,
         "username": current_sub.username,
         "role": current_sub.role,
         "bio": current_sub.bio,
-        "avatar_url": current_sub.avatar_url
+        "avatar_url": current_sub.avatar_url,
+        "devise": parent.devise,  # ✅ ici
+        "telephone" : current_sub.telephone,
     }
 

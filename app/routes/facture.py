@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
+
 import os
 
 router = APIRouter(prefix="/factures", tags=["Facturation"])
@@ -56,6 +57,7 @@ def create_facture(
     return facture
 
 # 🔍 Lire une facture avec ses lignes
+# 🔍 Lire une facture avec ses lignes
 @router.get("/{facture_id}", response_model=FactureOut)
 def get_facture(
     facture_id: int,
@@ -63,13 +65,34 @@ def get_facture(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+
     facture = db.query(Facture).filter(
         Facture.id == facture_id,
         Facture.user_id == parent_user_id
     ).first()
+
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
-    return facture
+
+    total_paye = sum(p.montant for p in facture.paiements)  # Assure-toi que la relation existe
+
+    return {
+        "id": facture.id,
+        "type": facture.type,
+        "client_id": facture.client_id,
+        "client": facture.client,
+        "fournisseur_id": facture.fournisseur_id,
+        "date_creation": facture.date_creation,
+        "statut": facture.statut,
+        "remarques": facture.remarques,
+        "total_ht": facture.total_ht,
+        "total_ttc": facture.total_ttc,
+        "total_paye": sum(p.montant for p in facture.paiements),  # ✅ injecté ici
+        "tva": facture.tva,
+        "lignes": facture.lignes
+    }
+
+
 
 # 🔄 Mettre à jour le statut d'une facture
 @router.patch("/{facture_id}/statut", response_model=dict)
@@ -123,34 +146,9 @@ def list_factures(
             total_paye=total_paye,
             client=f.client,        # 🟢 Ajouté ici
             lignes=f.lignes         # 🟢 Ajouté ici
+            
         ))
 
 
     return result
 
-# 📄 Ouvre un PDF de facture générée dans le navigateur
-@router.get("/{facture_id}/open")
-async def open_facture_pdf(
-    facture_id: int,
-    db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
-):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    # Sécurité : vérifier que l'utilisateur est bien propriétaire
-    facture = db.query(Facture).filter(
-        Facture.id == facture_id,
-        Facture.user_id == parent_user_id
-    ).first()
-    if not facture:
-        raise HTTPException(status_code=404, detail="Facture non trouvée")
-
-    pdf_path = f"file/facture_{facture_id}.pdf"
-    if not os.path.exists(pdf_path):
-        raise HTTPException(status_code=404, detail="Facture PDF non trouvée.")
-
-    return FileResponse(
-        path=pdf_path,
-        media_type="application/pdf",
-        filename=f"facture_{facture_id}.pdf",
-        headers={"Content-Disposition": f"inline; filename=facture_{facture_id}.pdf"}
-    )

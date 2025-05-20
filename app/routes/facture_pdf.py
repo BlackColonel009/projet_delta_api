@@ -1,47 +1,43 @@
-import os
+# ✅ Routes corrigées : aperçu PDF + envoi email avec nom produit, quantité, PU, total ligne
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
+from fastapi.responses import StreamingResponse
 from fastapi_mail import FastMail, MessageSchema, MessageType
-from reportlab.lib.pagesizes import A4
-from fastapi.responses import FileResponse
 from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
+from io import BytesIO
 from app.database import get_db
 from app.models.model_facture import Facture
-from app.utils.security import get_current_user
-from app.config import conf
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
+from app.config import conf
+from app.models.model_facture import LigneFacture 
 
-router = APIRouter(prefix="/factures", tags=["Email"])
+router = APIRouter(prefix="/factures", tags=["Facturation"])
 
-
-# 📧 Envoyer une facture par mail au client
-@router.post("/{facture_id}/send")
-async def send_facture_to_client(
+@router.get("/{facture_id}/preview")
+def preview_facture_pdf(
     facture_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    # 🔐 Sécurité : s'assurer que la facture appartient au bon utilisateur
-    facture = db.query(Facture).filter(
-        Facture.id == facture_id,
-        Facture.user_id == parent_user_id
-    ).first()
+    facture = db.query(Facture).options(
+        joinedload(Facture.lignes).joinedload(LigneFacture.produit),
+        joinedload(Facture.client),
+        joinedload(Facture.fournisseur),
+        joinedload(Facture.paiements)
+    ).filter(Facture.id == facture_id).first()
+
+    joinedload(Facture.lignes).joinedload(LigneFacture.produit) 
 
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
 
-    if not facture.client or not facture.client.email:
-        raise HTTPException(status_code=400, detail="Le client n'a pas d'adresse email")
+    total_paye = sum(p.montant for p in facture.paiements) if facture.paiements else 0.0
 
-    # 🔧 Créer le dossier si nécessaire
-    os.makedirs("file", exist_ok=True)
-
-    # 📄 Générer le fichier PDF
-    pdf_path = f"file/facture_{facture.id}.pdf"
-    pdf = canvas.Canvas(pdf_path, pagesize=A4)
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
     y = height - 2 * cm
 
@@ -61,7 +57,7 @@ async def send_facture_to_client(
 
     y -= 1 * cm
     pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(2 * cm, y, "Description")
+    pdf.drawString(2 * cm, y, "Produit")
     pdf.drawString(9 * cm, y, "Qté")
     pdf.drawString(11 * cm, y, "PU")
     pdf.drawString(14 * cm, y, "Total")
@@ -71,7 +67,8 @@ async def send_facture_to_client(
 
     pdf.setFont("Helvetica", 10)
     for ligne in facture.lignes:
-        pdf.drawString(2 * cm, y, ligne.description)
+        nom_produit = ligne.produit.nom if ligne.produit else ligne.description
+        pdf.drawString(2 * cm, y, nom_produit)
         pdf.drawRightString(10 * cm, y, str(ligne.quantite))
         pdf.drawRightString(13 * cm, y, f"{ligne.prix_unitaire:.2f} FCFA")
         pdf.drawRightString(18 * cm, y, f"{ligne.total_ligne:.2f} FCFA")
@@ -91,21 +88,135 @@ async def send_facture_to_client(
     pdf.drawRightString(15 * cm, y, "Total TTC :")
     pdf.drawRightString(19 * cm, y, f"{facture.total_ttc:.2f} FCFA")
 
+    if total_paye >= facture.total_ttc:
+        pdf.saveState()
+        pdf.setFont("Helvetica-Bold", 36)
+        pdf.setFillColorRGB(0.6, 0.1, 0.1)
+        pdf.translate(13 * cm, 5 * cm)
+        pdf.rotate(25)
+        pdf.drawString(0, 0, "PAYÉ")
+        pdf.restoreState()
+        
+    if total_paye < facture.total_ttc:
+        pdf.saveState()
+        pdf.setFont("Helvetica-Bold", 36)
+        pdf.setFillColorRGB(0.6, 0.1, 0.1)
+        pdf.translate(13 * cm, 5 * cm)
+        pdf.rotate(25)
+        pdf.drawString(0, 0, "NON PAYÉ")
+        pdf.restoreState()
+    
     pdf.showPage()
     pdf.save()
+    buffer.seek(0)
 
-    # 📧 Préparer l'e-mail
+    return StreamingResponse(buffer, media_type="application/pdf", headers={
+        "Content-Disposition": f"inline; filename=facture_{facture.id}.pdf"
+    })
+
+
+@router.post("/{facture_id}/email-client")
+async def send_facture_to_client_memory(
+    facture_id: int,
+    db: Session = Depends(get_db)
+):
+    facture = db.query(Facture).options(
+        joinedload(Facture.lignes).joinedload(LigneFacture.produit),
+        joinedload(Facture.client),
+        joinedload(Facture.fournisseur),
+        joinedload(Facture.paiements)
+    ).filter(Facture.id == facture_id).first()
+
+    if not facture:
+        raise HTTPException(status_code=404, detail="Facture non trouvée")
+
+    if not facture.client or not facture.client.email:
+        raise HTTPException(status_code=400, detail="Le client n'a pas d'adresse email")
+
+    total_paye = sum(p.montant for p in facture.paiements) if facture.paiements else 0.0
+
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    y = height - 2 * cm
+
+    pdf.setFont("Helvetica-Bold", 16)
+    pdf.drawString(2 * cm, y, f"Facture #{facture.id} - {facture.type.value.upper()}")
+    y -= 1.2 * cm
+    pdf.setFont("Helvetica", 11)
+    pdf.drawString(2 * cm, y, f"Date : {facture.date_creation.strftime('%d/%m/%Y')}")
+    y -= 0.8 * cm
+
+    if facture.client:
+        pdf.drawString(2 * cm, y, f"Client : {facture.client.nom}")
+        y -= 0.6 * cm
+
+    y -= 1 * cm
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(2 * cm, y, "Produit")
+    pdf.drawString(9 * cm, y, "Qté")
+    pdf.drawString(11 * cm, y, "PU")
+    pdf.drawString(14 * cm, y, "Total")
+    y -= 0.4 * cm
+    pdf.line(2 * cm, y, 19 * cm, y)
+    y -= 0.5 * cm
+
+    pdf.setFont("Helvetica", 10)
+    for ligne in facture.lignes:
+        nom_produit = ligne.produit.nom if ligne.produit else ligne.description
+        pdf.drawString(2 * cm, y, nom_produit)
+        pdf.drawRightString(10 * cm, y, str(ligne.quantite))
+        pdf.drawRightString(13 * cm, y, f"{ligne.prix_unitaire:.2f} FCFA")
+        pdf.drawRightString(18 * cm, y, f"{ligne.total_ligne:.2f} FCFA")
+        y -= 0.6 * cm
+        if y < 4 * cm:
+            pdf.showPage()
+            y = height - 3 * cm
+
+    y -= 1 * cm
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawRightString(15 * cm, y, "Total HT :")
+    pdf.drawRightString(19 * cm, y, f"{facture.total_ht:.2f} FCFA")
+    y -= 0.5 * cm
+    pdf.drawRightString(15 * cm, y, f"TVA ({facture.tva:.0f}%) :")
+    pdf.drawRightString(19 * cm, y, f"{facture.total_ttc - facture.total_ht:.2f} FCFA")
+    y -= 0.5 * cm
+    pdf.drawRightString(15 * cm, y, "Total TTC :")
+    pdf.drawRightString(19 * cm, y, f"{facture.total_ttc:.2f} FCFA")
+
+    if total_paye >= facture.total_ttc:
+        pdf.saveState()
+        pdf.setFont("Helvetica-Bold", 36)
+        pdf.setFillColorRGB(0.6, 0.1, 0.1)
+        pdf.translate(13 * cm, 5 * cm)
+        pdf.rotate(25)
+        pdf.drawString(0, 0, "PAYÉ")
+        pdf.restoreState()
+
+    pdf.showPage()
+    pdf.save()
+    buffer.seek(0)
+
+    # 1. Sauvegarder temporairement
+    pdf_path = f"temp_facture_{facture.id}.pdf"
+    with open(pdf_path, "wb") as f:
+        f.write(buffer.getvalue())
+
+    # 2. Envoyer par email
     message = MessageSchema(
         subject=f"Votre facture #{facture.id}",
         recipients=[facture.client.email],
-        body=f"Bonjour, veuillez trouver en pièce jointe la facture #{facture.id}.",
+        body=f"Bonjour, veuillez trouver en pièce jointe votre facture #{facture.id}.",
         subtype=MessageType.plain,
-        attachments=[pdf_path]
+        attachments=[pdf_path]  # ✅ Chemin attendu par FastAPI-Mail
     )
 
     fm = FastMail(conf)
     await fm.send_message(message)
 
+    # 3. Supprimer le fichier temporaire après envoi
+    import os
+    os.remove(pdf_path)
+
+
     return {"message": f"Facture #{facture.id} envoyée à {facture.client.email}"}
-
-

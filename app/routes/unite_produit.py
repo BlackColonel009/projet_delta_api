@@ -5,13 +5,14 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.model_unite_produit import UniteProduit
 from app.models.model_produit import Produit
-from app.schemas.unite_produit_schema import AddUnitesRequest
+from app.schemas.unite_produit_schema import AddUnitesRequest, UniteProduitOut
 from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
 from app.utils.logger import log_action
 from sqlalchemy.orm import joinedload
 from datetime import datetime
+from typing import List, Optional
 
 router = APIRouter(prefix="/unites-produit", tags=["Unités Produit"])
 
@@ -130,3 +131,74 @@ def delete_unite_produit(
     )
 
     return {"message": f"Unité supprimée : {unite.tracabilite}"}
+
+
+# **************************CODE BARRE STEP**************************************
+
+# 🧪 Enregistrer une série de codes-barres en statut temporaire (avant liaison produit)
+@router.post("/temp", response_model=List[UniteProduitOut])
+def store_temp_barcodes(
+    barcodes: List[str],
+    db: Session = Depends(get_db)
+):
+    results = []
+    for code in barcodes:
+        # Ignorer les doublons
+        if db.query(UniteProduit).filter(UniteProduit.tracabilite == code).first():
+            continue
+        unit = UniteProduit(tracabilite=code, statut="temp")
+        db.add(unit)
+        results.append(unit)
+    db.commit()
+    return results
+
+# 🔗 Lier une série de codes-barres (déjà scannés) à un produit
+# 🔁 Mise à jour : lier des codes-barres à un produit
+@router.post("/lier/{produit_id}")
+def lier_barcodes_a_produit(
+    produit_id: int,
+    barcodes: List[str],
+    db: Session = Depends(get_db)
+):
+    produit = db.query(Produit).filter(Produit.id == produit_id).first()
+    if not produit:
+        raise HTTPException(status_code=404, detail="Produit introuvable")
+
+    modifie = 0
+    for code in barcodes:
+        unite = db.query(UniteProduit).filter(UniteProduit.code_barre == code).first()
+        if unite:
+            unite.produit_id = produit_id
+            unite.statut = "disponible"
+            modifie += 1
+    db.commit()
+    return {"message": f"{modifie} codes-barres liés au produit {produit.nom}"}
+
+
+@router.post("/infos")
+def get_produits_par_codes(barcodes: List[str], db: Session = Depends(get_db)):
+    """
+    🎯 Reçoit une liste de code_barres et retourne un regroupement par produit.
+    Format retour : [{produit: {...}, codes: [code1, code2, ...]}, ...]
+    """
+    regroupement = {}
+
+    for code in barcodes:
+        unite = db.query(UniteProduit).filter(UniteProduit.tracabilite == code).first()
+        if unite and unite.produit:
+            pid = unite.produit.id
+            if pid not in regroupement:
+                regroupement[pid] = {
+                    "produit": unite.produit,
+                    "codes": []
+                }
+            regroupement[pid]["codes"].append(code)
+
+    return list(regroupement.values())
+
+@router.get("/unites-produits/by-barcode/{code}")
+def get_unite_by_barcode(code: str, db: Session = Depends(get_db)):
+    unite = db.query(UniteProduit).filter(UniteProduit.code_barre == code).first()
+    if not unite:
+        raise HTTPException(status_code=404, detail="Introuvable")
+    return unite

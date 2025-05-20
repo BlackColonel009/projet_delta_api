@@ -12,7 +12,6 @@ class RapportOut(BaseModel):
     id: int
     contenu: str
     date_creation: datetime
-    auteur: str
     user_id: Optional[int] = None
     sub_user_id: Optional[int] = None
     auteur: Optional[str] = None

@@ -22,6 +22,7 @@ class RoleEnum(str, Enum):
 class SubUserCreate(BaseModel):
     parent_email: EmailStr
     username: str
+    bio: str | None
     password: str
     role: RoleEnum
     
