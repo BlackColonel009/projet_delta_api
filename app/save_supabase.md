@@ -1,3 +1,227 @@
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
+from sqlalchemy.orm import Session
+from app.database import get_db
+from app.models.model_galerie import GaleriePhoto
+from app.models.model_produit import Produit
+from typing import List
+from app.schemas.galerie_schema import GalerieOut
+from app.services.supabase_service import upload_to_supabase, delete_from_supabase
+from uuid import uuid4
+from datetime import datetime
+
+router = APIRouter(prefix="/galerie", tags=["Galerie Produit"])
+
+@router.post("/", response_model=dict)
+def ajouter_photo_galerie(
+    produit_id: int = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    produit = db.query(Produit).filter(Produit.id == produit_id).first()
+    if not produit:
+        raise HTTPException(status_code=404, detail="Produit non trouvé")
+
+    ext = file.filename.split(".")[-1]
+    filename = f"{uuid4()}.{ext}"
+    file_url = upload_to_supabase(file=file, bucket="galerie", filename=filename)
+
+    g = GaleriePhoto(
+        produit_id=produit_id,
+        image_url=file_url,
+        date_ajout=datetime.utcnow()
+    )
+    db.add(g)
+    db.commit()
+    db.refresh(g)
+
+    return {"message": "Image ajoutée à la galerie", "image_url": g.image_url}
+
+
+@router.put("/{image_id}", response_model=dict)
+def update_image_galerie(
+    image_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    image = db.query(GaleriePhoto).filter(GaleriePhoto.id == image_id).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image non trouvée")
+
+    # Supprimer ancienne image dans Supabase
+    if image.image_url:
+        delete_from_supabase(image.image_url)
+
+    # Enregistrer la nouvelle image
+    ext = file.filename.split(".")[-1]
+    filename = f"{uuid4()}.{ext}"
+    file_url = upload_to_supabase(file=file, bucket="galerie", filename=filename)
+
+    image.image_url = file_url
+    db.commit()
+    db.refresh(image)
+
+    return {"message": "Image mise à jour avec succès", "image_url": image.image_url}
+
+
+@router.delete("/{image_id}", response_model=dict)
+def delete_image_galerie(image_id: int, db: Session = Depends(get_db)):
+    image = db.query(GaleriePhoto).filter(GaleriePhoto.id == image_id).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image non trouvée")
+
+    if image.image_url:
+        delete_from_supabase(image.image_url)
+
+    db.delete(image)
+    db.commit()
+
+    return {"message": "Image supprimée avec succès"}
+
+
+@router.get("/{produit_id}", response_model=List[GalerieOut])
+def get_galerie_by_produit(produit_id: int, db: Session = Depends(get_db)):
+    images = db.query(GaleriePhoto).filter(GaleriePhoto.produit_id == produit_id).order_by(GaleriePhoto.date_ajout.desc()).all()
+    return images
+**********************************************profil****************
+
+from fastapi import File, HTTPException, UploadFile, Depends, APIRouter
+from sqlalchemy.orm import Session
+from uuid import uuid4
+from app.database import get_db
+from app.models.model_user import User, SubUser
+from app.utils.security import get_current_user, get_current_sub_user
+from app.utils.logger import log_action
+from app.services.supabase_service import upload_to_supabase, delete_from_supabase
+
+router = APIRouter(prefix="/upload", tags=["Fichiers"])
+
+# 📄 Upload avatar utilisateur principal
+@router.post("/avatar-user")
+def upload_avatar_for_user(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    filename = f"{uuid4()}.{file.filename.split('.')[-1]}"
+    file_url = upload_to_supabase(file=file, bucket="avatars", filename=filename)
+
+    current_user.avatar_url = file_url
+    db.commit()
+    db.refresh(current_user)
+
+    log_action(
+        db=db,
+        current_user=current_user,
+        action="Upload avatar",
+        type_entite="utilisateur",
+        entite_id=current_user.id,
+        details="Avatar utilisateur principal mis à jour"
+    )
+
+    return {"avatar_url": file_url, "message": "Avatar uploaded and linked successfully."}
+
+
+# 📄 Upload avatar sub-user
+@router.post("/avatar-sub")
+def upload_avatar_for_subuser(
+    file: UploadFile = File(...),
+    current_sub: SubUser = Depends(get_current_sub_user),
+    db: Session = Depends(get_db)
+):
+    filename = f"{uuid4()}.{file.filename.split('.')[-1]}"
+    file_url = upload_to_supabase(file=file, bucket="avatars", filename=filename)
+
+    current_sub.avatar_url = file_url
+    db.commit()
+    db.refresh(current_sub)
+
+    log_action(
+        db=db,
+        current_user=current_sub,
+        action="Upload avatar",
+        type_entite="sub-user",
+        entite_id=current_sub.id,
+        details="Avatar sub-user mis à jour"
+    )
+
+    return {"avatar_url": file_url, "message": "Avatar uploaded and linked successfully."}
+
+
+# 👤 Get avatar utilisateur principal
+@router.get("/avatar-user")
+def get_avatar_user(current_user: User = Depends(get_current_user)):
+    return {"avatar_url": current_user.avatar_url}
+
+
+# 👤 Get avatar sub-user
+@router.get("/avatar-sub")
+def get_avatar_subuser(current_sub: SubUser = Depends(get_current_sub_user)):
+    return {"avatar_url": current_sub.avatar_url}
+
+
+# 🧽 Delete avatar utilisateur principal
+@router.delete("/delete/avatar")
+def delete_avatar_file(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not current_user.avatar_url:
+        raise HTTPException(status_code=404, detail="Aucun avatar défini.")
+
+    delete_from_supabase(current_user.avatar_url)
+    current_user.avatar_url = None
+    db.commit()
+    db.refresh(current_user)
+
+    log_action(
+        db=db,
+        current_user=current_user,
+        action="Suppression avatar",
+        type_entite="utilisateur",
+        entite_id=current_user.id,
+        details="Avatar utilisateur principal supprimé"
+    )
+
+    return {"message": "Avatar supprimé avec succès."}
+
+
+# ****************** LOGO ********************
+@router.post("/logo")
+def upload_logo_entreprise(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    filename = f"logo_{current_user.id}.{file.filename.split('.')[-1]}"
+    file_url = upload_to_supabase(file=file, bucket="logo", filename=filename)
+
+    current_user.logo_entreprise = file_url
+    db.commit()
+    db.refresh(current_user)
+
+    return {"logo_url": file_url}
+
+
+@router.get("/logo")
+def get_logo_entreprise(current_user: User = Depends(get_current_user)):
+    if not current_user.logo_entreprise:
+        raise HTTPException(status_code=404, detail="Aucun logo enregistré")
+    return {"logo_url": current_user.logo_entreprise}
+
+
+@router.delete("/delete/logo")
+def delete_logo_entreprise(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)):
+
+    if not current_user.logo_entreprise:
+        raise HTTPException(status_code=404, detail="Aucun logo défini")
+
+    delete_from_supabase(current_user.logo_entreprise)
+    current_user.logo_entreprise = None
+    db.commit()
+    db.refresh(current_user)
+
+    return {"message": "Logo supprimé"}
+*****************************************************************
+
 from fastapi import APIRouter, Depends, HTTPException, Body, File, Form, UploadFile 
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -12,8 +236,8 @@ from app.utils.security import get_current_user
 from app.models.model_user import User
 from app.schemas.user_schema import RoleEnum
 from app.models.model_unite_produit import UniteProduit
-import shutil
-import os
+from app.services.supabase_service import upload_to_supabase, delete_from_supabase
+from uuid import uuid4
 
 router = APIRouter(prefix="/produits", tags=["Produits"])
 
@@ -40,14 +264,10 @@ def create_produit(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    # Enregistrement de l'image sur disque
+
     ext = image.filename.split(".")[-1]
-    image_filename = f"{datetime.utcnow().timestamp()}.{ext}"
-    upload_dir = os.path.join(os.getcwd(), "upload", "produits")
-    os.makedirs(upload_dir, exist_ok=True)
-    image_path = os.path.join(upload_dir, image_filename)
-    with open(image_path, "wb") as buffer:
-        shutil.copyfileobj(image.file, buffer)
+    image_filename = f"{uuid4()}.{ext}"
+    image_url = upload_to_supabase(file=image, bucket="produits", filename=image_filename)
 
     produit = Produit(
         nom=nom,
@@ -64,14 +284,14 @@ def create_produit(
         is_installe=is_installe,
         tracabilite=tracabilite,
         emplacement=emplacement,
-        image_url=f"/static/produits/{image_filename}",
+        image_url=image_url,
         user_id=parent_user_id
     )
 
     db.add(produit)
     db.commit()
     db.refresh(produit)
-    # Si des codes-barres ont été scannés, on les utilise
+
     if scanned_barcodes:
         for code in scanned_barcodes:
             unite = UniteProduit(
@@ -79,9 +299,8 @@ def create_produit(
                 code_barre=code,
                 statut="disponible"
             )
-        db.add(unite)
+            db.add(unite)
     else:
-        # Sinon, on génère automatiquement N unités avec un code de traçabilité
         for i in range(1, quantite + 1):
             qr_code = f"TRAC-{produit.id}-{str(i).zfill(4)}"
             unite = UniteProduit(
@@ -91,9 +310,7 @@ def create_produit(
             )
             db.add(unite)
 
-
     db.commit()
-
 
     log_action(
         db=db,
@@ -103,8 +320,6 @@ def create_produit(
         entite_id=produit.id,
         details=f"{quantite} unités créées avec QR pour produit {produit.nom}"
     )
-
-
 
     return {"message": "Produit créé avec succès", "produit_id": produit.id}
 
@@ -152,27 +367,20 @@ def update_produit(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    
+
     produit = db.query(Produit).filter(Produit.id == produit_id).first()
     if not produit:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
 
     if image:
         if produit.image_url:
-            old_path = produit.image_url.replace("/static", "upload")
-            old_abs_path = os.path.join(os.getcwd(), old_path)
-            if os.path.exists(old_abs_path):
-                os.remove(old_abs_path)
+            delete_from_supabase(produit.image_url)
 
         ext = image.filename.split(".")[-1]
-        image_filename = f"{datetime.utcnow().timestamp()}.{ext}"
-        upload_dir = os.path.join(os.getcwd(), "upload", "produits")
-        image_path = os.path.join(upload_dir, image_filename)
-        with open(image_path, "wb") as buffer:
-            shutil.copyfileobj(image.file, buffer)
-        produit.image_url = f"/static/produits/{image_filename}"
+        image_filename = f"{uuid4()}.{ext}"
+        image_url = upload_to_supabase(file=image, bucket="produits", filename=image_filename)
+        produit.image_url = image_url
 
-    # Mettre à jour les autres champs
     produit.nom = nom
     produit.categorie_id = categorie_id
     produit.prix_achat = prix_achat
@@ -200,7 +408,6 @@ def update_produit(
         details=f"Produit de nom: {produit.nom} mis à jour (avec ou sans image)"
     )
 
-
     return {"message": "Produit modifié avec succès."}
 
 # ❌ Suppression logique d'un produit
@@ -225,7 +432,6 @@ def delete_produit(
         entite_id=produit.id,
         details=f"Produit {produit.nom} supprimé logiquement"
     )
-
 
     return {"message": "Produit supprimé (logiquement)"}
 
@@ -268,11 +474,8 @@ def scan_qr_code(
             "prix_vente": produit.prix_vente,
             "message": "Produit trouvé. Souhaitez-vous lancer une vente ?"
         }
-        
-        
 
     else:
-        
         log_action(
             db=db,
             current_user=current_user,
@@ -280,7 +483,6 @@ def scan_qr_code(
             type_entite="produit",
             details=f"Scan QR avec tracabilité {tracabilite} — produit non trouvé"
         )
-
         return {
             "action": "ajout",
             "pre_remplir": {
@@ -290,5 +492,3 @@ def scan_qr_code(
             },
             "message": "Produit non trouvé. Voulez-vous l'ajouter ?"
         }
-        
-        

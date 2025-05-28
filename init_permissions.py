@@ -5,12 +5,13 @@ from app.models.model_role import Role, Permission
 
 # Structure initiale des rôles et permissions
 role_permissions_map = {
-    "technicien": ["view_tasks", "update_tasks"],
-    "secretaire": ["view_schedule", "manage_documents"],
-    "caissier": ["create_invoice", "view_payments"],
+    "Technicien(ne)": ["view_tasks", "update_tasks"],
+    "Secretaire": ["view_schedule", "manage_documents"],
+    "Caissier(e)": ["create_invoice", "view_payments"],
     "comptable": ["view_financials", "export_reports"],
-    "commercial": ["view_clients", "manage_deals"],
-    "gestionnaire_stock": ["view_inventory", "update_inventory"]
+    "Comptable": ["view_clients", "manage_deals"],
+    "Gestionnaire de stock": ["view_inventory", "update_inventory"],
+    "admin" : ["view_all", "update_all"]
 }
 
 db = SessionLocal()
