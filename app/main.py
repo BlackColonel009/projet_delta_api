@@ -1,6 +1,7 @@
 # app/main.py
 
 from fastapi import FastAPI, Depends
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from app.utils.policy import afficher_banner
@@ -112,12 +113,15 @@ app.include_router(reset.router)
 def read_root():
     return {"message": "Bienvenue sur l’API du Projet DELTA 🚀"}
 
-@app.get("/dashboard/manager", dependencies=[Depends(require_role("manager"))])
-def manager_dashboard():
-    return {"message": "Bienvenue Manager 👨‍💼"}
+@app.head("/")
+def head_root():
+    return JSONResponse(content=None)
+# @app.get("/dashboard/manager", dependencies=[Depends(require_role("manager"))])
+# def manager_dashboard():
+#     return {"message": "Bienvenue Manager 👨‍💼"}
 
-@app.get("/shared", dependencies=[Depends(require_any_role(["viewer", "editor", "manager"]))])
-def shared_dashboard():
-    return {"message": "Accès pour plusieurs rôles 👥"}
+# @app.get("/shared", dependencies=[Depends(require_any_role(["viewer", "editor", "manager"]))])
+# def shared_dashboard():
+#     return {"message": "Accès pour plusieurs rôles 👥"}
 
 
