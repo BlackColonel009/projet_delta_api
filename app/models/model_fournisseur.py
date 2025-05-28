@@ -20,6 +20,7 @@ class Fournisseur(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     user = relationship("User", backref="fournisseurs")
     commandes = relationship("CommandeAchat", back_populates="fournisseur", cascade="all, delete")
+    factures = relationship("Facture", back_populates="fournisseur")
 
     def __repr__(self):
         return f"<Fournisseur {self.nom}>"

@@ -1,8 +1,11 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
+from app.models.model_commande import CommandeVente
 from app.models.model_paiement import Paiement
 from app.models.model_facture import Facture
+from app.models.model_unite_produit import UniteProduit
 from app.schemas.paiement_schema import PaiementCreate
 from app.utils.logger import log_action
 from app.utils.security import get_current_user
@@ -37,12 +40,43 @@ def create_paiement(
     # 🎯 Mettre à jour le statut
     if total_paye >= facture.total_ttc:
         facture.statut = "payée"
+
+        # ✅ Mise à jour automatique des unités liées à la commande
+        if facture.type.value == "vente":
+    
+            
+            commande = db.query(CommandeVente).filter(CommandeVente.id == facture.commande_id).first()
+            print("je suis ici")
+            if commande:
+                unites = db.query(UniteProduit).filter(
+                    UniteProduit.commande_vente_id == commande.id,
+                    UniteProduit.statut.in_(["en cours", "disponible"])
+                ).all()
+                print("je suis là")
+                for unite in unites:
+                    print(f"✅ Modification unité : {unite.tracabilite} | Avant: {unite.statut}")
+                    unite.statut = "vendu"
+                    unite.date_modification = datetime.utcnow()
+                    print(f"➡️ Nouveau statut : {unite.statut}")
+                    
+                    log_action(
+                        db=db,
+                        current_user=current_user,
+                        action="Vente finalisée",
+                        type_entite="unite_produit",
+                        entite_id=unite.id,
+                        details=f"Unité {unite.tracabilite} confirmée comme vendue via paiement complet de la facture #{facture.id}"
+                    )
+                print(f"💾 Commit effectué après mise à jour des unités pour commande #{commande.id}")
+
     elif total_paye > 0:
         facture.statut = "partielle"
     else:
         facture.statut = "non payée"
+    
 
     db.commit()
+    
 
     # 🧾 Log historique
     log_action(
@@ -53,6 +87,9 @@ def create_paiement(
         entite_id=paiement.id,
         details=f"Paiement de {paiement.montant:.2f} € pour Facture #{facture.id} via {paiement.moyen_paiement}"
     )
+    
+    
+
 
     return {"message": f"Paiement enregistré sur la facture #{facture.id}"}
 

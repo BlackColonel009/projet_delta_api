@@ -9,6 +9,7 @@ from app.models.model_produit import Produit
 from app.models.model_client import Client
 from app.models.model_fournisseur import Fournisseur
 from app.models.model_commande import CommandeVente, LigneCommandeVente, CommandeAchat, LigneCommandeAchat
+from app.models.model_unite_produit import UniteProduit
 from app.services.generate_facture_from_commande import generate_facture_from_commande, generate_facture_pdf
 from app.schemas.commande_schema import CommandeVenteCreate, CommandeAchatCreate
 from app.utils.security import get_current_user
@@ -27,12 +28,15 @@ def create_commande_vente(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.commercial, RoleEnum.gestionnaire_stock]))
 ):
+    # Détermine l'utilisateur principal (parent) s'il s'agit d'un sous-utilisateur
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
 
+    # Vérifie que le client existe et appartient à l'utilisateur
     client = db.query(Client).filter(Client.id == data.client_id, Client.user_id == parent_user_id).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client non trouvé")
 
+    # Crée la commande vente
     commande = CommandeVente(
         client_id=data.client_id,
         tva_appliquee=data.tva_appliquee,
@@ -44,6 +48,7 @@ def create_commande_vente(
 
     total_ht = 0
 
+    # Traite chaque ligne de commande
     for ligne_data in data.lignes:
         produit = db.query(Produit).filter(
             Produit.id == ligne_data.produit_id,
@@ -54,58 +59,75 @@ def create_commande_vente(
             raise HTTPException(status_code=404, detail=f"Produit introuvable pour l'ID {ligne_data.produit_id}")
 
         if produit.quantite < ligne_data.quantite:
-            raise HTTPException(status_code=400, detail=f"Stock insuffisant pour {produit.nom}")
+            raise HTTPException(status_code=400, detail=f"Stock insuffisant pour {produit.nom} Contactez vite votre fournisseur!")
 
+        # Décrémente le stock
         produit.quantite -= ligne_data.quantite
         total_ligne = produit.prix_vente * ligne_data.quantite
         total_ht += total_ligne
 
+        # Crée la ligne de commande
         ligne_commande = LigneCommandeVente(
             commande_id=commande.id,
             produit_id=produit.id,
             description=produit.nom,
             quantite=ligne_data.quantite,
-            prix_unitaire=produit.prix_vente,
+            prix_unitaire = ligne_data.prix_unitaire if ligne_data.prix_unitaire is not None else produit.prix_vente,
             total_ligne=total_ligne
         )
         db.add(ligne_commande)
 
-        # ✅ Si vente via QR, marquer l’unité et logger
-        if ligne_data.unite_id:
-            unite = db.query(UniteProduit).filter(UniteProduit.id == ligne_data.unite_id).first()
-            if not unite:
-                raise HTTPException(status_code=404, detail="Unité non trouvée")
-            unite.statut = "vendu"
+        # Si des codes QR sont fournis, on les valide et on les marque comme vendus
+        if ligne_data.codes:
+            for code in ligne_data.codes:
+                unite = db.query(UniteProduit).filter(
+                    UniteProduit.tracabilite == code,
+                    UniteProduit.produit_id == produit.id,
+                    UniteProduit.statut == "disponible"
+                ).first()
+                if not unite:
+                    raise HTTPException(status_code=400, detail=f"Unité avec code {code} non trouvée ou déjà utilisée")
+                unite.statut = "en cours"
+                unite.commande_vente_id = commande.id
+                unite.date_modification = datetime.utcnow()
 
-            log_action(
-                db=db,
-                current_user=current_user,
-                action="Vente unité QR",
-                type_entite="unite_produit",
-                entite_id=unite.id,
-                details=f"Unité {unite.tracabilite} vendue via commande {commande.id}"
-            )
+        # Si aucun code QR n’est fourni, affecte automatiquement les unités disponibles
+        else:
+            unites_dispo = db.query(UniteProduit).filter(
+                UniteProduit.produit_id == produit.id,
+                UniteProduit.statut == "disponible"
+            ).limit(ligne_data.quantite).all()
 
+            if len(unites_dispo) < ligne_data.quantite:
+                raise HTTPException(status_code=400, detail=f"Pas assez d'unités disponibles pour {produit.nom}")
+
+            for unite in unites_dispo:
+                unite.statut = "en cours"
+                unite.commande_vente_id = commande.id
+                unite.date_modification = datetime.utcnow()
+
+    # Calcul des totaux de la commande
     commande.total_ht = total_ht
     commande.tva = 0.18 * total_ht if data.tva_appliquee else 0
     commande.total_ttc = total_ht + commande.tva
 
     db.commit()
     db.refresh(commande)
-    
+
+    # Log d'action général de la commande
     log_action(
         db=db,
         current_user=current_user,
-        action=" Vente Effectuer",
+        action="Vente Effectuer",
         type_entite="commande_vente",
         entite_id=commande.id,
-        details=f"Commande #{commande.id} pour Client {client.nom} — Total TTC: {commande.total_ttc:.2f} €"
+        details=f"Commande #{commande.id} pour Client {client.nom} — Total TTC: {commande.total_ttc:.2f} {current_user.devise}"
     )
 
-    # generate_facture_from_commande(db, commande, "vente")
+    # Génération et exportation de la facture en PDF
     facture = generate_facture_from_commande(db, commande, "vente")
-    pdf_path = generate_facture_pdf(facture)
-    filename = os.path.basename(pdf_path)
+    tmp_path = generate_facture_pdf(facture)
+    filename = os.path.basename(tmp_path)
 
     return {"message": "Commande vente creee", "commande_id": commande.id, "facture": filename}
 
@@ -154,6 +176,17 @@ def create_commande_achat(
             prix_unitaire=produit.prix_achat,
             total_ligne=total_ligne
         ))
+        
+        # ➕ Création automatique des unités QR
+        for i in range(1, ligne_data.quantite + 1):
+            qr_code = f"TRAC-{produit.id}-{str(i).zfill(4)}-Fournisseur_{fournisseur.nom}"
+
+            unite = UniteProduit(
+                produit_id=produit.id,
+                tracabilite=qr_code,
+                statut="disponible",
+            )
+            db.add(unite)
 
     commande.total_ht = total_ht
     commande.tva = 0.18 * total_ht if data.tva_appliquee else 0

@@ -12,7 +12,12 @@ class UniteProduit(Base):
     statut = Column(String, default="disponible")  # ex: disponible, vendu, réparé, supprimé
     date_creation = Column(DateTime, default=datetime.utcnow)
     code_barre = Column(String, unique=True, index=True, nullable=True)
+    date_modification = Column(DateTime, nullable=True)
     
+    commande_vente_id = Column(Integer, ForeignKey("commandes_ventes.id"), nullable=True)
+    commande_vente = relationship("CommandeVente", back_populates="unites_vendues")
+
+
     produit = relationship("Produit", back_populates="unites")
     
 

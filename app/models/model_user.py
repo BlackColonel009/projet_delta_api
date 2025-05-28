@@ -20,7 +20,9 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     devise = Column(String, default="€")
     telephone = Column(String, nullable=True)
-    
+    logo_entreprise = Column(String, nullable=True)
+    addresse = Column(String, nullable=True)
+
     sub_users = relationship("SubUser", back_populates="parent_user", cascade="all, delete")
 
     historiques = relationship("Historique", back_populates="user", overlaps="historiques_user")

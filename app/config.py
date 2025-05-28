@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     MAIL_FROM: str = ""
     MAIL_PORT: int = 587
     MAIL_SERVER: str = ""
+    
+    DOMAIN: str = "http://localhost:8000"
 
     class Config:
         env_file = ".env"

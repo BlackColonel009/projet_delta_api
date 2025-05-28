@@ -1,23 +1,29 @@
-from app.models.model_facture import Facture, LigneFacture
+from io import BytesIO
+from typing import Optional
+from fastapi import Depends
 from sqlalchemy.orm import Session
 import os
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
-from app.config import conf
-from fastapi_mail import FastMail, MessageSchema, MessageType
-from reportlab.lib.units import cm
+from tempfile import NamedTemporaryFile
 from jinja2 import Environment, select_autoescape, FileSystemLoader
 from xhtml2pdf import pisa
+from fastapi_mail import FastMail, MessageSchema, MessageType
+from app.models.model_facture import Facture, LigneFacture
+from app.models.model_user import SubUser, User
+from app.config import conf, settings
+from app.utils.security import get_current_sub_user
 
 
+def generate_facture_from_commande(
+    db: Session,
+    commande,
+    commande_type: str,
+    current_sub: Optional[SubUser] = None
+):
+    if current_sub:
+        sub_user_id = current_sub.id
+    else:
+        sub_user_id = None
 
-def generate_facture_from_commande(db: Session, commande, commande_type: str):
-    """
-    🚀 Génère une facture (et son PDF) depuis une commande Vente ou Achat.
-    Si commande_type == 'vente', envoie aussi le PDF par email au client.
-    """
-
-    # ➡ Créer la Facture en base
     facture = Facture(
         type=commande_type,
         client_id=commande.client_id if commande_type == "vente" else None,
@@ -25,30 +31,28 @@ def generate_facture_from_commande(db: Session, commande, commande_type: str):
         total_ht=commande.total_ht,
         tva=commande.tva,
         total_ttc=commande.total_ttc,
-        user_id=commande.user_id
+        user_id=commande.user_id,
+        sub_user_id=sub_user_id,
+        commande_id=commande.id  # ✅ Lien vers la commande ici
     )
     db.add(facture)
     db.commit()
     db.refresh(facture)
 
-    # ➡ Créer les lignes de facture
     for ligne in commande.lignes:
-        ligne_facture = LigneFacture(
+        db.add(LigneFacture(
             facture_id=facture.id,
             produit_id=ligne.produit_id,
             description=ligne.description,
             quantite=ligne.quantite,
             prix_unitaire=ligne.prix_unitaire,
             total_ligne=ligne.total_ligne
-        )
-        db.add(ligne_facture)
-
+        ))
     db.commit()
 
-    # ➡ Générer le PDF proprement
-    pdf_path = generate_facture_pdf(facture)
+    # Générer et stocker le PDF temporairement
+    tmp_path = generate_facture_pdf(facture)
 
-    # ➡ Si VENTE : envoyer le PDF par email au client
     if commande_type == "vente" and facture.client and facture.client.email:
         fm = FastMail(conf)
         message = MessageSchema(
@@ -56,7 +60,7 @@ def generate_facture_from_commande(db: Session, commande, commande_type: str):
             recipients=[facture.client.email],
             body=f"Bonjour {facture.client.nom},\n\nVeuillez trouver votre facture #{facture.id} d'un montant total de {facture.total_ttc:.2f} {facture.devise}.\nMerci pour votre confiance.",
             subtype=MessageType.plain,
-            attachments=[pdf_path]
+            attachments=[tmp_path]
         )
         try:
             import asyncio
@@ -64,100 +68,45 @@ def generate_facture_from_commande(db: Session, commande, commande_type: str):
         except Exception as e:
             print(f"Erreur lors de l'envoi de l'email : {e}")
 
+    os.remove(tmp_path)
     return facture
 
-def generate_facture_pdf(facture):
-    """
-    🖨 Génère un PDF à partir d’un template HTML avec WeasyPrint.
-    """
-    devise = facture.user.devise if facture.user.devise else "€"
-    # Créer le répertoire si nécessaire
-    os.makedirs("file", exist_ok=True)
-    pdf_path = f"file/facture_{facture.id}.pdf"
 
-    # 1. Setup du moteur Jinja2
+def generate_facture_pdf(facture):
+    devise = facture.user.devise or "€"
+    logo_url = f"{settings.DOMAIN}{facture.user.logo_entreprise}" if facture.user.logo_entreprise else "file:///absolute/path/to/logo.png"
+
     env = Environment(
         loader=FileSystemLoader("app/template"),
         autoescape=select_autoescape(['html', 'xml'])
     )
-    template = env.get_template("facture_template.html")  # <- le template HTML
+    template = env.get_template("facture_template.html")
 
-    # 2. Contexte des données
+    vendeur = {
+        "nom": facture.sub_user.username,
+        "poste": facture.sub_user.role
+    } if hasattr(facture, "sub_user") and facture.sub_user else {
+        "nom": facture.user.societe_ou_entreprise or facture.user.email,
+        "poste": "Administrateur"
+    }
+
     html_content = template.render(
         devise=devise,
         facture=facture,
-        societe={"nom": "Trade Care", "adresse": "Rue X, Ville", "telephone": "90000000", "email": "contact@care.tg"},
-        vendeur={"nom": "Jean Dupont", "poste": "Commercial"},
-        logo_url="file:///absolute/path/to/logo.png"  # Attention : chemin absolu requis pour les images
+        societe={
+            "nom": facture.user.societe_ou_entreprise,
+            "adresse": facture.user.addresse or "",# ✅ corrigé ici
+            "telephone": facture.user.telephone,
+            "email": facture.user.email
+        },
+        vendeur=vendeur,
+        logo_url=logo_url
     )
 
-    # Conversion en PDF
-    with open(pdf_path, "wb") as f:
-            pisa.CreatePDF(html_content, dest=f)
+    buffer = BytesIO()
+    pisa.CreatePDF(html_content, dest=buffer)
+    buffer.seek(0)
 
-    return pdf_path
-
-# def generate_facture_pdf(facture):
-#     """
-#     🖨 Génère un PDF bien formaté pour la facture, inspiré du modèle facture_pdf.py
-#     """
-#     os.makedirs("file", exist_ok=True)
-#     pdf_path = f"file/facture_{facture.id}.pdf"
-    
-#     pdf = canvas.Canvas(pdf_path, pagesize=A4)
-#     width, height = A4
-#     y = height - 2 * cm
-
-#     pdf.setFont("Helvetica-Bold", 16)
-#     pdf.drawString(2 * cm, y, f"Facture #{facture.id} - {facture.type.value.upper()}")
-#     y -= 1.2 * cm
-#     pdf.setFont("Helvetica", 11)
-#     pdf.drawString(2 * cm, y, f"Date : {facture.date_creation.strftime('%d/%m/%Y')}")
-#     y -= 0.8 * cm
-
-#     if facture.client:
-#         pdf.drawString(2 * cm, y, f"Client : {facture.client.nom}")
-#         y -= 0.6 * cm
-#     if facture.fournisseur:
-#         pdf.drawString(2 * cm, y, f"Fournisseur : {facture.fournisseur.nom}")
-#         y -= 0.6 * cm
-
-#     y -= 1 * cm
-#     pdf.setFont("Helvetica-Bold", 11)
-#     pdf.drawString(2 * cm, y, "Description")
-#     pdf.drawString(9 * cm, y, "Qté")
-#     pdf.drawString(11 * cm, y, "PU")
-#     pdf.drawString(14 * cm, y, "Total")
-#     y -= 0.4 * cm
-#     pdf.line(2 * cm, y, 19 * cm, y)
-#     y -= 0.5 * cm
-
-#     pdf.setFont("Helvetica", 10)
-#     for ligne in facture.lignes:
-#         pdf.drawString(2 * cm, y, ligne.description)
-#         pdf.drawRightString(10 * cm, y, str(ligne.quantite))
-#         pdf.drawRightString(13 * cm, y, f"{ligne.prix_unitaire:.2f} €")
-#         pdf.drawRightString(18 * cm, y, f"{ligne.total_ligne:.2f} €")
-#         y -= 0.6 * cm
-#         if y < 4 * cm:
-#             pdf.showPage()
-#             y = height - 3 * cm
-
-#     y -= 1 * cm
-#     pdf.setFont("Helvetica-Bold", 11)
-#     pdf.drawRightString(15 * cm, y, "Total HT :")
-#     pdf.drawRightString(19 * cm, y, f"{facture.total_ht:.2f} €")
-#     y -= 0.5 * cm
-
-#     if facture.tva > 0:
-#         pdf.drawRightString(15 * cm, y, "TVA (18%) :")
-#         pdf.drawRightString(19 * cm, y, f"{facture.tva:.2f} €")
-#         y -= 0.5 * cm
-
-#     pdf.drawRightString(15 * cm, y, "Total TTC :")
-#     pdf.drawRightString(19 * cm, y, f"{facture.total_ttc:.2f} {facture.devise}")
-
-#     pdf.showPage()
-#     pdf.save()
-
-#     return pdf_path
+    with NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(buffer.getvalue())
+        return tmp.name

@@ -5,6 +5,8 @@ class LigneCommandeVenteCreate(BaseModel):
     produit_id: int
     quantite: int
     unite_id: Optional[int] = None
+    codes: List[str] = []  # ✅
+    prix_unitaire: Optional[float] = None
 
 class CommandeVenteCreate(BaseModel):
     client_id: int

@@ -19,17 +19,18 @@ class Intervention(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
-    employe_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # utilisateur principal (technicien)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # utilisateur principal (technicien)
     description = Column(Text, nullable=True)
     statut = Column(String, default="en cours")  # ex: en cours, terminé, annulé
     date_intervention = Column(DateTime, default=datetime.utcnow)
     produit_ex = Column(String, nullable=True)
     caracteristique_ex = Column(Text, nullable=True)
     commentaire_ex = Column(Text, nullable=True)
+    
 
     # Relations
     client = relationship("Client", backref="interventions")
-    employe = relationship("User", backref="interventions")
+    user = relationship("User", backref="interventions")
     produits = relationship("Produit", secondary=intervention_produits, backref="interventions")
 
     def __repr__(self):

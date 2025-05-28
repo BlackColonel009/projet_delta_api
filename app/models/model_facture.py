@@ -28,12 +28,22 @@ class Facture(Base):
     tva = Column(Float, default=0.0)
     devise = Column(String, default="FCFA")
     
+    
+    commande_id = Column(Integer, ForeignKey("commandes_ventes.id"), nullable=True)
+    commande = relationship("CommandeVente")
+
+    
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     user = relationship("User", backref="factures")
 
+    sub_user_id = Column(Integer, ForeignKey("sub_users.id"), nullable=True)
+    sub_user = relationship("SubUser")
+
+
     client = relationship("Client", back_populates="factures")
 
-    fournisseur = relationship("Fournisseur", backref="factures")
+    fournisseur = relationship("Fournisseur", back_populates="factures")
+
     lignes = relationship("LigneFacture", back_populates="facture", cascade="all, delete")
     paiements = relationship("Paiement", back_populates="facture", cascade="all, delete")
 

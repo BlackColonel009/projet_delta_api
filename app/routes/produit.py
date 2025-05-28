@@ -76,13 +76,12 @@ def create_produit(
         for code in scanned_barcodes:
             unite = UniteProduit(
                 produit_id=produit.id,
-                tracabilite=generate_random_qr_code(),
                 code_barre=code,
                 statut="disponible"
             )
-            db.add(unite)
+        db.add(unite)
     else:
-        # Sinon, on génère automatiquement N unités
+        # Sinon, on génère automatiquement N unités avec un code de traçabilité
         for i in range(1, quantite + 1):
             qr_code = f"TRAC-{produit.id}-{str(i).zfill(4)}"
             unite = UniteProduit(
@@ -91,6 +90,7 @@ def create_produit(
                 statut="disponible"
             )
             db.add(unite)
+
 
     db.commit()
 

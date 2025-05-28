@@ -26,7 +26,10 @@ class SubUserCreate(BaseModel):
     password: str
     role: RoleEnum
     
-
+class MainUserData(BaseModel):
+    societe_ou_entreprise: Optional[str]
+    logo_entreprise: Optional[str]
+    devise: Optional[str]
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -37,5 +40,11 @@ class GroupUserLogin(BaseModel):
     username: str
     password: str
     
-
+class SubUserOut(BaseModel):
+    id: int
+    username: str
+    bio: Optional[str]
+    avatar_url: Optional[str]
+    role: Optional[str]
+    main_user_data: Optional[MainUserData]
 

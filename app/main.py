@@ -3,7 +3,8 @@
 from fastapi import FastAPI, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import auth  # Tu ajouteras d'autres routes ici
+from app.utils.policy import afficher_banner
+from app.routes import auth, galerie  # Tu ajouteras d'autres routes ici
 from app.config import settings
 from app.routes import client
 from app.routes import produit
@@ -27,6 +28,7 @@ from app.routes import File
 from app.routes import unite_produit
 from app.routes import rapport
 from app.routes import notification
+from app.routes import reset
 from app.utils.security import (
     hash_password, verify_password, create_access_token,
     get_current_user, get_current_sub_user,
@@ -49,6 +51,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+afficher_banner()
+
 # Inclusion des routes
 app.include_router(auth.router, prefix="/auth", tags=["Authentification"])
 
@@ -57,6 +61,8 @@ app.mount("/static", StaticFiles(directory="upload"), name="static")
 app.include_router(client.router)
 
 app.include_router(produit.router)
+
+app.include_router(galerie.router)
 
 app.include_router(categorie.router)
 
@@ -97,6 +103,8 @@ app.include_router(notification.router)
 
 # ou facture_pdf selon ton fichier
 app.include_router(File.router)
+
+app.include_router(reset.router)
 
 
 # Route de test

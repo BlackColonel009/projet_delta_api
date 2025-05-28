@@ -1,6 +1,6 @@
 # app/routes/unite_produit.py
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.model_unite_produit import UniteProduit
@@ -84,27 +84,60 @@ def list_unites_for_produit(
     ]
 
 #reccuperer unité disponible
-@router.get("/disponibles")
-def list_unites_disponibles(
+@router.get("/disponibles")  # ou /toutes si tu veux encore plus large
+def list_unites_visibles(
     db: Session = Depends(get_db),
     current_user = Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+
     unites = db.query(UniteProduit).join(UniteProduit.produit).filter(
-        UniteProduit.statut == "disponible",
+        UniteProduit.statut.in_(["disponible", "indisponible", "vendu", "en cours"]),  # ✅ inclut les deux
         Produit.user_id == parent_user_id
     ).all()
+
     return [
         {
             "id": u.id,
             "produit_id": u.produit_id,
             "nom_produit": u.produit.nom,
+            "statut": u.statut,
             "tracabilite": u.tracabilite,
-            "date_creation": u.date_creation.strftime('%Y-%m-%d %H:%M')
+            "date_creation": u.date_creation.strftime('%Y-%m-%d %H:%M'),
+            "date_modification": u.date_modification.strftime('%Y-%m-%d %H:%M') if u.date_modification else None
         }
         for u in unites
     ]
+
     
+    
+
+# ✅ 2. Route de purge des unités "temp"
+@router.delete("/purge-temp")
+def purge_temp_units(
+    db: Session = Depends(get_db),
+    current_user = Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
+):
+    deleted = db.query(UniteProduit).filter(
+        UniteProduit.statut == "temp",
+        UniteProduit.produit_id == None
+    ).delete(synchronize_session=False)
+    db.commit()
+
+    # log_action(
+    #     db=db,
+    #     current_user=current_user,
+    #     action="Purge",
+    #     type_entite="unite_produit",
+    #     entite_id=None,
+    #     details=f"{deleted} unités temporaires supprimées"
+    # )
+
+    return {
+        "message": f"{deleted} unités 'temp' supprimées.",
+        "deleted_count": deleted
+    }
+
 #suppression d'unité-produit
 @router.delete("/{unite_id}")
 def delete_unite_produit(
@@ -116,41 +149,64 @@ def delete_unite_produit(
     if not unite:
         raise HTTPException(status_code=404, detail="Unité non trouvée")
 
-    produit = unite.produit  # pour info dans les logs
+    produit = unite.produit  # récupération avant suppression
 
-    db.delete(unite)
+    # Supprimer l'unité
+    unite.statut = "indisponible"
+    unite.date_modification = datetime.utcnow()
     db.commit()
 
+    # 🔁 Recalculer la quantité restante
+    quantite_restante = db.query(UniteProduit).filter(
+        UniteProduit.produit_id == produit.id,
+        UniteProduit.statut != "supprimé"
+    ).count()
+
+    # Mettre à jour le champ produit.quantite
+    produit.quantite = quantite_restante
+    db.commit()
+
+    # Logger
     log_action(
         db=db,
         current_user=current_user,
         action="Suppression unité",
         type_entite="unite_produit",
         entite_id=unite.id,
-        details=f"Unité QR supprimée : {unite.tracabilite} (produit {produit.nom})"
+        details=f"Unité QR supprimée : {unite.tracabilite} (produit {produit.nom}) quantité restante: {produit.quantite}"
     )
 
-    return {"message": f"Unité supprimée : {unite.tracabilite}"}
-
+    return {
+        "message": f"Unité supprimée : {unite.tracabilite}",
+        "quantite_restante": quantite_restante,
+        "produit_id": produit.id,
+        "produit_nom": produit.nom
+    }
 
 # **************************CODE BARRE STEP**************************************
 
 # 🧪 Enregistrer une série de codes-barres en statut temporaire (avant liaison produit)
-@router.post("/temp", response_model=List[UniteProduitOut])
-def store_temp_barcodes(
-    barcodes: List[str],
-    db: Session = Depends(get_db)
-):
-    results = []
+@router.post("/temp")
+def store_temp_barcodes(barcodes: List[str], db: Session = Depends(get_db)):
+    inserted = 0
     for code in barcodes:
-        # Ignorer les doublons
-        if db.query(UniteProduit).filter(UniteProduit.tracabilite == code).first():
-            continue
-        unit = UniteProduit(tracabilite=code, statut="temp")
-        db.add(unit)
-        results.append(unit)
+        # Vérifie si le code existe déjà
+        exist = db.query(UniteProduit).filter(UniteProduit.code_barre == code).first()
+        if exist:
+            continue  # ne pas dupliquer
+
+        unite = UniteProduit(
+            tracabilite=code,
+            code_barre=code,
+            statut="temp",
+            produit_id=None,
+            date_creation=datetime.utcnow()
+        )
+        db.add(unite)
+        inserted += 1
+
     db.commit()
-    return results
+    return {"message": f"{inserted} unités temporaires enregistrées."}
 
 # 🔗 Lier une série de codes-barres (déjà scannés) à un produit
 # 🔁 Mise à jour : lier des codes-barres à un produit
@@ -177,28 +233,58 @@ def lier_barcodes_a_produit(
 
 @router.post("/infos")
 def get_produits_par_codes(barcodes: List[str], db: Session = Depends(get_db)):
-    """
-    🎯 Reçoit une liste de code_barres et retourne un regroupement par produit.
-    Format retour : [{produit: {...}, codes: [code1, code2, ...]}, ...]
-    """
     regroupement = {}
+    invalid_codes = []
 
     for code in barcodes:
-        unite = db.query(UniteProduit).filter(UniteProduit.tracabilite == code).first()
-        if unite and unite.produit:
-            pid = unite.produit.id
-            if pid not in regroupement:
-                regroupement[pid] = {
-                    "produit": unite.produit,
-                    "codes": []
-                }
-            regroupement[pid]["codes"].append(code)
+        unite = db.query(UniteProduit).filter(
+            UniteProduit.tracabilite == code,
+            UniteProduit.produit_id.isnot(None),
+            UniteProduit.statut == "disponible"
+        ).first()
 
-    return list(regroupement.values())
+        if not unite or not unite.produit:
+            invalid_codes.append(code)
+            continue
 
-@router.get("/unites-produits/by-barcode/{code}")
+        pid = unite.produit.id
+        if pid not in regroupement:
+            regroupement[pid] = {
+                "produit": unite.produit,
+                "codes": []
+            }
+        regroupement[pid]["codes"].append(code)
+
+    return {
+        "produits": list(regroupement.values()),
+        "invalid_codes": invalid_codes
+    }
+
+
+# ✅ 3. Rechercher une unité via code_barre
+@router.get("/by-barcode/{code}", response_model=UniteProduitOut)
 def get_unite_by_barcode(code: str, db: Session = Depends(get_db)):
     unite = db.query(UniteProduit).filter(UniteProduit.code_barre == code).first()
     if not unite:
-        raise HTTPException(status_code=404, detail="Introuvable")
+        raise HTTPException(status_code=404, detail="Code-barre introuvable")
     return unite
+
+# #modification d'unité statut
+# @router.put("/set-statut/{unite_id}")
+# def set_statut_unite(
+#     unite_id: int,
+#     statut: str = Body(...),
+#     db: Session = Depends(get_db),
+#     current_user = Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
+# ):
+#     unite = db.query(UniteProduit).filter(UniteProduit.id == unite_id).first()
+#     if not unite:
+#         raise HTTPException(status_code=404, detail="Unité non trouvée")
+
+#     unite.statut = statut
+#     unite.date_modification = datetime.utcnow()
+#     db.commit()
+
+#     return {
+#         "message": f"Statut de l'unité {unite.tracabilite} mis à jour : {statut}"
+#     }

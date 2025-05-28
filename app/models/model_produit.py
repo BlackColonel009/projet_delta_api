@@ -5,6 +5,9 @@ from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, Date
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
+from app.models.model_galerie import GaleriePhoto
+
+
 
 class Produit(Base):
     __tablename__ = "produits"
@@ -40,6 +43,9 @@ class Produit(Base):
     fournisseur = relationship("Fournisseur", backref="produits")
 
     unites = relationship("UniteProduit", back_populates="produit", cascade="all, delete")
+
+    galerie = relationship("GaleriePhoto", back_populates="produit", cascade="all, delete")
+
 
     def __repr__(self):
         return f"<Produit {self.nom}>"

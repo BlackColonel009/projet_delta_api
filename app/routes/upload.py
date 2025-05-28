@@ -1,4 +1,4 @@
-from fastapi import File, UploadFile, Depends
+from fastapi import File, HTTPException, UploadFile, Depends
 from app.utils.security import get_current_user
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -128,3 +128,48 @@ def delete_avatar_file(current_user: User = Depends(get_current_user)):
 
     
     return {"message": "Avatar supprimé avec succès."}
+
+# ****************** LOGO ********************
+@router.post("/logo", tags=["Fichiers"])
+def upload_logo_entreprise(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    ext = file.filename.split(".")[-1]
+    filename = f"logo_{current_user.id}.{ext}"
+    path = os.path.join("upload", "logos", filename)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    with open(path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    current_user.logo_entreprise = f"/static/logos/{filename}"
+    db.commit()
+    return {"logo_url": current_user.logo_entreprise}
+
+
+@router.get("/logo", tags=["Fichiers"])
+def get_logo_entreprise(current_user: User = Depends(get_current_user)):
+    """
+    📥 Récupérer le logo actuel de l'entreprise
+    """
+    if not current_user.logo_entreprise:
+        raise HTTPException(status_code=404, detail="Aucun logo enregistré")
+    return {"logo_url": current_user.logo_entreprise}
+
+
+@router.delete("/delete/logo", tags=["Fichiers"])
+def delete_logo_entreprise(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)):
+    if not current_user.logo_entreprise:
+        raise HTTPException(status_code=404, detail="Aucun logo défini")
+
+    path = current_user.logo_entreprise.replace("/static", "upload")
+    if os.path.exists(path):
+        os.remove(path)
+
+    current_user.logo_entreprise = None
+    db.commit()
+    return {"message": "Logo supprimé"}

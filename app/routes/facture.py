@@ -1,16 +1,20 @@
 # 📡 ROUTES POUR LA FACTURATION
 # Fichier : app/routes/facture.py
 
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
 from app.models.model_facture import Facture, LigneFacture
+from app.models.model_unite_produit import UniteProduit
 from app.schemas.facture_schema import FactureOut, FactureCreate
 from fastapi.responses import FileResponse
 from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
+from sqlalchemy.orm import joinedload
+
 
 import os
 
@@ -35,7 +39,8 @@ def create_facture(
         tva=data.tva,
         total_ht=total_ht,
         total_ttc=total_ttc,
-        user_id=parent_user_id  # 🔐 Liaison sécurisée
+        user_id=parent_user_id,  # 🔐 Liaison sécurisée
+        
     )
 
     db.add(facture)
@@ -66,10 +71,14 @@ def get_facture(
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
 
-    facture = db.query(Facture).filter(
-        Facture.id == facture_id,
-        Facture.user_id == parent_user_id
-    ).first()
+    facture = db.query(Facture)\
+        .options(joinedload(Facture.fournisseur), joinedload(Facture.client))\
+        .filter(
+            Facture.id == facture_id,
+            Facture.user_id == parent_user_id
+        )\
+        .first()
+
 
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
@@ -82,6 +91,7 @@ def get_facture(
         "client_id": facture.client_id,
         "client": facture.client,
         "fournisseur_id": facture.fournisseur_id,
+        "fournisseur": facture.fournisseur,
         "date_creation": facture.date_creation,
         "statut": facture.statut,
         "remarques": facture.remarques,
@@ -144,7 +154,8 @@ def list_factures(
             date_creation=f.date_creation,
             remarques=f.remarques,
             total_paye=total_paye,
-            client=f.client,        # 🟢 Ajouté ici
+            client=f.client, 
+            fournisseur=f.fournisseur,# 🟢 Ajouté ici
             lignes=f.lignes         # 🟢 Ajouté ici
             
         ))
@@ -152,3 +163,21 @@ def list_factures(
 
     return result
 
+#modification d'unité
+@router.patch("/facture/{facture_id}/valider-unites")
+def valider_unites_apres_paiement(facture_id: int, db: Session = Depends(get_db)):
+    facture = db.query(Facture).filter(Facture.id == facture_id).first()
+    if not facture or facture.statut != "payée":
+        raise HTTPException(status_code=400, detail="Facture non payée")
+
+    for ligne in facture.commande.lignes:
+        for code in ligne.codes:
+            unite = db.query(UniteProduit).filter(
+                UniteProduit.tracabilite == code,
+                UniteProduit.statut == "en cours"
+            ).first()
+            if unite:
+                unite.statut = "vendu"
+                unite.date_modification = datetime.utcnow()
+    db.commit()
+    return {"message": "Unités marquées comme vendues"}

@@ -17,6 +17,9 @@ class CommandeVente(Base):
     tva_appliquee = Column(Boolean, default=False)
     statut = Column(String, default="en_attente")
 
+    unites_vendues = relationship("UniteProduit", back_populates="commande_vente")
+
+
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     
     user = relationship("User", backref="commandes_ventes")

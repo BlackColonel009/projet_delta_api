@@ -29,7 +29,6 @@ def create_intervention(
 
     intervention = Intervention(
         client_id=data.client_id,
-        employe_id=data.employe_id,
         description=data.description,
         statut=data.statut,
         user_id=parent_user_id,
@@ -52,14 +51,14 @@ def create_intervention(
         action="Ajout intervention",
         type_entite="intervention",
         entite_id=intervention.id,
-        details=f"Intervention pour client {intervention.client_id} par employé {intervention.employe_id} — {intervention.statut}"
+        details=f"Intervention pour client {intervention.client_id} par employé {intervention.user_id} — {intervention.statut}"
     )
 
 
     return InterventionOut(
         id=intervention.id,
         client_id=intervention.client_id,
-        employe_id=intervention.employe_id,
+        user_id=intervention.user_id,
         description=intervention.description,
         statut=intervention.statut,
         date_intervention=intervention.date_intervention,
@@ -70,6 +69,64 @@ def create_intervention(
 
     )
 
+@router.put("/{intervention_id}", response_model=InterventionOut)
+def update_intervention(
+    intervention_id: int,
+    data: InterventionCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.technicien]))
+):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+
+    intervention = db.query(Intervention).filter(
+        Intervention.id == intervention_id,
+        Intervention.user_id == parent_user_id
+    ).first()
+
+    if not intervention:
+        raise HTTPException(status_code=404, detail="Intervention non trouvée")
+
+    # Mise à jour des champs
+    intervention.client_id = data.client_id
+    intervention.user_id = parent_user_id
+    intervention.description = data.description
+    intervention.statut = data.statut
+    intervention.produit_ex = data.produit_ex
+    intervention.caracteristique_ex = data.caracteristique_ex
+    intervention.commentaire_ex = data.commentaire_ex
+
+    # Mise à jour des produits liés
+    from app.models.model_produit import Produit
+    produits = db.query(Produit).filter(Produit.id.in_(data.produits_ids)).all()
+    intervention.produits = produits
+
+    db.commit()
+    db.refresh(intervention)
+
+    log_action(
+        db=db,
+        current_user=current_user,
+        action="Mise à jour intervention",
+        type_entite="intervention",
+        entite_id=intervention.id,
+        details=f"Intervention #{intervention.id} mise à jour"
+    )
+
+    return InterventionOut(
+        id=intervention.id,
+        client_id=intervention.client_id,
+        user_id=intervention.user_id,
+        description=intervention.description,
+        statut=intervention.statut,
+        date_intervention=intervention.date_intervention,
+        produits_ids=[p.id for p in produits],
+        produit_ex=intervention.produit_ex,
+        caracteristique_ex=intervention.caracteristique_ex,
+        commentaire_ex=intervention.commentaire_ex,
+    )
+
+
+
 # 📋 Lister toutes les interventions
 @router.get("/", response_model=List[InterventionOut])
 def list_interventions(
@@ -77,20 +134,19 @@ def list_interventions(
     limit: int = 10,
     date_min: Optional[date] = None,
     date_max: Optional[date] = None,
-    employe_id: Optional[int] = None,
+    user_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.technicien]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     offset = (page - 1) * limit
     query = db.query(Intervention).filter(
-        Intervention.employe_id == (
+        Intervention.user_id == (
             current_user.parent_user_id if not current_user.is_main_user else current_user.id
-        )
+        ),
     )
 
-    if employe_id:
-        query = query.filter(Intervention.employe_id == employe_id)
+    
     if date_min:
         query = query.filter(Intervention.date_intervention >= date_min)
     if date_max:
@@ -103,11 +159,12 @@ def list_interventions(
         .all()
     )
         
+    print("🧪 Nombre d'interventions retournées:", len(interventions))  # ✅ ici c'est correct
     return [
         InterventionOut(
             id=i.id,
             client_id=i.client_id,
-            employe_id=i.employe_id,
+            user_id=i.user_id,
             description=i.description,
             statut=i.statut,
             date_intervention=i.date_intervention,
@@ -136,7 +193,7 @@ def get_intervention(
     return InterventionOut(
         id=i.id,
         client_id=i.client_id,
-        employe_id=i.employe_id,
+        user_id=i.user_id,
         description=i.description,
         statut=i.statut,
         date_intervention=i.date_intervention,

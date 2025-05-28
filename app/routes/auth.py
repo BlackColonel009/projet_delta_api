@@ -5,7 +5,15 @@ from fastapi import APIRouter, Depends, HTTPException, status, Body
 from sqlalchemy.orm import Session
 from fastapi.security import OAuth2PasswordRequestForm
 from typing import List, Optional
-from app.schemas.user_schema import UserCreate, SubUserCreate, UserLogin, GroupUserLogin
+from app.models.model_client import Client
+from app.models.model_commande import CommandeAchat, CommandeVente
+from app.models.model_fournisseur import Fournisseur
+from app.models.model_historique_general import Historique
+from app.models.model_historique_intervention import HistoriqueIntervention
+from app.models.model_intervention import Intervention
+from app.models.model_produit import Produit
+from app.models.model_rapport import Rapport
+from app.schemas.user_schema import SubUserOut, UserCreate, SubUserCreate, UserLogin, GroupUserLogin
 from app.models.model_user import User, SubUser
 from app.models.model_role import Role
 from app.utils.security import (
@@ -166,6 +174,7 @@ def update_my_user(
     avatar_url: Optional[str] = Body(None),
     bio: Optional[str] = Body(None),
     societe_ou_entreprise: Optional[str] = Body(None),
+    logo_entreprise : Optional[str] = Body(None),
     username: Optional[str] = Body(None),
     devise: Optional[str] = Body(None),
     telephone: Optional[str] = Body(None),
@@ -180,6 +189,7 @@ def update_my_user(
     if username: current_user.username = username
     if devise: current_user.devise = devise
     if telephone: current_user.telephone = telephone
+    if logo_entreprise: current_user.logo_entreprise = logo_entreprise
     db.commit()
 
     log_action(
@@ -352,13 +362,14 @@ def get_my_profile(current_user: User = Depends(get_current_user)):
         "is_main_user": current_user.is_main_user,
         "username": current_user.username,
         "societe_ou_entreprise": current_user.societe_ou_entreprise,
+        "logo_entreprise": current_user.logo_entreprise,
         "account_type": current_user.account_type,
         "devise": current_user.devise,
         "telephone" : current_user.telephone,
     }
 
 # 👁 Voir son profil subuser
-@router.get("/me-sub", tags=["SubUsers"])
+@router.get("/me-sub",response_model=SubUserOut, tags=["SubUsers"])
 def get_my_subuser_profile(current_sub: SubUser = Depends(get_current_sub_user),  db: Session = Depends(get_db)):
     parent = db.query(User).filter(User.id == current_sub.parent_user_id).first()
     return {
@@ -369,5 +380,10 @@ def get_my_subuser_profile(current_sub: SubUser = Depends(get_current_sub_user),
         "avatar_url": current_sub.avatar_url,
         "devise": parent.devise,  # ✅ ici
         "telephone" : current_sub.telephone,
+        "main_user_data": {
+                "societe_ou_entreprise": parent.societe_ou_entreprise,
+                "logo_entreprise": parent.logo_entreprise,
+                "devise": parent.devise,
+            }
     }
 
