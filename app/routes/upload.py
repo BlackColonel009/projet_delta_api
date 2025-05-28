@@ -56,36 +56,46 @@ def delete_avatar_user(
     return {"message": "Avatar supprimé"}
 
 # ✅ Upload logo entreprise
-@router.post("/logo")
+@router.post("/logo", tags=["Fichiers"])
 def upload_logo_entreprise(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    current_user.logo_url = save_file_locally(file, "logos")
+    ext = file.filename.split(".")[-1]
+    filename = f"logo_{current_user.id}.{ext}"
+    path = os.path.join("upload", "logos", filename)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    with open(path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    current_user.logo_entreprise = f"/static/logos/{filename}"
     db.commit()
-    db.refresh(current_user)
-    return {"logo_url": current_user.logo_url}
+    return {"logo_url": current_user.logo_entreprise}
 
-@router.get("/logo")
-def get_logo(current_user: User = Depends(get_current_user)):
-    if not current_user.logo_url:
+
+@router.get("/logo", tags=["Fichiers"])
+def get_logo_entreprise(current_user: User = Depends(get_current_user)):
+    """
+    📥 Récupérer le logo actuel de l'entreprise
+    """
+    if not current_user.logo_entreprise:
+        raise HTTPException(status_code=404, detail="Aucun logo enregistré")
+    return {"logo_url": current_user.logo_entreprise}
+
+
+@router.delete("/delete/logo", tags=["Fichiers"])
+def delete_logo_entreprise(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)):
+    if not current_user.logo_entreprise:
         raise HTTPException(status_code=404, detail="Aucun logo défini")
-    return {"logo_url": current_user.logo_url}
 
-@router.delete("/delete/logo")
-def delete_logo(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    if not current_user.logo_url:
-        raise HTTPException(status_code=404, detail="Aucun logo défini")
+    path = current_user.logo_entreprise.replace("/static", "upload")
+    if os.path.exists(path):
+        os.remove(path)
 
-    filepath = current_user.logo_url.replace("/static", "upload")
-    if os.path.exists(filepath):
-        os.remove(filepath)
-
-    current_user.logo_url = None
+    current_user.logo_entreprise = None
     db.commit()
-    db.refresh(current_user)
     return {"message": "Logo supprimé"}
