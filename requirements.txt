@@ -17,6 +17,7 @@ jinja2
 xhtml2pdf
 pillow
 jose
+supabase-py==1.0.3
 
 
 
