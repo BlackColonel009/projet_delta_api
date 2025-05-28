@@ -1,44 +1,28 @@
-from fastapi import File, HTTPException, UploadFile, Depends
-from app.utils.security import get_current_user
+from fastapi import File, HTTPException, UploadFile, Depends, APIRouter
 from sqlalchemy.orm import Session
+from uuid import uuid4
 from app.database import get_db
 from app.models.model_user import User, SubUser
-import shutil
-import os
-from uuid import uuid4
-from fastapi import APIRouter
-from app.schemas.user_schema import RoleEnum
+from app.utils.security import get_current_user, get_current_sub_user
 from app.utils.logger import log_action
-from app.utils.security import (
-    hash_password, verify_password, create_access_token,
-    get_current_user, get_current_sub_user, require_role, 
-    require_super_user, require_any_role, require_main_user)
+from app.services.supabase_service import upload_to_supabase, delete_from_supabase
 
 router = APIRouter(prefix="/upload", tags=["Fichiers"])
 
-@router.post("/avatar-user", tags=["Fichiers"])
+# 📄 Upload avatar utilisateur principal
+@router.post("/avatar-user")
 def upload_avatar_for_user(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """
-    📤 Upload d'un avatar pour utilisateur principal + mise à jour automatique du champ avatar_url
-    """
-    from uuid import uuid4
-    import os, shutil
+    filename = f"{uuid4()}.{file.filename.split('.')[-1]}"
+    file_url = upload_to_supabase(file=file, bucket="avatars", filename=filename)
 
-    ext = file.filename.split(".")[-1]
-    filename = f"{uuid4()}.{ext}"
-    path = os.path.join("upload", "avatars", filename)
-
-    with open(path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    url = f"/static/avatars/{filename}"
-    current_user.avatar_url = url
+    current_user.avatar_url = file_url
     db.commit()
-    
+    db.refresh(current_user)
+
     log_action(
         db=db,
         current_user=current_user,
@@ -48,32 +32,22 @@ def upload_avatar_for_user(
         details="Avatar utilisateur principal mis à jour"
     )
 
+    return {"avatar_url": file_url, "message": "Avatar uploaded and linked successfully."}
 
-    return {"avatar_url": url, "message": "Avatar uploaded and linked successfully."}
 
-
-@router.post("/avatar-sub", tags=["Fichiers"])
+# 📄 Upload avatar sub-user
+@router.post("/avatar-sub")
 def upload_avatar_for_subuser(
     file: UploadFile = File(...),
     current_sub: SubUser = Depends(get_current_sub_user),
     db: Session = Depends(get_db)
 ):
-    """
-    📤 Upload d'un avatar pour sub-user + mise à jour automatique du champ avatar_url
-    """
-    from uuid import uuid4
-    import os, shutil
+    filename = f"{uuid4()}.{file.filename.split('.')[-1]}"
+    file_url = upload_to_supabase(file=file, bucket="avatars", filename=filename)
 
-    ext = file.filename.split(".")[-1]
-    filename = f"{uuid4()}.{ext}"
-    path = os.path.join("upload", "avatars", filename)
-
-    with open(path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    url = f"/static/avatars/{filename}"
-    current_sub.avatar_url = url
+    current_sub.avatar_url = file_url
     db.commit()
+    db.refresh(current_sub)
 
     log_action(
         db=db,
@@ -84,39 +58,32 @@ def upload_avatar_for_subuser(
         details="Avatar sub-user mis à jour"
     )
 
-    
-    return {"avatar_url": url, "message": "Avatar uploaded and linked successfully."}
+    return {"avatar_url": file_url, "message": "Avatar uploaded and linked successfully."}
 
-# 👤 Avatar de l'utilisateur principal
-@router.get("/avatar-user", tags=["Fichiers"])
-def get_avatar_user(
-    current_user: User = Depends(get_current_user),
-):
+
+# 👤 Get avatar utilisateur principal
+@router.get("/avatar-user")
+def get_avatar_user(current_user: User = Depends(get_current_user)):
     return {"avatar_url": current_user.avatar_url}
 
 
-# 👤 Avatar du sub-user connecté
-@router.get("/avatar-sub", tags=["Fichiers"])
-def get_avatar_subuser(
-    current_sub: SubUser = Depends(get_current_sub_user),
-):
+# 👤 Get avatar sub-user
+@router.get("/avatar-sub")
+def get_avatar_subuser(current_sub: SubUser = Depends(get_current_sub_user)):
     return {"avatar_url": current_sub.avatar_url}
 
-@router.delete("/delete/avatar", tags=["Fichiers"])
-def delete_avatar_file(current_user: User = Depends(get_current_user)):
-    """
-    🧽 Supprimer le fichier avatar actuel de l'utilisateur (si défini)
-    """
+
+# 🧽 Delete avatar utilisateur principal
+@router.delete("/delete/avatar")
+def delete_avatar_file(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     if not current_user.avatar_url:
         raise HTTPException(status_code=404, detail="Aucun avatar défini.")
 
-    path = current_user.avatar_url.replace("/static", "upload")
-    if os.path.exists(path):
-        os.remove(path)
+    delete_from_supabase(current_user.avatar_url)
     current_user.avatar_url = None
-    db = next(get_db())
     db.commit()
-    
+    db.refresh(current_user)
+
     log_action(
         db=db,
         current_user=current_user,
@@ -126,50 +93,44 @@ def delete_avatar_file(current_user: User = Depends(get_current_user)):
         details="Avatar utilisateur principal supprimé"
     )
 
-    
     return {"message": "Avatar supprimé avec succès."}
 
+
 # ****************** LOGO ********************
-@router.post("/logo", tags=["Fichiers"])
+@router.post("/logo")
 def upload_logo_entreprise(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    ext = file.filename.split(".")[-1]
-    filename = f"logo_{current_user.id}.{ext}"
-    path = os.path.join("upload", "logos", filename)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    filename = f"logo_{current_user.id}.{file.filename.split('.')[-1]}"
+    file_url = upload_to_supabase(file=file, bucket="logos", filename=filename)
 
-    with open(path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    current_user.logo_entreprise = f"/static/logos/{filename}"
+    current_user.logo_entreprise = file_url
     db.commit()
-    return {"logo_url": current_user.logo_entreprise}
+    db.refresh(current_user)
+
+    return {"logo_url": file_url}
 
 
-@router.get("/logo", tags=["Fichiers"])
+@router.get("/logo")
 def get_logo_entreprise(current_user: User = Depends(get_current_user)):
-    """
-    📥 Récupérer le logo actuel de l'entreprise
-    """
     if not current_user.logo_entreprise:
         raise HTTPException(status_code=404, detail="Aucun logo enregistré")
     return {"logo_url": current_user.logo_entreprise}
 
 
-@router.delete("/delete/logo", tags=["Fichiers"])
+@router.delete("/delete/logo")
 def delete_logo_entreprise(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)):
+
     if not current_user.logo_entreprise:
         raise HTTPException(status_code=404, detail="Aucun logo défini")
 
-    path = current_user.logo_entreprise.replace("/static", "upload")
-    if os.path.exists(path):
-        os.remove(path)
-
+    delete_from_supabase(current_user.logo_entreprise)
     current_user.logo_entreprise = None
     db.commit()
+    db.refresh(current_user)
+
     return {"message": "Logo supprimé"}
