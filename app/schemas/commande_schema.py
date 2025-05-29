@@ -16,6 +16,7 @@ class CommandeVenteCreate(BaseModel):
 class LigneCommandeAchatCreate(BaseModel):
     produit_id: int
     quantite: int
+    prix_unitaire: Optional[float] = None
 
 class CommandeAchatCreate(BaseModel):
     fournisseur_id: int

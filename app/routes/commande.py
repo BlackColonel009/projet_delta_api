@@ -195,27 +195,39 @@ def create_commande_achat(
         if not produit:
             raise HTTPException(status_code=400, detail=f"Produit non trouvé")
 
+        # 🔁 Détermine le prix unitaire réel utilisé
+        prix_utilise = ligne_data.prix_unitaire if ligne_data.prix_unitaire is not None else produit.prix_achat
+
+        # Mise à jour de la quantité et du prix achat si souhaité
         produit.quantite += ligne_data.quantite
-        total_ligne = produit.prix_achat * ligne_data.quantite
+        produit.prix_achat = prix_utilise  # (facultatif si tu veux garder en mémoire ce nouveau prix)
+
+        total_ligne = prix_utilise * ligne_data.quantite
         total_ht += total_ligne
+
 
         db.add(LigneCommandeAchat(
             commande_id=commande.id,
             produit_id=produit.id,
             description=produit.nom,
             quantite=ligne_data.quantite,
-            prix_unitaire=produit.prix_achat,
+            prix_unitaire=prix_utilise,
             total_ligne=total_ligne
         ))
         
         # ➕ Création automatique des unités QR
-        for i in range(1, ligne_data.quantite + 1):
-            qr_code = f"TRAC-{produit.id}-{str(i).zfill(4)}-Fournisseur_{fournisseur.nom}"
+        # Reprendre le compteur à partir de l’existant
+        compteur_depart = db.query(UniteProduit).filter(UniteProduit.produit_id == produit.id).count()
 
+        for i in range(1, ligne_data.quantite + 1):
+            numero = compteur_depart + i
+            qr_code = f"TRAC-{produit.id}-{str(numero).zfill(4)}-{fournisseur.nom.replace(' ', '_')}"
+                    
             unite = UniteProduit(
                 produit_id=produit.id,
                 tracabilite=qr_code,
                 statut="disponible",
+                date_creation=datetime.utcnow()
             )
             db.add(unite)
 
