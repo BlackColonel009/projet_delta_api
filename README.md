@@ -29,6 +29,8 @@ projet_delta_api/
 ├── requirements.txt
 └── README.md
 
+import bcrypt
+bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode()
 
 
 1. 📄 Factures
