@@ -118,7 +118,7 @@ def export_rapport_depenses(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    devise = User.devise or "FCFA"
+    devise = current_user.devise or "FCFA"
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -147,7 +147,7 @@ def export_rapport_ventes(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    devise = User.devise or "FCFA"
+    devise = current_user.devise or "FCFA"
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -177,7 +177,7 @@ def export_rapport_achats(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    devise = User.devise or "FCFA"
+    devise = current_user.devise or "FCFA"
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
