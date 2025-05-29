@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from io import BytesIO
-from tkinter import Canvas
+from reportlab.pdfgen import canvas
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -47,7 +47,7 @@ def export_client_produits_pdf(client_id: int, db: Session = Depends(get_db)):
 
     # 📄 Génération PDF en mémoire
     buffer = BytesIO()
-    pdf = Canvas.Canvas(buffer, pagesize=A4)
+    pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
     y = height - 3 * cm
 
