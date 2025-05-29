@@ -159,7 +159,7 @@ def delete_unite_produit(
     # 🔁 Recalculer la quantité restante
     quantite_restante = db.query(UniteProduit).filter(
         UniteProduit.produit_id == produit.id,
-        UniteProduit.statut != "disponible"
+        UniteProduit.statut == "disponible"
     ).count()
 
     # Mettre à jour le champ produit.quantite
