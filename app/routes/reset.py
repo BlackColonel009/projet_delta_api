@@ -99,6 +99,37 @@ def verify_reset_code(
             db.query(model_fournisseur.Fournisseur.id).filter_by(user_id=user_id)
         ))
     ).delete(synchronize_session=False)
+    
+    # 🖼 Supprimer les galeries liées aux produits de ce user
+    db.query(model_produit.GaleriePhoto).filter(
+        model_produit.GaleriePhoto.produit_id.in_(
+            db.query(model_produit.Produit.id).filter_by(user_id=user_id)
+        )
+    ).delete(synchronize_session=False)
+
+    
+    # 2️⃣ BIS Supprimer les lignes des commandes de ventes liées à ce user
+    db.query(model_commande.LigneCommandeVente).filter(
+        model_commande.LigneCommandeVente.commande_id.in_(
+            db.query(model_commande.CommandeVente.id).filter(
+                model_commande.CommandeVente.client_id.in_(
+                    db.query(model_client.Client.id).filter_by(user_id=user_id)
+                )
+            )
+        )
+    ).delete(synchronize_session=False)
+
+    # 🔥 Supprimer les unités produits liées à des commandes ventes de ce user
+    db.query(model_unite_produit.UniteProduit).filter(
+        model_unite_produit.UniteProduit.commande_vente_id.in_(
+            db.query(model_commande.CommandeVente.id).filter(
+                model_commande.CommandeVente.client_id.in_(
+                    db.query(model_client.Client.id).filter_by(user_id=user_id)
+                )
+            )
+        )
+    ).delete(synchronize_session=False)
+
 
     # 3️⃣ Supprimer commandes ventes et achats
     db.query(model_commande.CommandeVente).filter(
