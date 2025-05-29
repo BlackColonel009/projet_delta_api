@@ -1,10 +1,16 @@
-from fastapi import APIRouter, Depends
+from http.client import HTTPException
+from typing_extensions import Buffer
+from fastapi import APIRouter, Depends, Request
+from jose import JWTError
+import jwt
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from fastapi.responses import StreamingResponse
+from app.config import Settings
 from app.database import get_db
 from app.models.model_depense import Depense
 from app.models.model_commande import CommandeVente, CommandeAchat
+from app.models.model_user import User
 from app.utils.security import get_current_user
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -19,12 +25,25 @@ router = APIRouter(prefix="/export", tags=["Exports Financiers"])
 # ➡ Export général en PDF
 @router.get("/rapport-complet")
 def export_rapport_complet(
-    db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
+    request: Request,
+    db: Session = Depends(get_db)
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    token = request.query_params.get("token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Token manquant")
+
+    try:
+        payload = jwt.decode(token, Settings.SECRET_KEY, algorithms=[Settings.ALGORITHM])
+        email = payload.get("sub")
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            raise HTTPException(status_code=403, detail="Utilisateur non trouvé")
+    except JWTError:
+        raise HTTPException(status_code=403, detail="Token invalide")
+
+    parent_user_id = user.parent_user_id if not user.is_main_user else user.id
     buffer = BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=A4)
+    pdf = canvas.Canvas(Buffer, pagesize=A4)
     width, height = A4
     y = height - 2 * cm
 
@@ -115,10 +134,10 @@ def export_rapport_complet(
             y = height - 2 * cm
 
     pdf.save()
-    buffer.seek(0)
+    Buffer.seek(0)
     date_now = datetime.datetime.now().strftime("%d-%m-%Y")
     filename = f"rapport-financier-{date_now}.pdf"
-    return StreamingResponse(buffer, media_type="application/pdf", headers={
+    return StreamingResponse(Buffer, media_type="application/pdf", headers={
         "Content-Disposition": f"inline; filename={filename}"
     })
 
