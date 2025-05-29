@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 from typing import Optional
 from app.database import get_db
+from app.models.model_categorie import Categorie
+from app.models.model_client_produit import ClientProduit
 from app.models.model_produit import Produit
 from app.models.model_client import Client
 from app.models.model_fournisseur import Fournisseur
@@ -36,6 +38,13 @@ def create_commande_vente(
     if not client:
         raise HTTPException(status_code=404, detail="Client non trouvé")
 
+    categorie_nom = (
+        db.query(Categorie.nom)
+        .filter(Categorie.id == Produit.categorie_id)
+        .scalar()
+    )
+
+    
     # Crée la commande vente
     commande = CommandeVente(
         client_id=data.client_id,
@@ -105,6 +114,20 @@ def create_commande_vente(
                 unite.statut = "en cours"
                 unite.commande_vente_id = commande.id
                 unite.date_modification = datetime.utcnow()
+                
+        # 🧠 Création d'un enregistrement ClientProduit
+        client_produit = ClientProduit(
+            client_id=client.id,
+            commande_id=commande.id,
+            produit_id=produit.id,
+            nom_produit=produit.nom,
+            categorie_produit=categorie_nom,
+            prix_unitaire_backup=produit.prix_vente,
+            quantite=ligne_data.quantite,
+            prix_unitaire=produit.prix_vente,
+            date_achat=commande.date_commande,
+        )
+        db.add(client_produit)
 
     # Calcul des totaux de la commande
     commande.total_ht = total_ht

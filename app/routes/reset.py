@@ -117,8 +117,8 @@ def verify_reset_code(
 
     # 4️⃣ Supprimer le reste
     db.query(model_client.Client).filter_by(user_id=user_id).delete()
-    db.query(model_fournisseur.Fournisseur).filter_by(user_id=user_id).delete()
     db.query(model_produit.Produit).filter_by(user_id=user_id).delete()
+    db.query(model_fournisseur.Fournisseur).filter_by(user_id=user_id).delete()
     db.query(model_rapport.Rapport).filter_by(user_id=user_id).delete()
     db.query(model_user.SubUser).filter_by(parent_user_id=user_id).delete()
     db.query(model_categorie.Categorie).filter_by(user_id=user_id).delete()

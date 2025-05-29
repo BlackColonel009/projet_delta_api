@@ -154,3 +154,10 @@ final totalHTFCFA = convertMontant(
 
 String formatMontant(double montant, String devise) =>
     "${montant.toStringAsFixed(2)} $devise";
+***********************************************************
+
+### 📦 ClientProduit
+- `GET /client-produits/client/{client_id}` – Liste des produits achetés par un client
+- `GET /client-produits/{id}` – Détails d’un produit acheté
+- `DELETE /client-produits/{id}` – Supprimer un lien client-produit
+- 'GET /client-produits/client/{client_id}/export'

@@ -21,6 +21,6 @@ class Client(Base):
     user = relationship("User", backref="clients")
     commandes = relationship("CommandeVente", back_populates="client")
     factures = relationship("Facture", back_populates="client")
-    
+    produits_achetes = relationship("ClientProduit", back_populates="client", cascade="all, delete-orphan")
     def __repr__(self):
         return f"<Client {self.nom}>"
