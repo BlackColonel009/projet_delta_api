@@ -69,7 +69,12 @@ def create_commande_vente(
             raise HTTPException(status_code=400, detail=f"Stock insuffisant pour {produit.nom} Contactez vite votre fournisseur!")
 
         # Décrémente le stock
-        produit.quantite -= ligne_data.quantite
+        quantite_restante = db.query(UniteProduit).filter(
+            UniteProduit.produit_id == produit.id,
+            UniteProduit.statut == "disponible"
+        ).count()
+        produit.quantite = quantite_restante
+
         total_ligne = produit.prix_vente * ligne_data.quantite
         total_ht += total_ligne
 
