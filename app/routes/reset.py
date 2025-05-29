@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from uuid import uuid4
 from app.database import get_db
 from app.models import model_categorie, model_facture, model_historique_intervention, model_intervention, model_paiement, model_unite_produit, model_user
+from app.models.model_client_produit import ClientProduit
 from app.models.model_user import User
 from app.schemas.reset_schema import ResetCodeSchema
 from app.models import model_client, model_fournisseur, model_produit, model_commande, model_rapport
@@ -75,6 +76,19 @@ def verify_reset_code(
             )
         )
     ).delete(synchronize_session=False)
+    
+    db.query(model_facture.LigneFacture).filter(
+        model_facture.LigneFacture.facture_id.in_(
+            db.query(model_facture.Facture.id).filter(
+                (model_facture.Facture.client_id.in_(
+                    db.query(model_client.Client.id).filter_by(user_id=user_id)
+                )) |
+                (model_facture.Facture.fournisseur_id.in_(
+                    db.query(model_fournisseur.Fournisseur.id).filter_by(user_id=user_id)
+                ))
+            )
+        )
+    ).delete(synchronize_session=False)
 
     # 2️⃣ Supprimer les factures
     db.query(model_facture.Facture).filter(
@@ -112,6 +126,12 @@ def verify_reset_code(
     db.query(model_unite_produit.UniteProduit).filter(
         model_unite_produit.UniteProduit.produit_id.in_(
             db.query(model_produit.Produit.id).filter_by(user_id=user_id)
+        )
+    ).delete(synchronize_session=False)
+
+    db.query(ClientProduit).filter(
+        ClientProduit.client_id.in_(
+            db.query(model_client.Client.id).filter_by(user_id=user_id)
         )
     ).delete(synchronize_session=False)
 
