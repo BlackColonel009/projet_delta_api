@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends
+import email
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from fastapi.responses import StreamingResponse
@@ -24,7 +25,13 @@ def export_rapport_complet(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    devise = User.devise or "FCFA"
+    
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=403, detail="Utilisateur non trouvé")
+
+    devise = user.devise or "FCFA"
+
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -118,7 +125,11 @@ def export_rapport_depenses(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    devise = User.devise or "FCFA"
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=403, detail="Utilisateur non trouvé")
+
+    devise = user.devise or "FCFA"
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -147,7 +158,11 @@ def export_rapport_ventes(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    devise = User.devise or "FCFA"
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=403, detail="Utilisateur non trouvé")
+
+    devise = user.devise or "FCFA"
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -177,7 +192,11 @@ def export_rapport_achats(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    devise = User.devise or "FCFA"
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=403, detail="Utilisateur non trouvé")
+
+    devise = user.devise or "FCFA"
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
