@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from app.utils.policy import afficher_banner
-from app.routes import auth, galerie  # Tu ajouteras d'autres routes ici
+from app.routes import auth, client_produit, galerie  # Tu ajouteras d'autres routes ici
 from app.config import settings
 from app.routes import client
 from app.routes import produit
@@ -97,6 +97,8 @@ app.include_router(scanqr.router)
 app.include_router(upload.router)
 
 app.include_router(unite_produit.router)
+
+app.include_router(client_produit.router)
 
 app.include_router(rapport.router)
 
