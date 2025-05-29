@@ -68,12 +68,7 @@ def create_commande_vente(
         if produit.quantite < ligne_data.quantite:
             raise HTTPException(status_code=400, detail=f"Stock insuffisant pour {produit.nom} Contactez vite votre fournisseur!")
 
-        # Décrémente le stock
-        quantite_restante = db.query(UniteProduit).filter(
-            UniteProduit.produit_id == produit.id,
-            UniteProduit.statut == "disponible"
-        ).count()
-        produit.quantite = quantite_restante
+       
 
         total_ligne = produit.prix_vente * ligne_data.quantite
         total_ht += total_ligne
@@ -118,6 +113,13 @@ def create_commande_vente(
                 unite.commande_vente_id = commande.id
                 unite.date_modification = datetime.utcnow()
                 
+        # 🔁 Mise à jour du stock disponible APRÈS modification des unités
+        quantite_restante = db.query(UniteProduit).filter(
+            UniteProduit.produit_id == produit.id,
+            UniteProduit.statut == "disponible"
+        ).count()
+        produit.quantite = quantite_restante    
+                
         # 🧠 Création d'un enregistrement ClientProduit
         client_produit = ClientProduit(
             client_id=client.id,
@@ -131,6 +133,8 @@ def create_commande_vente(
             date_achat=commande.date_commande,
         )
         db.add(client_produit)
+        
+    
 
     # Calcul des totaux de la commande
     commande.total_ht = total_ht
