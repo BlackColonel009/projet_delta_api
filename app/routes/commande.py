@@ -68,10 +68,11 @@ def create_commande_vente(
         if produit.quantite < ligne_data.quantite:
             raise HTTPException(status_code=400, detail=f"Stock insuffisant pour {produit.nom} Contactez vite votre fournisseur!")
 
-       
 
-        total_ligne = produit.prix_vente * ligne_data.quantite
-        total_ht += total_ligne
+
+        prix_utilise = ligne_data.prix_unitaire if ligne_data.prix_unitaire is not None else produit.prix_vente
+        total_ligne = prix_utilise * ligne_data.quantite
+
 
         # Crée la ligne de commande
         ligne_commande = LigneCommandeVente(
@@ -79,7 +80,7 @@ def create_commande_vente(
             produit_id=produit.id,
             description=produit.nom,
             quantite=ligne_data.quantite,
-            prix_unitaire = ligne_data.prix_unitaire if ligne_data.prix_unitaire is not None else produit.prix_vente,
+            prix_unitaire = prix_utilise, 
             total_ligne=total_ligne
         )
         db.add(ligne_commande)
@@ -129,7 +130,7 @@ def create_commande_vente(
             categorie_produit=categorie_nom,
             prix_unitaire_backup=produit.prix_vente,
             quantite=ligne_data.quantite,
-            prix_unitaire=produit.prix_vente,
+            prix_unitaire=prix_utilise,
             date_achat=commande.date_commande,
         )
         db.add(client_produit)
