@@ -38,11 +38,9 @@ def create_commande_vente(
     if not client:
         raise HTTPException(status_code=404, detail="Client non trouvé")
 
-    categorie_nom = (
-        db.query(Categorie.nom)
-        .filter(Categorie.id == Produit.categorie_id)
-        .scalar()
-    )
+    categorie_nom = db.query(Categorie.nom).filter(Categorie.id == Produit.categorie_id).first()
+    categorie_nom = categorie_nom[0] if categorie_nom else None
+
 
     
     # Crée la commande vente
