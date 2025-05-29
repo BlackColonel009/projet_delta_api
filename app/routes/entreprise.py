@@ -19,27 +19,33 @@ def get_entreprise_info(
         raise HTTPException(status_code=403, detail="Seul le compte principal peut accéder aux informations d'entreprise.")
 
     societe = current_user.societe_ou_entreprise
+    devise = current_user.devise or "FCFA"
 
-    # 👤 Nombre total d'utilisateurs liés (main + subusers)
+    # 👥 Récupérer tous les IDs liés à ce main user
+    utilisateur_ids = db.query(User.id).filter(
+        (User.id == current_user.id) | (User.parent_user_id == current_user.id)
+    ).subquery()
+
+    # 👤 Nombre total d'utilisateurs (main + sub)
     total_utilisateurs = db.query(User).filter(
-        (User.email == current_user.email) | (User.parent_email == current_user.email)
+        (User.id == current_user.id) | (User.parent_user_id == current_user.id)
     ).count()
 
-    # 📦 Nombre total de produits créés par l'entreprise
+    # 📦 Nombre total de produits créés par les utilisateurs liés
     total_produits = db.query(Produit).filter(
-        Produit.created_by == current_user.email
+        Produit.user_id.in_(utilisateur_ids)
     ).count()
 
-    # 💰 Chiffre d'affaires total
+    # 💰 Chiffre d'affaires global (ventes liées à ces utilisateurs)
     chiffre_affaires = db.query(func.sum(CommandeVente.total_ttc)).filter(
-        CommandeVente.parent_email == current_user.email
+        CommandeVente.user_id.in_(utilisateur_ids)
     ).scalar() or 0
 
     return {
         "societe": societe,
         "total_utilisateurs": total_utilisateurs,
         "total_produits": total_produits,
-        "chiffre_affaires": round(chiffre_affaires, 2)
+        "chiffre_affaires": f"{round(chiffre_affaires, 2)} {devise}"
     }
 
 # 📊 Infos complètes sur l’entreprise

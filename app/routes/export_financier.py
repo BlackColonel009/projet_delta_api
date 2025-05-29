@@ -24,6 +24,7 @@ def export_rapport_complet(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    devise = User.devise or "FCFA"
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -56,13 +57,13 @@ def export_rapport_complet(
     pdf.drawString(2 * cm, height - 2 * cm, "Résumé Financier")
     y = height - 3.5 * cm
     pdf.setFont("Helvetica", 11)
-    pdf.drawString(2 * cm, y, f"Total Ventes : {total_ventes:.2f} FCFA")
+    pdf.drawString(2 * cm, y, f"Total Ventes : {total_ventes:.2f} {devise}")
     y -= 0.6 * cm
-    pdf.drawString(2 * cm, y, f"Total Achats : {total_achats:.2f} FCFA")
+    pdf.drawString(2 * cm, y, f"Total Achats : {total_achats:.2f} {devise}")
     y -= 0.6 * cm
-    pdf.drawString(2 * cm, y, f"Total Dépenses : {total_depenses:.2f} FCFA")
+    pdf.drawString(2 * cm, y, f"Total Dépenses : {total_depenses:.2f} {devise}")
     y -= 0.6 * cm
-    pdf.drawString(2 * cm, y, f"Bénéfice Net : {benefice_net:.2f} FCFA")
+    pdf.drawString(2 * cm, y, f"Bénéfice Net : {benefice_net:.2f} {devise}")
     pdf.showPage()
 
     pdf.setFont("Helvetica-Bold", 14)
@@ -72,7 +73,7 @@ def export_rapport_complet(
     pdf.setFont("Helvetica", 10)
     for v in ventes:
         client_nom = v.client.nom if v.client else "Inconnu"
-        pdf.drawString(2 * cm, y, f"Vente ID: {v.id} | Client: {client_nom} | Total: {v.total_ttc:.2f} FCFA | Date: {v.date_commande.strftime('%d/%m/%Y')}")
+        pdf.drawString(2 * cm, y, f"Vente ID: {v.id} | Client: {client_nom} | Total: {v.total_ttc:.2f} {devise} | Date: {v.date_commande.strftime('%d/%m/%Y')}")
         y -= 0.6 * cm
         if y < 3 * cm:
             pdf.showPage()
@@ -86,7 +87,7 @@ def export_rapport_complet(
     pdf.setFont("Helvetica", 10)
     for a in achats:
         fournisseur_nom = a.fournisseur.nom if a.fournisseur else "Inconnu"
-        pdf.drawString(2 * cm, y, f"Achat ID: {a.id} | Fournisseur: {fournisseur_nom} | Total: {a.total_ttc:.2f} FCFA | Date: {a.date_commande.strftime('%d/%m/%Y')}")
+        pdf.drawString(2 * cm, y, f"Achat ID: {a.id} | Fournisseur: {fournisseur_nom} | Total: {a.total_ttc:.2f} {devise} | Date: {a.date_commande.strftime('%d/%m/%Y')}")
         y -= 0.6 * cm
         if y < 3 * cm:
             pdf.showPage()
@@ -99,7 +100,7 @@ def export_rapport_complet(
     y = height - 3 * cm
     pdf.setFont("Helvetica", 10)
     for d in depenses:
-        pdf.drawString(2 * cm, y, f"Dépense ID: {d.id} | Libelle: {d.libelle} | Montant: {d.montant:.2f} FCFA | Catégorie: {d.categorie} | Date: {d.date_depense.strftime('%d/%m/%Y')}")
+        pdf.drawString(2 * cm, y, f"Dépense ID: {d.id} | Libelle: {d.libelle} | Montant: {d.montant:.2f} {devise} | Catégorie: {d.categorie} | Date: {d.date_depense.strftime('%d/%m/%Y')}")
         y -= 0.6 * cm
         if y < 3 * cm:
             pdf.showPage()
@@ -117,6 +118,7 @@ def export_rapport_depenses(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    devise = User.devise or "FCFA"
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -128,7 +130,7 @@ def export_rapport_depenses(
     depenses = db.query(Depense).filter(Depense.user_id == parent_user_id).order_by(Depense.date_depense.desc()).all()
     pdf.setFont("Helvetica", 10)
     for d in depenses:
-        pdf.drawString(2 * cm, y, f"Dépense ID: {d.id} | Libelle: {d.libelle} | Montant: {d.montant:.2f} FCFA | Catégorie: {d.categorie} | Date: {d.date_depense.strftime('%d/%m/%Y')}")
+        pdf.drawString(2 * cm, y, f"Dépense ID: {d.id} | Libelle: {d.libelle} | Montant: {d.montant:.2f} {devise} | Catégorie: {d.categorie} | Date: {d.date_depense.strftime('%d/%m/%Y')}")
         y -= 0.6 * cm
         if y < 3 * cm:
             pdf.showPage()
@@ -145,6 +147,7 @@ def export_rapport_ventes(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    devise = User.devise or "FCFA"
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -157,7 +160,7 @@ def export_rapport_ventes(
     pdf.setFont("Helvetica", 10)
     for v in ventes:
         client_nom = v.client.nom if v.client else "Inconnu"
-        pdf.drawString(2 * cm, y, f"Vente ID: {v.id} | Client: {client_nom} | Total: {v.total_ttc:.2f} FCFA | Date: {v.date_commande.strftime('%d/%m/%Y')}")
+        pdf.drawString(2 * cm, y, f"Vente ID: {v.id} | Client: {client_nom} | Total: {v.total_ttc:.2f} {devise} | Date: {v.date_commande.strftime('%d/%m/%Y')}")
         y -= 0.6 * cm
         if y < 3 * cm:
             pdf.showPage()
@@ -174,6 +177,7 @@ def export_rapport_achats(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    devise = User.devise or "FCFA"
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -186,7 +190,7 @@ def export_rapport_achats(
     pdf.setFont("Helvetica", 10)
     for a in achats:
         fournisseur_nom = a.fournisseur.nom if a.fournisseur else "Inconnu"
-        pdf.drawString(2 * cm, y, f"Achat ID: {a.id} | Fournisseur: {fournisseur_nom} | Total: {a.total_ttc:.2f} FCFA | Date: {a.date_commande.strftime('%d/%m/%Y')}")
+        pdf.drawString(2 * cm, y, f"Achat ID: {a.id} | Fournisseur: {fournisseur_nom} | Total: {a.total_ttc:.2f} {devise} | Date: {a.date_commande.strftime('%d/%m/%Y')}")
         y -= 0.6 * cm
         if y < 3 * cm:
             pdf.showPage()

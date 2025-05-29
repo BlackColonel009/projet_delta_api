@@ -22,6 +22,7 @@ class User(Base):
     telephone = Column(String, nullable=True)
     logo_entreprise = Column(String, nullable=True)
     addresse = Column(String, nullable=True)
+    parent_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
     sub_users = relationship("SubUser", back_populates="parent_user", cascade="all, delete")
 
