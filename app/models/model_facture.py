@@ -28,7 +28,7 @@ class Facture(Base):
     tva = Column(Float, default=0.0)
     devise = Column(String, default="FCFA")
     
-    
+    commande_achat_id = Column(Integer, ForeignKey("commandes_achats.id"), nullable=True)
     commande_id = Column(Integer, ForeignKey("commandes_ventes.id"), nullable=True)
     commande = relationship("CommandeVente")
 

@@ -19,10 +19,7 @@ def generate_facture_from_commande(
     commande_type: str,
     current_sub: Optional[SubUser] = None
 ):
-    if current_sub:
-        sub_user_id = current_sub.id
-    else:
-        sub_user_id = None
+    sub_user_id = current_sub.id if current_sub else None
 
     facture = Facture(
         type=commande_type,
@@ -33,7 +30,8 @@ def generate_facture_from_commande(
         total_ttc=commande.total_ttc,
         user_id=commande.user_id,
         sub_user_id=sub_user_id,
-        commande_id=commande.id  # ✅ Lien vers la commande ici
+        commande_id=commande.id if commande_type == "vente" else None,
+        commande_achat_id=commande.id if commande_type == "achat" else None,
     )
     db.add(facture)
     db.commit()
@@ -48,6 +46,7 @@ def generate_facture_from_commande(
             prix_unitaire=ligne.prix_unitaire,
             total_ligne=ligne.total_ligne
         ))
+
     db.commit()
 
     # Générer et stocker le PDF temporairement

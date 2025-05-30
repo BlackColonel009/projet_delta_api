@@ -248,7 +248,7 @@ def create_commande_achat(
     )
 
 
-    # generate_facture_from_commande(db, commande, "achat")
+    generate_facture_from_commande(db, commande, "achat")
 
     return {"message": "Commande achat creee", "commande_id": commande.id}
 
