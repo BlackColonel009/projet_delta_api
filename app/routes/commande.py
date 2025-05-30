@@ -72,7 +72,7 @@ def create_commande_vente(
 
         prix_utilise = ligne_data.prix_unitaire if ligne_data.prix_unitaire is not None else produit.prix_vente
         total_ligne = prix_utilise * ligne_data.quantite
-
+        total_ht += total_ligne
 
         # Crée la ligne de commande
         ligne_commande = LigneCommandeVente(
@@ -200,7 +200,8 @@ def create_commande_achat(
 
         # Mise à jour de la quantité et du prix achat si souhaité
         produit.quantite += ligne_data.quantite
-        produit.prix_achat = prix_utilise  # (facultatif si tu veux garder en mémoire ce nouveau prix)
+        
+        # produit.prix_achat = prix_utilise  # (facultatif si tu veux garder en mémoire ce nouveau prix)
 
         total_ligne = prix_utilise * ligne_data.quantite
         total_ht += total_ligne
