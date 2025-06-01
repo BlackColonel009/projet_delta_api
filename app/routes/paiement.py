@@ -52,7 +52,7 @@ def create_paiement(
                     UniteProduit.commande_vente_id == commande.id,
                     UniteProduit.statut.in_(["en cours", "disponible"])
                 ).all()
-                print("je suis là")
+                # print("je suis là")
                 for unite in unites:
                     print(f"✅ Modification unité : {unite.tracabilite} | Avant: {unite.statut}")
                     unite.statut = "vendu"

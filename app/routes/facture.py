@@ -25,7 +25,7 @@ router = APIRouter(prefix="/factures", tags=["Facturation"])
 def create_facture(
     data: FactureCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock, RoleEnum.commercial]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     total_ht = sum(l.quantite * l.prix_unitaire for l in data.lignes)
@@ -67,7 +67,7 @@ def create_facture(
 def get_facture(
     facture_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock , RoleEnum.commercial]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
 
@@ -110,7 +110,7 @@ def update_facture_statut(
     facture_id: int,
     statut: str,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock , RoleEnum.commercial]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     facture = db.query(Facture).filter(
@@ -128,7 +128,7 @@ def update_facture_statut(
 @router.get("/", response_model=List[FactureOut])
 def list_factures(
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock, RoleEnum.commercial, RoleEnum.caissier]))
 ):
     parent_user_id = (
         current_user.parent_user_id if not current_user.is_main_user else current_user.id

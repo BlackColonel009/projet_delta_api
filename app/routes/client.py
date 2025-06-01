@@ -18,7 +18,7 @@ router = APIRouter(prefix="/clients", tags=["Clients"])
 def create_client(
     data: ClientCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial, RoleEnum.secretaire]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial, RoleEnum.secretaire, RoleEnum.technicien]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     # 🔐 Liaison automatique avec l'utilisateur connecté
@@ -42,7 +42,7 @@ def create_client(
 @router.get("/", response_model=List[ClientOut])
 def list_clients(
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial, RoleEnum.secretaire]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial, RoleEnum.secretaire, RoleEnum.technicien] ))
 ):  
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     return db.query(Client).filter(Client.user_id == parent_user_id).all()
@@ -57,7 +57,7 @@ def list_clients(
 def get_client(
     client_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial, RoleEnum.secretaire]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial, RoleEnum.secretaire, RoleEnum.technicien]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     client = db.query(Client).filter(

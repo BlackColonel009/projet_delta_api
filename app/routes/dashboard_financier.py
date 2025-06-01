@@ -7,6 +7,7 @@ from app.models.model_commande import CommandeVente, CommandeAchat
 from app.models.model_facture import Facture
 from app.models.model_paiement import Paiement
 from app.models.model_depense import Depense
+from app.schemas.user_schema import RoleEnum
 from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 
@@ -16,7 +17,7 @@ router = APIRouter(prefix="/dashboard", tags=["Dashboard Financier"])
 @router.get("/ventes-par-mois")
 def ventes_par_mois(
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.caissier, RoleEnum.comptable]))
 ):
     ventes = (
         db.query(
@@ -38,7 +39,7 @@ def ventes_par_mois(
 @router.get("/achats-par-mois")
 def achats_par_mois(
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.caissier, RoleEnum.comptable]))
 ):
     achats = (
         db.query(
@@ -60,7 +61,7 @@ def achats_par_mois(
 @router.get("/benefice-brut")
 def benefice_brut(
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.caissier, RoleEnum.comptable]))
 ):
     total_ventes = db.query(func.sum(CommandeVente.total_ttc)).filter(CommandeVente.user_id == current_user.id).scalar() or 0
     total_achats = db.query(func.sum(CommandeAchat.total_ttc)).filter(CommandeAchat.user_id == current_user.id).scalar() or 0
@@ -74,7 +75,7 @@ def benefice_brut(
 @router.get("/tva-collectee")
 def tva_collectee(
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.caissier, RoleEnum.comptable]))
 ):
     total_tva = db.query(func.sum(Facture.tva)).filter(Facture.user_id == current_user.id).scalar() or 0
     return {"tva_collectee": float(total_tva)}
@@ -110,7 +111,7 @@ def clients_en_retard(
 @router.get("/fournisseurs-a-payer")
 def fournisseurs_a_payer(
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.caissier]))
 ):
     factures = db.query(Facture).filter(
         Facture.type == "achat",
@@ -137,7 +138,7 @@ def fournisseurs_a_payer(
 @router.get("/depenses-par-mois")
 def depenses_par_mois(
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.caissier, RoleEnum.comptable]))
 ):
     depenses = (
         db.query(
@@ -159,7 +160,7 @@ def depenses_par_mois(
 @router.get("/benefice-net")
 def benefice_net(
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.caissier, RoleEnum.comptable]))
 ):
     total_ventes = db.query(func.sum(CommandeVente.total_ttc)).filter(CommandeVente.user_id == current_user.id).scalar() or 0
     total_achats = db.query(func.sum(CommandeAchat.total_ttc)).filter(CommandeAchat.user_id == current_user.id).scalar() or 0
@@ -176,7 +177,7 @@ def benefice_net(
 @router.get("/depenses-par-categorie")
 def depenses_par_categorie(
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.caissier, RoleEnum.comptable]))
 ):
     depenses = (
         db.query(
@@ -196,7 +197,7 @@ def depenses_par_categorie(
 @router.get("/overview")
 def dashboard_overview(
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.caissier, RoleEnum.comptable]))
 ):
     total_ventes = db.query(func.sum(CommandeVente.total_ttc)).filter(CommandeVente.user_id == current_user.id).scalar() or 0
     total_achats = db.query(func.sum(CommandeAchat.total_ttc)).filter(CommandeAchat.user_id == current_user.id).scalar() or 0

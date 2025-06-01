@@ -9,7 +9,7 @@ def save_file_locally(file: UploadFile, folder: str = "tutoriels") -> str:
         raise HTTPException(status_code=400, detail="Extension d'image non autorisée")
 
     filename = f"{uuid.uuid4()}.{extension}"
-    save_dir = os.path.join("static", folder)
+    save_dir = os.path.join("upload", folder)
     os.makedirs(save_dir, exist_ok=True)
 
     file_path = os.path.join(save_dir, filename)

@@ -21,7 +21,7 @@ router = APIRouter(prefix="/export", tags=["Exports Financiers"])
 @router.get("/rapport-complet")
 def export_rapport_complet(
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable,]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     devise = current_user.devise or "FCFA"

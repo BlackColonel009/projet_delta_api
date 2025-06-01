@@ -288,7 +288,7 @@ def get_commande_vente(
 def get_commandes_achats(
     start: Optional[str] = None,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier,  RoleEnum.commercial, RoleEnum.gestionnaire_stock]))
+    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.gestionnaire_stock]))
 ):  
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     query = db.query(CommandeAchat).filter(CommandeAchat.user_id == parent_user_id)
@@ -302,7 +302,7 @@ def get_commandes_achats(
 def get_commande_achat(
     commande_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier,  RoleEnum.commercial, RoleEnum.gestionnaire_stock]))
+    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     commande = db.query(CommandeAchat).filter(

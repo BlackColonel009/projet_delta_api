@@ -17,7 +17,7 @@ router = APIRouter(prefix="/fournisseurs", tags=["Fournisseurs"])
 def create_fournisseur(
     data: FournisseurCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier,  RoleEnum.commercial, RoleEnum.gestionnaire_stock]))
+    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     fournisseur = Fournisseur(**data.dict(), user_id=parent_user_id)
@@ -68,7 +68,7 @@ def update_fournisseur(
     fournisseur_id: int,
     data: FournisseurCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier,  RoleEnum.commercial, RoleEnum.gestionnaire_stock]))
+    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     fournisseur = db.query(Fournisseur).filter(
@@ -99,7 +99,7 @@ def update_fournisseur(
 def delete_fournisseur(
     fournisseur_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier,  RoleEnum.commercial, RoleEnum.gestionnaire_stock]))
+    current_user=Depends(check_role([RoleEnum.admin]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     fournisseur = db.query(Fournisseur).filter(

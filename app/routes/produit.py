@@ -7,7 +7,7 @@ from app.schemas.produit_schema import ProduitCreate, ProduitOut
 from pydantic import BaseModel
 from datetime import datetime
 from app.utils.logger import log_action
-from app.utils.permissions import check_role
+from app.utils.permissions import All_required, check_role
 from app.utils.security import get_current_user
 from app.models.model_user import User
 from app.schemas.user_schema import RoleEnum
@@ -113,7 +113,7 @@ def create_produit(
 @router.get("/", response_model=List[ProduitOut])
 def list_produits(
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
+    current_user=Depends(All_required())
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     return db.query(Produit).filter(Produit.date_suppression == None, Produit.user_id == parent_user_id).all()
