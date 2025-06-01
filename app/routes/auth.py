@@ -41,8 +41,22 @@ def register_user(data: UserCreate, db: Session = Depends(get_db)):
         devise=data.devise or "€", 
     )
     db.add(new_user)
+    
+    db.flush()  # Parfois suffisant
+    
     db.commit()
+    
+    # 🧠 Fix Render: propagation vers DB réelle
+    _ = db.query(User).filter(User.email == data.email).first()
+    import time
+    time.sleep(0.5)
+    
     db.refresh(new_user)
+    
+    # ✅ On génère le token directement
+    access_token = create_access_token({
+        "sub": new_user.email,
+    })
 
     # log_action(
     #     db=db,
@@ -53,7 +67,11 @@ def register_user(data: UserCreate, db: Session = Depends(get_db)):
     #     details=f"Nouvel utilisateur inscrit : {new_user.email}"
     # )
 
-    return {"message": "User created successfully"}
+    return {
+        "message": "User created successfully",
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
 
 # 🔒 Créer un sous-utilisateur sous un utilisateur principal
 @router.post("/register_sub", tags=["Authentification"])
@@ -95,6 +113,11 @@ def register_sub_user(
 @router.post("/login", tags=["Authentification"])
 def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == form_data.username).first()
+    print(f"🔎 Recherche utilisateur avec {form_data.username}")
+    if not user:
+        print("❌ Aucun utilisateur trouvé")
+    else:
+        print("✅ Utilisateur trouvé :", user.email)
     if not user or not verify_password(form_data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
 

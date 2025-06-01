@@ -1,3 +1,4 @@
+import uuid
 from fastapi import File, HTTPException, UploadFile, Depends
 from app.utils.security import get_current_user
 from sqlalchemy.orm import Session
@@ -173,3 +174,6 @@ def delete_logo_entreprise(
     current_user.logo_entreprise = None
     db.commit()
     return {"message": "Logo supprimé"}
+
+# ******************************************tuto
+

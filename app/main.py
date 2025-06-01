@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from app.utils.policy import afficher_banner
-from app.routes import auth, client_produit, galerie  # Tu ajouteras d'autres routes ici
+from app.routes import auth, client_produit, galerie, tutoriel  # Tu ajouteras d'autres routes ici
 from app.config import settings
 from app.routes import client
 from app.routes import produit
@@ -106,6 +106,8 @@ app.include_router(notification.router)
 
 # ou facture_pdf selon ton fichier
 app.include_router(File.router)
+
+app.include_router(tutoriel.router)
 
 app.include_router(reset.router)
 

@@ -17,7 +17,8 @@ from app.models import (
     model_user, model_role, model_client, model_produit, model_categorie, 
     model_fournisseur, model_commande, model_intervention, model_historique_intervention, 
     model_historique_general, model_facture, model_paiement, model_depense, model_rapport, 
-    model_unite_produit, model_notification, model_reset_token, model_galerie, model_client_produit
+    model_unite_produit, model_notification, model_reset_token, model_galerie, model_client_produit,
+    model_tutoriel
 )
 
 # Config Alembic
