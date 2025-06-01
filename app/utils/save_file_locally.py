@@ -16,4 +16,4 @@ def save_file_locally(file: UploadFile, folder: str = "tutoriels") -> str:
     with open(file_path, "wb") as buffer:
         buffer.write(file.file.read())
 
-    return f"/upload/{folder}/{filename}"
+    return f"/static/{folder}/{filename}"
