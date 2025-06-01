@@ -92,7 +92,9 @@ def register_sub_user(
         password_hash=hash_password(data.password),
         bio = data.bio,
         role=data.role,
-        parent_user_id=parent.id
+        parent_user_id=parent.id,
+        devise = parent.devise
+
     )
     db.add(new_sub)
     db.commit()

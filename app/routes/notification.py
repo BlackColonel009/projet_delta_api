@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from typing import List
 from app.models.model_notification import Notification
+from app.models.model_user import SubUser
 from app.schemas.notification_schema import NotificationCreate, NotificationOut
 from app.utils.permissions import All_required
 from app.database import get_db
@@ -29,7 +30,10 @@ def create_notification(
         titre=data.titre,
         message=data.message,
         parent_user_id=parent_id,
-        user_id=None if current_user.is_main_user else current_user.id
+        user_id=None if current_user.is_main_user else current_user.id,
+        sub_user_id=SubUser.id if SubUser else None,
+        sub_user_name=SubUser.username if SubUser else None,
+        sub_user_role=SubUser.role if SubUser else None,
     )
     db.add(notif)
     db.commit()

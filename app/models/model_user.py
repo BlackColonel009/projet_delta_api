@@ -43,6 +43,8 @@ class SubUser(Base):
     bio = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     telephone = Column(String, nullable=True)
+    devise = Column(String(10), nullable=True)
+
 
     parent_user_id = Column(Integer, ForeignKey("users.id"))
     parent_user = relationship("User", back_populates="sub_users")
