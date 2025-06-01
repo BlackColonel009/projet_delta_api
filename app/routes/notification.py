@@ -1,5 +1,5 @@
 # ✅ app/routes/notification.py
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from app.models.model_notification import Notification
@@ -31,9 +31,9 @@ def create_notification(
         message=data.message,
         parent_user_id=parent_id,
         user_id=None if current_user.is_main_user else current_user.id,
-        sub_user_id=SubUser.id if SubUser else None,
-        sub_user_name=SubUser.username if SubUser else None,
-        sub_user_role=SubUser.role if SubUser else None,
+        sub_user_id=current_user.id if not current_user.is_main_user else None,
+        sub_user_name=current_user.username if not current_user.is_main_user else None,
+        sub_user_role=current_user.role if not current_user.is_main_user else None,
     )
     db.add(notif)
     db.commit()
