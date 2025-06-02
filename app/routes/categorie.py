@@ -47,7 +47,7 @@ def create_categorie(
 @router.get("/", response_model=List[CategorieOut])
 def list_categories(
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock, RoleEnum.technicien]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     # 🔐 Ne lister que les catégories appartenant à l'utilisateur connecté
