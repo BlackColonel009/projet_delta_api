@@ -125,10 +125,18 @@ def get_produit(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    produit = db.query(Produit).filter(Produit.id == produit_id, Produit.date_suppression == None).first()
+    produit = db.query(Produit).filter(
+        Produit.id == produit_id,
+        Produit.date_suppression == None,
+        Produit.user_id == current_user.id  # ✅ filtre par propriétaire
+    ).first()
+
     if not produit:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
+    
     return produit
+
+
 
 # 🔄 Modifier un produit
 @router.put("/{produit_id}/", response_model=dict)
