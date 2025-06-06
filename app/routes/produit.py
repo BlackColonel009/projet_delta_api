@@ -76,6 +76,7 @@ def create_produit(
         for code in scanned_barcodes:
             unite = UniteProduit(
                 produit_id=produit.id,
+                tracabilite=None,  
                 code_barre=code,
                 statut="disponible"
             )
