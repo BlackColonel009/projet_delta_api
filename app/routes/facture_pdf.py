@@ -10,7 +10,7 @@ from reportlab.lib.units import cm
 from io import BytesIO
 from app.database import get_db
 from app.models.model_facture import Facture
-from app.utils.permissions import check_role
+from app.utils.permissions import All_required, check_role
 from app.schemas.user_schema import RoleEnum
 from app.config import conf
 from app.models.model_facture import LigneFacture 
@@ -21,7 +21,9 @@ router = APIRouter(prefix="/factures", tags=["Facturation"])
 def preview_facture_pdf(
     facture_id: int,
     db: Session = Depends(get_db),
+    current_user=Depends(All_required())
 ):
+    devise = current_user.devise or "FCFA"
     facture = db.query(Facture).options(
         joinedload(Facture.lignes).joinedload(LigneFacture.produit),
         joinedload(Facture.client),
@@ -70,8 +72,8 @@ def preview_facture_pdf(
         nom_produit = ligne.produit.nom if ligne.produit else ligne.description
         pdf.drawString(2 * cm, y, nom_produit)
         pdf.drawRightString(10 * cm, y, str(ligne.quantite))
-        pdf.drawRightString(13 * cm, y, f"{ligne.prix_unitaire:.2f} FCFA")
-        pdf.drawRightString(18 * cm, y, f"{ligne.total_ligne:.2f} FCFA")
+        pdf.drawRightString(13 * cm, y, f"{ligne.prix_unitaire:.2f} {devise}")
+        pdf.drawRightString(18 * cm, y, f"{ligne.total_ligne:.2f} {devise}")
         y -= 0.6 * cm
         if y < 4 * cm:
             pdf.showPage()
@@ -80,13 +82,13 @@ def preview_facture_pdf(
     y -= 1 * cm
     pdf.setFont("Helvetica-Bold", 11)
     pdf.drawRightString(15 * cm, y, "Total HT :")
-    pdf.drawRightString(19 * cm, y, f"{facture.total_ht:.2f} FCFA")
+    pdf.drawRightString(19 * cm, y, f"{facture.total_ht:.2f} {devise}")
     y -= 0.5 * cm
     pdf.drawRightString(15 * cm, y, f"TVA ({facture.tva:.0f}%) :")
-    pdf.drawRightString(19 * cm, y, f"{facture.total_ttc - facture.total_ht:.2f} FCFA")
+    pdf.drawRightString(19 * cm, y, f"{facture.total_ttc - facture.total_ht:.2f} {devise}")
     y -= 0.5 * cm
     pdf.drawRightString(15 * cm, y, "Total TTC :")
-    pdf.drawRightString(19 * cm, y, f"{facture.total_ttc:.2f} FCFA")
+    pdf.drawRightString(19 * cm, y, f"{facture.total_ttc:.2f} {devise}")
 
     if total_paye >= facture.total_ttc:
         pdf.saveState()
@@ -118,8 +120,10 @@ def preview_facture_pdf(
 @router.post("/{facture_id}/email-client")
 async def send_facture_to_client_memory(
     facture_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required())
 ):
+    devise = current_user.devise or "FCFA"
     facture = db.query(Facture).options(
         joinedload(Facture.lignes).joinedload(LigneFacture.produit),
         joinedload(Facture.client),
@@ -166,8 +170,8 @@ async def send_facture_to_client_memory(
         nom_produit = ligne.produit.nom if ligne.produit else ligne.description
         pdf.drawString(2 * cm, y, nom_produit)
         pdf.drawRightString(10 * cm, y, str(ligne.quantite))
-        pdf.drawRightString(13 * cm, y, f"{ligne.prix_unitaire:.2f} FCFA")
-        pdf.drawRightString(18 * cm, y, f"{ligne.total_ligne:.2f} FCFA")
+        pdf.drawRightString(13 * cm, y, f"{ligne.prix_unitaire:.2f} {devise}")
+        pdf.drawRightString(18 * cm, y, f"{ligne.total_ligne:.2f} {devise}")
         y -= 0.6 * cm
         if y < 4 * cm:
             pdf.showPage()
@@ -176,13 +180,13 @@ async def send_facture_to_client_memory(
     y -= 1 * cm
     pdf.setFont("Helvetica-Bold", 11)
     pdf.drawRightString(15 * cm, y, "Total HT :")
-    pdf.drawRightString(19 * cm, y, f"{facture.total_ht:.2f} FCFA")
+    pdf.drawRightString(19 * cm, y, f"{facture.total_ht:.2f} {devise}")
     y -= 0.5 * cm
     pdf.drawRightString(15 * cm, y, f"TVA ({facture.tva:.0f}%) :")
-    pdf.drawRightString(19 * cm, y, f"{facture.total_ttc - facture.total_ht:.2f} FCFA")
+    pdf.drawRightString(19 * cm, y, f"{facture.total_ttc - facture.total_ht:.2f} {devise}")
     y -= 0.5 * cm
     pdf.drawRightString(15 * cm, y, "Total TTC :")
-    pdf.drawRightString(19 * cm, y, f"{facture.total_ttc:.2f} FCFA")
+    pdf.drawRightString(19 * cm, y, f"{facture.total_ttc:.2f} {devise}")
 
     if total_paye >= facture.total_ttc:
         pdf.saveState()
