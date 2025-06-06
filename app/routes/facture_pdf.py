@@ -21,9 +21,9 @@ router = APIRouter(prefix="/factures", tags=["Facturation"])
 def preview_facture_pdf(
     facture_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(All_required())
+    
 ):
-    devise = current_user.devise or "FCFA"
+    devise = ""
     facture = db.query(Facture).options(
         joinedload(Facture.lignes).joinedload(LigneFacture.produit),
         joinedload(Facture.client),
@@ -121,9 +121,9 @@ def preview_facture_pdf(
 async def send_facture_to_client_memory(
     facture_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(All_required())
+    # current_user=Depends(All_required())
 ):
-    devise = current_user.devise or "FCFA"
+    devise =  ""
     facture = db.query(Facture).options(
         joinedload(Facture.lignes).joinedload(LigneFacture.produit),
         joinedload(Facture.client),
