@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.database import get_db
-from app.models.model_user import User
+from app.models.model_user import SubUser, User
 from app.models.model_produit import Produit
 from app.models.model_commande import CommandeVente
 from app.utils.security import get_current_user, require_main_user
@@ -21,28 +21,27 @@ def get_entreprise_info(
     societe = current_user.societe_ou_entreprise
     devise = current_user.devise or "FCFA"
 
-    # 👥 Récupérer tous les IDs liés à ce main user
-    utilisateur_ids = db.query(User.id).filter(
-        (User.id == current_user.id) | (User.parent_user_id == current_user.id)
-    ).subquery()
-
-    # 👤 Nombre total d'utilisateurs (main + sub)
-    total_utilisateurs = db.query(User).filter(
-        (User.id == current_user.id) | (User.parent_user_id == current_user.id)
+    # 👤 Nombre de sub-users créés par ce main user
+    total_subusers = db.query(SubUser).filter(
+        SubUser.parent_user_id == current_user.id
     ).count()
 
-    # 📦 Nombre total de produits créés par les utilisateurs liés
+    # 👤 Nombre total d'utilisateurs = main + sub
+    total_utilisateurs = total_subusers + 1
+
+    # 📦 Nombre total de produits créés par ce main user (ou tu peux adapter)
     total_produits = db.query(Produit).filter(
-        Produit.user_id.in_(utilisateur_ids)
+        Produit.user_id == current_user.id
     ).count()
 
-    # 💰 Chiffre d'affaires global (ventes liées à ces utilisateurs)
+    # 💰 Chiffre d'affaires global (ventes liées à ce main user uniquement)
     chiffre_affaires = db.query(func.sum(CommandeVente.total_ttc)).filter(
-        CommandeVente.user_id.in_(utilisateur_ids)
+        CommandeVente.user_id == current_user.id
     ).scalar() or 0
 
     return {
         "societe": societe,
+        "total_subusers": total_subusers,
         "total_utilisateurs": total_utilisateurs,
         "total_produits": total_produits,
         "chiffre_affaires": f"{round(chiffre_affaires, 2)} {devise}"

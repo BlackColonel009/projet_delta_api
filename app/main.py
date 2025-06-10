@@ -1,9 +1,12 @@
 # app/main.py
 
-from fastapi import FastAPI, Depends
+from datetime import datetime
+from fastapi import FastAPI, Depends, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from jose import JWTError
+import jwt
 from app.utils.policy import afficher_banner
 from app.routes import auth, client_produit, galerie, tutoriel  # Tu ajouteras d'autres routes ici
 from app.config import settings
@@ -128,4 +131,33 @@ def head_root():
 # def shared_dashboard():
 #     return {"message": "Accès pour plusieurs rôles 👥"}
 
+
+@app.middleware("http")
+async def sliding_token_middleware(request: Request, call_next):
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            exp = payload.get("exp")
+            sub = payload.get("sub")
+            role = payload.get("role", None)
+            super_user = payload.get("super", False)
+
+            now = datetime.utcnow().timestamp()
+            # ⏱ Si le token expire dans moins de 5 minutes
+            if exp and now > exp - 300:
+                new_token = create_access_token({
+                    "sub": sub,
+                    "role": role,
+                    "super": super_user
+                })
+
+                response: Response = await call_next(request)
+                response.headers["x-new-token"] = new_token
+                return response
+        except JWTError:
+            pass
+
+    return await call_next(request)
 
