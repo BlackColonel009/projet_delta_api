@@ -73,14 +73,16 @@ def create_produit(
     db.refresh(produit)
     # Si des codes-barres ont été scannés, on les utilise
     if scanned_barcodes:
+        unites = []
         for code in scanned_barcodes:
-            unite = UniteProduit(
+            unites.append(UniteProduit(
                 produit_id=produit.id,
-                tracabilite=None,  
+                tracabilite=None,
                 code_barre=code,
                 statut="disponible"
-            )
-        db.add(unite)
+            ))
+        db.add_all(unites)
+
     else:
         # Sinon, on génère automatiquement N unités avec un code de traçabilité
         for i in range(1, quantite + 1):
@@ -88,6 +90,7 @@ def create_produit(
             unite = UniteProduit(
                 produit_id=produit.id,
                 tracabilite=qr_code,
+                code_barre=None, 
                 statut="disponible"
             )
             db.add(unite)

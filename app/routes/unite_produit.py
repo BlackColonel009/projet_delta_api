@@ -31,6 +31,18 @@ def add_unites_to_produit(
     ).all()
     if not produit:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
+    
+    # 🚫 Vérifie s’il y a déjà des unités avec code_barre
+    has_barcode_unit = db.query(UniteProduit).filter(
+        UniteProduit.produit_id == produit_id,
+        UniteProduit.code_barre.isnot(None)
+    ).first()
+
+    if has_barcode_unit:
+        raise HTTPException(
+            status_code=400,
+            detail="Impossible de créer des QR codes car des unités avec code-barres existent déjà pour ce produit."
+        )
 
     created = []
     for i in range(1, data.nombre + 1):
