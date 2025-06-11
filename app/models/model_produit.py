@@ -29,6 +29,7 @@ class Produit(Base):
     emplacement = Column(String, default="magasin")
     image_url = Column(String, nullable=True)
     stock_min = Column(Integer, default=0)
+    a_des_barcodes = Column(Boolean, default=False)
 
     
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)

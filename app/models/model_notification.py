@@ -13,7 +13,7 @@ class Notification(Base):
     user_id = Column(Integer, nullable=True)  # sub-user ou null
     parent_user_id = Column(Integer, ForeignKey("users.id"))
     # models/model_notification.py (exemple)
-    sub_user_id = Column(Integer, ForeignKey("subusers.id"), nullable=True)
+    sub_user_id = Column(Integer, ForeignKey("sub_users.id"), nullable=True)
     sub_user_name = Column(String(100), nullable=True)
     sub_user_role = Column(String(100), nullable=True)
 

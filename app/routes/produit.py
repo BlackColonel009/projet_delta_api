@@ -35,82 +35,110 @@ def create_produit(
     tracabilite: Optional[str] = Form(None),
     emplacement: Optional[str] = Form("magasin"),
     image: UploadFile = File(...),
-    scanned_barcodes: List[str] = Form(default=[]),
+    scanned_barcodes: Optional[List[str]] = Form(None),
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    # Enregistrement de l'image sur disque
-    ext = image.filename.split(".")[-1]
-    image_filename = f"{datetime.utcnow().timestamp()}.{ext}"
-    upload_dir = os.path.join(os.getcwd(), "upload", "produits")
-    os.makedirs(upload_dir, exist_ok=True)
-    image_path = os.path.join(upload_dir, image_filename)
-    with open(image_path, "wb") as buffer:
-        shutil.copyfileobj(image.file, buffer)
 
-    produit = Produit(
-        nom=nom,
-        categorie_id=categorie_id,
-        prix_achat=prix_achat,
-        prix_vente=prix_vente,
-        fournisseur_id=fournisseur_id,
-        quantite=quantite,
-        rating=rating,
-        caracteristiques=caracteristiques,
-        couleur=couleur,
-        etat=etat,
-        commentaire=commentaire,
-        is_installe=is_installe,
-        tracabilite=tracabilite,
-        emplacement=emplacement,
-        image_url=f"/static/produits/{image_filename}",
-        user_id=parent_user_id
-    )
+    try:
+        # 📷 Enregistrement de l'image
+        ext = image.filename.split(".")[-1]
+        image_filename = f"{datetime.utcnow().timestamp()}.{ext}"
+        upload_dir = os.path.join(os.getcwd(), "upload", "produits")
+        os.makedirs(upload_dir, exist_ok=True)
+        image_path = os.path.join(upload_dir, image_filename)
+        with open(image_path, "wb") as buffer:
+            shutil.copyfileobj(image.file, buffer)
 
-    db.add(produit)
-    db.commit()
-    db.refresh(produit)
-    # Si des codes-barres ont été scannés, on les utilise
-    if scanned_barcodes:
-        unites = []
-        for code in scanned_barcodes:
-            unites.append(UniteProduit(
-                produit_id=produit.id,
-                tracabilite=None,
-                code_barre=code,
-                statut="disponible"
-            ))
-        db.add_all(unites)
+        # 🧱 Création du produit
+        produit = Produit(
+            nom=nom,
+            categorie_id=categorie_id,
+            prix_achat=prix_achat,
+            prix_vente=prix_vente,
+            fournisseur_id=fournisseur_id,
+            quantite=quantite,
+            rating=rating,
+            caracteristiques=caracteristiques,
+            couleur=couleur,
+            etat=etat,
+            commentaire=commentaire,
+            is_installe=is_installe,
+            tracabilite=tracabilite,
+            emplacement=emplacement,
+            image_url=f"/static/produits/{image_filename}",
+            user_id=parent_user_id,
+            a_des_barcodes=False
+        )
 
-    else:
-        # Sinon, on génère automatiquement N unités avec un code de traçabilité
-        for i in range(1, quantite + 1):
-            qr_code = f"TRAC-{produit.id}-{str(i).zfill(4)}"
-            unite = UniteProduit(
-                produit_id=produit.id,
-                tracabilite=qr_code,
-                code_barre=None, 
-                statut="disponible"
+        db.add(produit)
+        db.commit()
+        db.refresh(produit)
+
+        # 🔎 Création des unités
+        print("📦 Barcodes scannés :", scanned_barcodes)
+        if scanned_barcodes and len(scanned_barcodes) > 0:
+            unites = []
+            for code in scanned_barcodes:
+                exists = db.query(UniteProduit).filter(UniteProduit.code_barre == code).first()
+                if exists:
+                    print(f"⚠️ Doublon ignoré : {code}")
+                    continue
+
+                unites.append(UniteProduit(
+                    produit_id=produit.id,
+                    tracabilite=code,
+                    code_barre=code,
+                    statut="disponible"
+                ))
+
+            if unites:
+                db.add_all(unites)
+                produit.a_des_barcodes = True
+                db.commit()
+                db.refresh(produit)
+
+                log_action(
+                    db=db,
+                    current_user=current_user,
+                    action="Ajout produit avec codes-barres",
+                    type_entite="produit",
+                    entite_id=produit.id,
+                    details=f"{len(unites)} unités scannées ajoutées au produit {produit.nom}"
+                )
+
+        else:
+            # Génération automatique
+            for i in range(1, quantite + 1):
+                qr_code = f"TRAC-{produit.id}-{str(i).zfill(4)}"
+                unite = UniteProduit(
+                    produit_id=produit.id,
+                    tracabilite=qr_code,
+                    code_barre=None,
+                    statut="disponible"
+                )
+                db.add(unite)
+
+            db.commit()
+
+            log_action(
+                db=db,
+                current_user=current_user,
+                action="Ajout produit avec QR auto",
+                type_entite="produit",
+                entite_id=produit.id,
+                details=f"{quantite} unités générées avec QR pour produit {produit.nom}"
             )
-            db.add(unite)
 
+        return {"message": "Produit créé avec succès", "produit_id": produit.id}
 
-    db.commit()
+    except Exception as e:
+        db.rollback()
+        db.expunge_all()
+        print("❌ ERREUR lors de la création du produit :", str(e))
+        raise HTTPException(status_code=500, detail="Erreur lors de l'enregistrement du produit")
 
-
-    log_action(
-        db=db,
-        current_user=current_user,
-        action="Ajout produit avec unités",
-        type_entite="produit",
-        entite_id=produit.id,
-        details=f"{quantite} unités créées avec QR pour produit {produit.nom}"
-    )
-
-
-
-    return {"message": "Produit créé avec succès", "produit_id": produit.id}
 
 
 # 📋 Lister tous les produits actifs

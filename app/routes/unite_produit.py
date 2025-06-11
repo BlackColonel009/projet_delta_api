@@ -24,7 +24,10 @@ def add_unites_to_produit(
     current_user = Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    # 🔍 Récupérer le produit
     produit = db.query(Produit).filter(Produit.id == produit_id).first()
+    if not produit:
+        raise HTTPException(status_code=404, detail="Produit non trouvé")
     unites = db.query(UniteProduit).join(UniteProduit.produit).filter(
         UniteProduit.statut == "disponible",
         Produit.user_id == parent_user_id
@@ -32,17 +35,12 @@ def add_unites_to_produit(
     if not produit:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
     
-    # 🚫 Vérifie s’il y a déjà des unités avec code_barre
-    has_barcode_unit = db.query(UniteProduit).filter(
-        UniteProduit.produit_id == produit_id,
-        UniteProduit.code_barre.isnot(None)
-    ).first()
-
-    if has_barcode_unit:
-        raise HTTPException(
-            status_code=400,
-            detail="Impossible de créer des QR codes car des unités avec code-barres existent déjà pour ce produit."
-        )
+    # # 🚫 Vérification : si le produit contient déjà des codes-barres scannés
+    # if produit.a_des_barcodes:
+    #     raise HTTPException(
+    #         status_code=400,
+    #         detail="❌ Ce produit contient déjà des unités avec code-barres. L’ajout d’unités avec QR est désactivé pour éviter les conflits."
+    #     )
 
     created = []
     for i in range(1, data.nombre + 1):
