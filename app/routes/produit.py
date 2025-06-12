@@ -251,23 +251,30 @@ def delete_produit(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+
     produit = db.query(Produit).filter(Produit.id == produit_id).first()
     if not produit:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
+
+    # 🧼 Suppression logique du produit
     produit.date_suppression = datetime.utcnow()
+
+    # 🗑 Suppression physique des unités associées
+    db.query(UniteProduit).filter(UniteProduit.produit_id == produit.id).delete()
+
     db.commit()
 
     log_action(
         db=db,
         current_user=current_user,
-        action="Suppression Produit",
+        action="Suppression Produit + Unités",
         type_entite="produit",
         entite_id=produit.id,
-        details=f"Produit {produit.nom} supprimé logiquement"
+        details=f"Produit {produit.nom} supprimé logiquement, unités supprimées définitivement"
     )
 
+    return {"message": "Produit supprimé et unités effacées"}
 
-    return {"message": "Produit supprimé (logiquement)"}
 
 # 📋 Voir les produits supprimés
 @router.get("/supprimes", response_model=List[ProduitOut])
