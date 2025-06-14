@@ -47,11 +47,14 @@ def create_commande_vente(
     commande = CommandeVente(
         client_id=data.client_id,
         tva_appliquee=data.tva_appliquee,
-        user_id=parent_user_id
+        user_id=parent_user_id,
+        statut = data.statut
     )
     db.add(commande)
     db.commit()
     db.refresh(commande)
+    print("🧾 Statut reçu :", data.statut)
+
 
     total_ht = 0
 
@@ -180,7 +183,8 @@ def create_commande_achat(
     commande = CommandeAchat(
         fournisseur_id=data.fournisseur_id,
         tva_appliquee=data.tva_appliquee,
-        user_id=parent_user_id  # 🔐 Liaison sécurisée
+        user_id=parent_user_id,  # 🔐 Liaison sécurisée
+        statut = data.statut
     )
     db.add(commande)
     db.commit()

@@ -70,7 +70,7 @@ def export_client_produits_pdf(client_id: int, db: Session = Depends(get_db)):
         pdf.drawString(2 * cm, y, p.nom_produit or "-")
         pdf.drawString(8 * cm, y, p.categorie_produit or "-")
         pdf.drawRightString(14 * cm, y, str(p.quantite))
-        pdf.drawRightString(17 * cm, y, f"{p.prix_unitaire:.2f} €")
+        pdf.drawRightString(17 * cm, y, f"{p.prix_unitaire:.2f}")
         pdf.drawRightString(19 * cm, y, p.date_achat.strftime("%d/%m/%Y"))
         y -= 0.6 * cm
 

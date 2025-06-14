@@ -46,6 +46,8 @@ def create_paiement(
         if facture.type.value == "vente":
             commande = db.query(CommandeVente).filter(CommandeVente.id == facture.commande_id).first()
             if commande:
+                
+                commande.statut = "validée"
                 # ✅ Marquer toutes les unités liées comme vendues
                 unites = db.query(UniteProduit).filter(
                     UniteProduit.commande_vente_id == commande.id,
@@ -64,7 +66,12 @@ def create_paiement(
                         entite_id=unite.id,
                         details=f"Unité {unite.tracabilite} marquée comme vendue (facture #{facture.id})"
                     )
-
+        elif facture.type.value == "achat":
+            from app.models.model_commande import CommandeAchat
+            commande = db.query(CommandeAchat).filter(CommandeAchat.id == facture.commande_id).first()
+            if commande:
+                commande.statut = "validée"
+                
     elif total_paye > 0:
         facture.statut = "partielle"
     else:

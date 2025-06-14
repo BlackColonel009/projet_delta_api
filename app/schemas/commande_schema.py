@@ -12,6 +12,8 @@ class CommandeVenteCreate(BaseModel):
     client_id: int
     lignes: List[LigneCommandeVenteCreate]
     tva_appliquee: bool
+    statut: str = "en_attente"
+
 
 class LigneCommandeAchatCreate(BaseModel):
     produit_id: int
@@ -22,3 +24,4 @@ class CommandeAchatCreate(BaseModel):
     fournisseur_id: int
     lignes: List[LigneCommandeAchatCreate]
     tva_appliquee: bool
+    statut: str = "en_attente"

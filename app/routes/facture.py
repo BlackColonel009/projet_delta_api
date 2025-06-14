@@ -186,17 +186,17 @@ def valider_unites_apres_paiement(facture_id: int, db: Session = Depends(get_db)
 
 #Annuler la facture et remettre les unités en place
 @router.post("/{facture_id}/annuler", response_model=dict)
-def annuler_facture_vente(
+def annuler_facture(
     facture_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
+    from app.models.model_commande import CommandeVente, CommandeAchat
+    from app.models.model_unite_produit import UniteProduit
+
     facture = db.query(Facture).filter(Facture.id == facture_id).first()
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
-
-    if facture.type.value != "vente":
-        raise HTTPException(status_code=400, detail="Seules les factures de vente peuvent être annulées")
 
     if facture.statut == "annulée":
         raise HTTPException(status_code=400, detail="Cette facture a déjà été annulée")
@@ -205,38 +205,72 @@ def annuler_facture_vente(
     if not commande:
         raise HTTPException(status_code=404, detail="Commande associée non trouvée")
 
-    # ✅ Changer le statut de la facture
     facture.statut = "annulée"
 
-    # ✅ Réinitialiser les unités à "disponible"
-    unites = db.query(UniteProduit).filter(
-        UniteProduit.commande_vente_id == commande.id,
-        UniteProduit.statut == "vendu"
-    ).all()
+    # 🧾 Traitement selon le type de facture
+    if facture.type.value == "vente":
+        commande = db.query(CommandeVente).filter(CommandeVente.id == facture.commande_id).first()
+        if not commande:
+            raise HTTPException(status_code=404, detail="Commande de vente non trouvée")
 
-    for unite in unites:
-        unite.statut = "disponible"
-        unite.date_modification = datetime.utcnow()
+        commande.statut = "annulée"
 
-        log_action(
-            db=db,
-            current_user=current_user,
-            action="Annulation vente",
-            type_entite="unite_produit",
-            entite_id=unite.id,
-            details=f"Unité {unite.tracabilite} remise à disponible après annulation facture #{facture.id}"
-        )
+        # ✅ Réinitialiser les unités à "disponible"
+        unites = db.query(UniteProduit).filter(
+            UniteProduit.commande_vente_id == commande.id,
+            UniteProduit.statut.in_(["en cours", "vendu"])
+        ).all()
+
+        for unite in unites:
+            unite.statut = "disponible"
+            unite.date_modification = datetime.utcnow()
+
+            log_action(
+                db=db,
+                current_user=current_user,
+                action="Annulation vente",
+                type_entite="unite_produit",
+                entite_id=unite.id,
+                details=f"Unité {unite.tracabilite} remise à disponible après annulation facture #{facture.id}"
+            )
+
+    elif facture.type.value == "achat":
+        commande = db.query(CommandeAchat).filter(CommandeAchat.id == facture.commande_id).first()
+        if not commande:
+            raise HTTPException(status_code=404, detail="Commande d'achat non trouvée")
+
+        commande.statut = "annulée"
+        
+        # ✅ Supprimer les unités associées à cette commande
+        unites = db.query(UniteProduit).filter(
+            UniteProduit.commande_achat_id == commande.id
+        ).all()
+
+        for unite in unites:
+            log_action(
+                db=db,
+                current_user=current_user,
+                action="Suppression unité achat",
+                type_entite="unite_produit",
+                entite_id=unite.id,
+                details=f"Unité {unite.tracabilite} supprimée après annulation achat facture #{facture.id}"
+            )
+            db.delete(unite)
+
+    else:
+        raise HTTPException(status_code=400, detail="Type de facture non pris en charge")
 
     db.commit()
 
-    # 📝 Log global de l’annulation
+    # 📝 Log global
     log_action(
         db=db,
         current_user=current_user,
         action="Facture annulée",
         type_entite="facture",
         entite_id=facture.id,
-        details=f"Facture #{facture.id} annulée et unités remises en stock"
+        details=f"Facture #{facture.id} annulée (type : {facture.type.value})"
     )
 
     return {"message": f"Facture #{facture.id} annulée avec succès."}
+
