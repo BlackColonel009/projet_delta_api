@@ -43,16 +43,34 @@ def add_unites_to_produit(
     #     )
 
     created = []
-    for i in range(1, data.nombre + 1):
-        tracabilite = f"{data.prefixe}{produit_id}-{str(i).zfill(4)}"
-        unite = UniteProduit(
-            produit_id=produit.id,
-            tracabilite=tracabilite,
-            statut="disponible",
-            date_creation=datetime.utcnow()
-        )
-        db.add(unite)
-        created.append(tracabilite)
+    
+    if data.tracabilites:
+        # 🧠 Mode manuel : utiliser les tracabilités données
+        if len(data.tracabilites) != data.nombre:
+            raise HTTPException(status_code=400, detail="Le nombre de tracabilités fournies ne correspond pas à 'nombre'.")
+
+        for tracabilite in data.tracabilites:
+            unite = UniteProduit(
+                produit_id=produit.id,
+                tracabilite=tracabilite,
+                statut="disponible",
+                date_creation=datetime.utcnow()
+            )
+            db.add(unite)
+            created.append(tracabilite)
+
+    else:
+        # ⚙️ Mode automatique
+        for i in range(1, data.nombre + 1):
+            tracabilite = f"{data.prefixe}{produit_id}-{str(i).zfill(4)}"
+            unite = UniteProduit(
+                produit_id=produit.id,
+                tracabilite=tracabilite,
+                statut="disponible",
+                date_creation=datetime.utcnow()
+            )
+            db.add(unite)
+            created.append(tracabilite)
 
     db.commit()
 
@@ -62,7 +80,7 @@ def add_unites_to_produit(
         action="Ajout unités",
         type_entite="produit",
         entite_id=produit.id,
-        details=f"{data.nombre} unités créées avec QR pour produit {produit.nom}"
+        details=f"{data.nombre} unités ajoutées {'manuellement' if data.tracabilites else 'automatiquement'} pour produit {produit.nom}"
     )
 
     return {"message": "Unités ajoutées avec succès", "tracabilites": created}
@@ -79,7 +97,7 @@ def list_unites_for_produit(
     from app.models.model_unite_produit import UniteProduit
 
     unites = db.query(UniteProduit).join(UniteProduit.produit).filter(
-        UniteProduit.statut == "disponible",
+        UniteProduit.produit_id == produit_id,  # ✅ filtre ajouté
         Produit.user_id == parent_user_id
     ).all()
 
@@ -92,6 +110,7 @@ def list_unites_for_produit(
         }
         for u in unites
     ]
+
 
 #reccuperer unité disponible
 @router.get("/disponibles")  # ou /toutes si tu veux encore plus large

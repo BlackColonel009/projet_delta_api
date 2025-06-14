@@ -6,10 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
+from app.models.model_commande import CommandeVente
 from app.models.model_facture import Facture, LigneFacture
 from app.models.model_unite_produit import UniteProduit
 from app.schemas.facture_schema import FactureOut, FactureCreate
 from fastapi.responses import FileResponse
+from app.utils.logger import log_action
 from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
@@ -181,3 +183,60 @@ def valider_unites_apres_paiement(facture_id: int, db: Session = Depends(get_db)
                 unite.date_modification = datetime.utcnow()
     db.commit()
     return {"message": "Unités marquées comme vendues"}
+
+#Annuler la facture et remettre les unités en place
+@router.post("/{facture_id}/annuler", response_model=dict)
+def annuler_facture_vente(
+    facture_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
+):
+    facture = db.query(Facture).filter(Facture.id == facture_id).first()
+    if not facture:
+        raise HTTPException(status_code=404, detail="Facture non trouvée")
+
+    if facture.type.value != "vente":
+        raise HTTPException(status_code=400, detail="Seules les factures de vente peuvent être annulées")
+
+    if facture.statut == "annulée":
+        raise HTTPException(status_code=400, detail="Cette facture a déjà été annulée")
+
+    commande = db.query(CommandeVente).filter(CommandeVente.id == facture.commande_id).first()
+    if not commande:
+        raise HTTPException(status_code=404, detail="Commande associée non trouvée")
+
+    # ✅ Changer le statut de la facture
+    facture.statut = "annulée"
+
+    # ✅ Réinitialiser les unités à "disponible"
+    unites = db.query(UniteProduit).filter(
+        UniteProduit.commande_vente_id == commande.id,
+        UniteProduit.statut == "vendu"
+    ).all()
+
+    for unite in unites:
+        unite.statut = "disponible"
+        unite.date_modification = datetime.utcnow()
+
+        log_action(
+            db=db,
+            current_user=current_user,
+            action="Annulation vente",
+            type_entite="unite_produit",
+            entite_id=unite.id,
+            details=f"Unité {unite.tracabilite} remise à disponible après annulation facture #{facture.id}"
+        )
+
+    db.commit()
+
+    # 📝 Log global de l’annulation
+    log_action(
+        db=db,
+        current_user=current_user,
+        action="Facture annulée",
+        type_entite="facture",
+        entite_id=facture.id,
+        details=f"Facture #{facture.id} annulée et unités remises en stock"
+    )
+
+    return {"message": f"Facture #{facture.id} annulée avec succès."}

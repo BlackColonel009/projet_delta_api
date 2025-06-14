@@ -21,7 +21,7 @@ class ProduitCreate:
         etat: Optional[str] = Form("oui"),
         commentaire: Optional[str] = Form(None),
         is_installe: Optional[bool] = Form(False),
-        tracabilite: Optional[str] = Form(None),
+        # tracabilite: Optional[str] = Form(None),
         emplacement: Optional[str] = Form("magasin"),
         scanned_barcodes: Optional[List[str]] = Form(None),  # ✅ correction ici
     ):
@@ -37,7 +37,7 @@ class ProduitCreate:
         self.etat = etat
         self.commentaire = commentaire
         self.is_installe = is_installe
-        self.tracabilite = tracabilite
+        # self.tracabilite = tracabilite
         self.emplacement = emplacement
         self.scanned_barcodes = scanned_barcodes or []  # ✅ pour éviter None
 
@@ -57,7 +57,7 @@ class ProduitOut(BaseModel):
     etat: Optional[str]
     commentaire: Optional[str]
     is_installe: Optional[bool]
-    tracabilite: Optional[str]
+    # tracabilite: Optional[str]
     emplacement: Optional[str]
     image_url: Optional[str]
     date_creation: datetime

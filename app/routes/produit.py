@@ -1,3 +1,4 @@
+import json
 from fastapi import APIRouter, Depends, HTTPException, Body, File, Form, UploadFile 
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -17,27 +18,28 @@ import os
 
 router = APIRouter(prefix="/produits", tags=["Produits"])
 
-# ➕ Créer un produit avec image (multipart)
 @router.post("/", response_model=dict)
 def create_produit(
     nom: str = Form(...),
     categorie_id: int = Form(...),
     prix_achat: float = Form(...),
     prix_vente: float = Form(...),
-    fournisseur_id: Optional[int] = Form(None),
     quantite: int = Form(...),
+    fournisseur_id: Optional[int] = Form(None),
     rating: Optional[float] = Form(None),
     caracteristiques: Optional[str] = Form(None),
     couleur: Optional[str] = Form(None),
     etat: Optional[str] = Form("oui"),
     commentaire: Optional[str] = Form(None),
     is_installe: Optional[bool] = Form(False),
-    tracabilite: Optional[str] = Form(None),
     emplacement: Optional[str] = Form("magasin"),
     image: UploadFile = File(...),
-    scanned_barcodes: Optional[List[str]] = Form(None),
+    # scanned_barcodes: Optional[List[str]] = Form(None),
+    scanned_barcodes_raw: Optional[str] = Form(None),
+
+    # nombre_unites: Optional[int] = Form(0),  # ✅ nouveau champ pour auto
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
+    current_user = Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
 
@@ -51,7 +53,7 @@ def create_produit(
         with open(image_path, "wb") as buffer:
             shutil.copyfileobj(image.file, buffer)
 
-        # 🧱 Création du produit
+        # 🧱 Création du produit (sans champ quantite ni tracabilite)
         produit = Produit(
             nom=nom,
             categorie_id=categorie_id,
@@ -65,7 +67,6 @@ def create_produit(
             etat=etat,
             commentaire=commentaire,
             is_installe=is_installe,
-            tracabilite=tracabilite,
             emplacement=emplacement,
             image_url=f"/static/produits/{image_filename}",
             user_id=parent_user_id,
@@ -75,9 +76,17 @@ def create_produit(
         db.add(produit)
         db.commit()
         db.refresh(produit)
+        
+        # Parse les codes-barres s'ils existent
+        scanned_barcodes = []
+        if scanned_barcodes_raw:
+            try:
+                scanned_barcodes = json.loads(scanned_barcodes_raw)
+            except:
+                raise HTTPException(status_code=400, detail="Format JSON invalide pour scanned_barcodes")
 
-        # 🔎 Création des unités
-        print("📦 Barcodes scannés :", scanned_barcodes)
+
+        # 🔍 Gestion des unités : SCAN manuel
         if scanned_barcodes and len(scanned_barcodes) > 0:
             unites = []
             for code in scanned_barcodes:
@@ -96,6 +105,10 @@ def create_produit(
             if unites:
                 db.add_all(unites)
                 produit.a_des_barcodes = True
+                
+                # ✅ AJOUTE CETTE LIGNE ICI
+                produit.quantite = len(unites)
+                
                 db.commit()
                 db.refresh(produit)
 
@@ -108,9 +121,9 @@ def create_produit(
                     details=f"{len(unites)} unités scannées ajoutées au produit {produit.nom}"
                 )
 
-        else:
-            # Génération automatique
-            for i in range(1, quantite + 1):
+        # ⚙️ Sinon : génération automatique par nombre
+        elif quantite  > 0:
+            for i in range(1, quantite  + 1):
                 qr_code = f"TRAC-{produit.id}-{str(i).zfill(4)}"
                 unite = UniteProduit(
                     produit_id=produit.id,
@@ -138,6 +151,7 @@ def create_produit(
         db.expunge_all()
         print("❌ ERREUR lors de la création du produit :", str(e))
         raise HTTPException(status_code=500, detail="Erreur lors de l'enregistrement du produit")
+
 
 
 
@@ -186,17 +200,18 @@ def update_produit(
     etat: Optional[str] = Form("oui"),
     commentaire: Optional[str] = Form(None),
     is_installe: Optional[bool] = Form(False),
-    tracabilite: Optional[str] = Form(None),
+    # tracabilite: Optional[str] = Form(None),
     emplacement: Optional[str] = Form("magasin"),
+    scanned_barcodes: Optional[str] = Form(None),  # format JSON
     image: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    
     produit = db.query(Produit).filter(Produit.id == produit_id).first()
     if not produit:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
 
+    # 📷 Mise à jour de l'image si fournie
     if image:
         if produit.image_url:
             old_path = produit.image_url.replace("/static", "upload")
@@ -212,7 +227,7 @@ def update_produit(
             shutil.copyfileobj(image.file, buffer)
         produit.image_url = f"/static/produits/{image_filename}"
 
-    # Mettre à jour les autres champs
+    # 📝 Mise à jour des champs
     produit.nom = nom
     produit.categorie_id = categorie_id
     produit.prix_achat = prix_achat
@@ -225,9 +240,41 @@ def update_produit(
     produit.etat = etat
     produit.commentaire = commentaire
     produit.is_installe = is_installe
-    produit.tracabilite = tracabilite
+    # produit.tracabilite = tracabilite
     produit.emplacement = emplacement
     produit.date_modification = datetime.utcnow()
+
+    # ➕ Ajout de nouveaux codes-barres si fournis
+    if scanned_barcodes:
+        try:
+            barcodes = json.loads(scanned_barcodes)
+            new_count = 0
+            for code in barcodes:
+                exists = db.query(UniteProduit).filter(UniteProduit.code_barre == code).first()
+                if not exists:
+                    new_unite = UniteProduit(
+                        produit_id=produit.id,
+                        tracabilite=code,
+                        code_barre=code,
+                        statut="disponible"
+                    )
+                    db.add(new_unite)
+                    new_count += 1
+
+            if new_count > 0:
+                produit.a_des_barcodes = True
+                produit.quantite += new_count
+
+                log_action(
+                    db=db,
+                    current_user=current_user,
+                    action="Ajout unités lors update",
+                    type_entite="produit",
+                    entite_id=produit.id,
+                    details=f"{new_count} unités ajoutées manuellement (update)"
+                )
+        except:
+            raise HTTPException(status_code=400, detail="Format JSON invalide pour scanned_barcodes")
 
     db.commit()
 
@@ -239,7 +286,6 @@ def update_produit(
         entite_id=produit.id,
         details=f"Produit de nom: {produit.nom} mis à jour (avec ou sans image)"
     )
-
 
     return {"message": "Produit modifié avec succès."}
 
@@ -338,4 +384,15 @@ def scan_qr_code(
             "message": "Produit non trouvé. Voulez-vous l'ajouter ?"
         }
         
-        
+#Stock d'un produit
+@router.get("/{produit_id}/stock-disponible", response_model=dict)
+def get_stock_disponible(produit_id: int, db: Session = Depends(get_db)):
+    total = db.query(UniteProduit).filter(UniteProduit.produit_id == produit_id).count()
+    disponible = db.query(UniteProduit).filter(
+        UniteProduit.produit_id == produit_id,
+        UniteProduit.statut == "disponible"
+    ).count()
+    return {"stock_total": total, "stock_reel": disponible}
+
+
+

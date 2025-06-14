@@ -25,7 +25,7 @@ class Produit(Base):
     etat = Column(String, default="oui")  # oui ou non
     commentaire = Column(Text, nullable=True)
     is_installe = Column(Boolean, default=False)
-    tracabilite = Column(String, nullable=True)  # lien vers code QR
+    # tracabilite = Column(String, nullable=True)  # lien vers code QR
     emplacement = Column(String, default="magasin")
     image_url = Column(String, nullable=True)
     stock_min = Column(Integer, default=0)

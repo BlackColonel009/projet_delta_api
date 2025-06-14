@@ -7,6 +7,7 @@ from datetime import datetime
 class AddUnitesRequest(BaseModel):
     nombre: int
     prefixe: str = "TRAC-"
+    tracabilites: Optional[List[str]] = None
 
 # Schéma pour création manuelle si besoin
 class UniteProduitCreate(BaseModel):
