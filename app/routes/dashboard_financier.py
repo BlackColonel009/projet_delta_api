@@ -1,7 +1,7 @@
 from typing import List
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from sqlalchemy import func, extract
+from sqlalchemy import func, extract, text
 from datetime import datetime
 from app.database import get_db
 from app.models.model_commande import CommandeVente, CommandeAchat
@@ -92,7 +92,9 @@ def benefice_brut(
     # 2. Calcule du total TTC & coût des achats (basé sur le prix_achat unitaire)
     for ligne in lignes:
         total_ventes += ligne.total_ligne
-        prix_achat = ligne.produit.prix_achat if ligne.produit and ligne.produit.prix_achat else 0
+        produit = db.query(Produit).filter(Produit.id == ligne.produit_id).first()
+        prix_achat = produit.prix_achat if produit and produit.prix_achat is not None else 0
+
         cout_achats_estimes += prix_achat * ligne.quantite
 
     return {
@@ -122,6 +124,25 @@ def tva_collectee(
     )
     return {"tva_collectee": float(total_tva)}
 
+# @router.get("/tva-sql-brute")
+# def tva_sql_brute(
+#     db: Session = Depends(get_db),
+#     current_user=Depends(get_current_user)
+# ):
+#     query = text("""
+#         SELECT SUM(f.tva)
+#         FROM factures f
+#         JOIN commandes_ventes cv ON f.commande_id = cv.id
+#         WHERE f.user_id = :user_id
+#         AND f.type = 'vente'
+#         AND f.statut = 'payée'
+#         AND cv.statut = 'validée'
+#     """)
+    
+#     result = db.execute(query, {"user_id": current_user.id}).scalar() or 0
+
+#     return {"tva_collectee_sql": float(result)}
+
 
 # ➡ Clients en retard de paiement
 @router.get("/clients-en-retard")
@@ -132,7 +153,7 @@ def clients_en_retard(
     factures = db.query(Facture).filter(
         Facture.type == "vente",
         Facture.user_id == current_user.id,
-        Facture.statut != "payée"
+        Facture.statut.notin_(["payée", "annulée"])
     ).all()
 
     result = []
@@ -222,7 +243,8 @@ def benefice_net(
 
     for ligne in ventes:
         total_ventes += ligne.total_ligne
-        cout_unitaire = ligne.produit.prix_achat if ligne.produit and ligne.produit.prix_achat else 0
+        produit = db.query(Produit).filter(Produit.id == ligne.produit_id).first()
+        cout_unitaire = produit.prix_achat if produit and produit.prix_achat is not None else 0
         cout_achat_total += cout_unitaire * ligne.quantite
 
     # 3. Dépenses classiques
@@ -261,35 +283,86 @@ def depenses_par_categorie(
 @router.get("/overview")
 def dashboard_overview(
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.caissier, RoleEnum.comptable]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable]))
 ):
-    total_ventes = db.query(func.sum(CommandeVente.total_ttc)).filter(
-        CommandeVente.user_id == current_user.id,
-        CommandeVente.statut == "validée"
-    ).scalar() or 0
+    from app.models.model_commande import CommandeVente, CommandeAchat, LigneCommandeVente
+    from app.models.model_produit import Produit
 
+    # Ventes validées
+    ventes = (
+        db.query(LigneCommandeVente)
+        .join(CommandeVente)
+        .filter(CommandeVente.user_id == current_user.id, CommandeVente.statut == "validée")
+        .all()
+    )
+
+    # Total ventes TTC + coût d’achat estimé
+    total_ventes = 0
+    cout_achat_total = 0
+
+    for ligne in ventes:
+        total_ventes += ligne.total_ligne
+        produit = db.query(Produit).filter(Produit.id == ligne.produit_id).first()
+        cout_unitaire = produit.prix_achat if produit and produit.prix_achat is not None else 0
+        cout_achat_total += cout_unitaire * ligne.quantite
+
+    # Achats validés
     total_achats = db.query(func.sum(CommandeAchat.total_ttc)).filter(
         CommandeAchat.user_id == current_user.id,
         CommandeAchat.statut == "validée"
     ).scalar() or 0
 
-    total_depenses = db.query(func.sum(Depense.montant)).filter(Depense.user_id == current_user.id).scalar() or 0
-    benefice_brut = total_ventes - total_achats
-    benefice_net = total_ventes - total_achats - total_depenses
-    tva_collectee = db.query(func.sum(Facture.tva)).filter(Facture.user_id == current_user.id).scalar() or 0
-    factures_clients_retard = db.query(Facture).filter(Facture.type == "vente", Facture.user_id == current_user.id, Facture.statut != "payée").count()
-    factures_fournisseurs_retard = db.query(Facture).filter(Facture.type == "achat", Facture.user_id == current_user.id, Facture.statut != "payée").count()
+    # Dépenses
+    total_depenses = db.query(func.sum(Depense.montant)).filter(
+        Depense.user_id == current_user.id
+    ).scalar() or 0
+
+    # TVA collectée uniquement sur factures payées + commandes validées
+    query = text("""
+        SELECT SUM(f.tva)
+        FROM factures f
+        JOIN commandes_ventes cv ON f.commande_id = cv.id
+        WHERE f.user_id = :user_id
+        AND f.type = 'vente'
+        AND f.statut = 'payée'
+        AND cv.statut = 'validée'
+    """)
+    tva_collectee = db.execute(query, {"user_id": current_user.id}).scalar() or 0
+
+    # Clients en retard (non payées & non annulées avec reste à payer)
+    factures_clients_retard = db.query(Facture).filter(
+        Facture.type == "vente",
+        Facture.user_id == current_user.id,
+        Facture.statut.notin_(["payée", "annulée"])
+    ).all()
+    clients_en_retard = sum(
+        1 for f in factures_clients_retard
+        if f.total_ttc - sum(p.montant for p in f.paiements) > 0
+    )
+
+    # Fournisseurs à payer
+    factures_fournisseurs = db.query(Facture).filter(
+        Facture.type == "achat",
+        Facture.user_id == current_user.id,
+        Facture.statut != "payée"
+    ).all()
+    fournisseurs_a_payer = sum(
+        1 for f in factures_fournisseurs
+        if f.total_ttc - sum(p.montant for p in f.paiements) > 0
+    )
 
     return {
         "ventes": float(total_ventes),
         "achats": float(total_achats),
         "depenses": float(total_depenses),
-        "benefice_brut": float(benefice_brut),
-        "benefice_net": float(benefice_net),
+        "benefice_brut": float(total_ventes - cout_achat_total),
+        "benefice_net": float(total_ventes - cout_achat_total - total_depenses),
         "tva_collectee": float(tva_collectee),
-        "clients_en_retard": factures_clients_retard,
-        "fournisseurs_a_payer": factures_fournisseurs_retard,
+        "clients_en_retard": clients_en_retard,
+        "fournisseurs_a_payer": fournisseurs_a_payer,
     }
+
+
 # ******************ROUTES DE V & A ANNULEE**************
 
 @router.get("/vente/annulees", response_model=List[dict])

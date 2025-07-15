@@ -8,9 +8,30 @@ from jinja2 import Environment, select_autoescape, FileSystemLoader
 from xhtml2pdf import pisa
 from fastapi_mail import FastMail, MessageSchema, MessageType
 from app.models.model_facture import Facture, LigneFacture
+from app.models.model_unite_produit import UniteProduit
 from app.models.model_user import SubUser, User
 from app.config import conf, settings
 from app.utils.security import get_current_sub_user
+from datetime import datetime
+import re
+import tempfile
+
+
+from app.models.model_facture import TypeFacture  # Assure-toi que cet import est présent
+
+import json
+
+def safe_parse_caracteristiques(caract):
+    if isinstance(caract, str):
+        try:
+            return json.loads(caract)
+        except Exception:
+            # Ce n'est pas un JSON valide, on garde la chaîne brute (string)
+            return caract
+    elif caract is None:
+        return {}
+    else:
+        return caract
 
 
 def generate_facture_from_commande(
@@ -21,8 +42,14 @@ def generate_facture_from_commande(
 ):
     sub_user_id = current_sub.id if current_sub else None
 
+    # Définition sécurisée de type_enum à partir de commande.statut ou fallback
+    if isinstance(commande.statut, str) and commande.statut in TypeFacture._value2member_map_:
+        type_enum = TypeFacture(commande.statut)
+    else:
+        type_enum = TypeFacture(commande_type)
+
     facture = Facture(
-        type=commande_type,
+        type=type_enum,
         client_id=commande.client_id if commande_type == "vente" else None,
         fournisseur_id=commande.fournisseur_id if commande_type == "achat" else None,
         total_ht=commande.total_ht,
@@ -49,15 +76,14 @@ def generate_facture_from_commande(
 
     db.commit()
 
-    # Générer et stocker le PDF temporairement
-    tmp_path = generate_facture_pdf(facture)
+    tmp_path = generate_facture_pdf(facture, db)
 
-    if commande_type == "vente" and facture.client and facture.client.email:
+    if type_enum in [TypeFacture.vente, TypeFacture.proforma] and facture.client and facture.client.email:
         fm = FastMail(conf)
         message = MessageSchema(
-            subject=f"Votre facture #{facture.id}",
+            subject=f"Votre {type_enum.value.upper()} #{facture.id}",
             recipients=[facture.client.email],
-            body=f"Bonjour {facture.client.nom},\n\nVeuillez trouver votre facture #{facture.id} d'un montant total de {facture.total_ttc:.2f} {facture.devise}.\nMerci pour votre confiance.",
+            body=f"Bonjour {facture.client.nom},\n\nVeuillez trouver votre {type_enum.value.upper()} #{facture.id} d'un montant total de {facture.total_ttc:.2f} {facture.devise}.\nMerci pour votre confiance.",
             subtype=MessageType.plain,
             attachments=[tmp_path]
         )
@@ -70,9 +96,40 @@ def generate_facture_from_commande(
     os.remove(tmp_path)
     return facture
 
+from num2words import num2words
 
-def generate_facture_pdf(facture):
-    devise = facture.user.devise or "€"
+def montant_to_words(montant: float, devise="FCFA"):
+    devise_lettres = {
+        "FCFA": "francs CFA",
+        "XOF": "francs CFA",
+        "EUR": "euros",
+        "€": "euros",
+        "USD": "dollars",
+        "$": "dollars",
+        "GBP": "livres sterling",
+        "£": "livres sterling",
+        "JPY": "yens",
+        "¥": "yens",
+        "CAD": "dollars canadiens",
+        "AUD": "dollars australiens",
+        "CHF": "francs suisses",
+        "CNY": "yuans chinois",
+        "INR": "roupies indiennes",
+        "RUB": "roubles russes",
+        "BRL": "réals brésiliens",
+        "ZAR": "rands sud-africains",
+    }
+    try:
+        mots = num2words(montant, lang='fr')
+        devise_texte = devise_lettres.get(devise.upper(), devise)
+        return mots.capitalize() + f" {devise_texte}"
+    except Exception:
+        return f"{montant:.2f} {devise}"
+
+
+def generate_facture_pdf(facture, db: Session ):
+    devise = facture.user.devise or "XOF"
+    montant_en_lettres = montant_to_words(facture.total_ttc, devise)
     logo_url = f"{settings.DOMAIN}{facture.user.logo_entreprise}" if facture.user.logo_entreprise else "file:///absolute/path/to/logo.png"
 
     env = Environment(
@@ -89,23 +146,95 @@ def generate_facture_pdf(facture):
         "poste": "Administrateur"
     }
 
+    import json
+
+    # Convertir les caractéristiques de chaque ligne en dict (si possible)
+    # 🔁 Normalisation des données ligne par ligne
+   # 🧠 Ajout manuel des unités concernées pour chaque ligne
+    for ligne in facture.lignes:
+        produit = ligne.produit
+        if produit:
+            caract = produit.caracteristiques
+            print("🔍 Produit:", produit.nom)
+            print("📦 Type de caracteristiques:", type(caract))
+            print("📄 Valeur de caracteristiques:", caract)
+
+            # Assigner les unités concernées (liées à la commande vente)
+            ligne.unites = db.query(UniteProduit).filter(
+                UniteProduit.produit_id == produit.id,
+                UniteProduit.commande_vente_id == facture.commande_id
+            ).all()
+
+            # Utiliser la fonction safe pour parser ou garder string
+            produit.caracteristiques = safe_parse_caracteristiques(produit.caracteristiques)
+
+
+    # Exemple de couleur principale enregistrée
+    main_color = facture.user.facture_color or "#5C6BC0"
+
+    # Générer des variantes plus claires si tu veux (optionnel)
+    def lighten(hex_color, factor=0.85):
+        hex_color = hex_color.lstrip("#")
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+        r = min(int(r + (255 - r) * factor), 255)
+        g = min(int(g + (255 - g) * factor), 255)
+        b = min(int(b + (255 - b) * factor), 255)
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+
+
     html_content = template.render(
         devise=devise,
         facture=facture,
         societe={
             "nom": facture.user.societe_ou_entreprise,
             "adresse": facture.user.addresse or "",# ✅ corrigé ici
+            "nif": facture.user.nif or "",  # ✅ corrigé ici
+            "tva": facture.user.tva or 0.18,  # ✅ corrigé ici
             "telephone": facture.user.telephone,
             "email": facture.user.email
         },
         vendeur=vendeur,
-        logo_url=logo_url
+        logo_url=logo_url,
+        montant_en_lettres=montant_en_lettres,
+        color_background=lighten(main_color, 0.9),
+        color_text=main_color,
+        color_highlight=lighten(main_color, 0.8),
     )
 
     buffer = BytesIO()
     pisa.CreatePDF(html_content, dest=buffer)
     buffer.seek(0)
 
-    with NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        tmp.write(buffer.getvalue())
-        return tmp.name
+
+
+    
+
+    # Récupérer le dossier temporaire correct (Windows/Linux/Mac)
+    temp_dir = tempfile.gettempdir()
+
+    # Nettoyer nom du client
+    client_nom = (
+        re.sub(r'\W+', '_', facture.client.nom.strip()) if facture.client else "SansClient"
+    )
+
+    # Type de facture
+    facture_type = facture.type or "facture"
+
+    # Date/heure
+    date_str = datetime.now().strftime("%Y%m%d_%H%M")
+
+    # Nom final
+    filename = f"{facture_type}_{client_nom}_{date_str}.pdf"
+
+    # Chemin final du fichier
+    temp_path = os.path.join(temp_dir, filename)
+
+    # Sauvegarde PDF
+    with open(temp_path, "wb") as f:
+        f.write(buffer.getvalue())
+
+    return temp_path
+

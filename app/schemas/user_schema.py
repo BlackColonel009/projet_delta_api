@@ -30,6 +30,10 @@ class MainUserData(BaseModel):
     societe_ou_entreprise: Optional[str]
     logo_entreprise: Optional[str]
     devise: Optional[str]
+    tva: Optional[float]
+    nif: Optional[str]
+    addresse: Optional[str]
+    facture_color: Optional[str] 
 
 class UserLogin(BaseModel):
     email: EmailStr

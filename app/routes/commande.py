@@ -12,6 +12,7 @@ from app.models.model_client import Client
 from app.models.model_fournisseur import Fournisseur
 from app.models.model_commande import CommandeVente, LigneCommandeVente, CommandeAchat, LigneCommandeAchat
 from app.models.model_unite_produit import UniteProduit
+from app.models.model_user import User
 from app.services.generate_facture_from_commande import generate_facture_from_commande, generate_facture_pdf
 from app.schemas.commande_schema import CommandeVenteCreate, CommandeAchatCreate
 from app.utils.security import get_current_user
@@ -88,41 +89,43 @@ def create_commande_vente(
         )
         db.add(ligne_commande)
 
-        # Si des codes QR sont fournis, on les valide et on les marque comme vendus
-        if ligne_data.codes:
-            for code in ligne_data.codes:
-                unite = db.query(UniteProduit).filter(
-                    UniteProduit.tracabilite == code,
+        if data.statut == "en_attente":
+            # Si des codes QR sont fournis, on les valide et on les marque comme vendus
+            if ligne_data.codes:
+                print("codes reçus:", ligne_data.codes)
+                for code in ligne_data.codes:
+                    unite = db.query(UniteProduit).filter(
+                        UniteProduit.tracabilite == code,
+                        UniteProduit.produit_id == produit.id,
+                        UniteProduit.statut == "disponible"
+                    ).first()
+                    if not unite:
+                        raise HTTPException(status_code=400, detail=f"Unité avec code {code} non trouvée ou déjà utilisée")
+                    unite.statut = "en cours"
+                    unite.commande_vente_id = commande.id
+                    unite.date_modification = datetime.utcnow()
+
+            # Si aucun code QR n’est fourni, affecte automatiquement les unités disponibles
+            else:
+                unites_dispo = db.query(UniteProduit).filter(
                     UniteProduit.produit_id == produit.id,
                     UniteProduit.statut == "disponible"
-                ).first()
-                if not unite:
-                    raise HTTPException(status_code=400, detail=f"Unité avec code {code} non trouvée ou déjà utilisée")
-                unite.statut = "en cours"
-                unite.commande_vente_id = commande.id
-                unite.date_modification = datetime.utcnow()
+                ).limit(ligne_data.quantite).all()
 
-        # Si aucun code QR n’est fourni, affecte automatiquement les unités disponibles
-        else:
-            unites_dispo = db.query(UniteProduit).filter(
+                if len(unites_dispo) < ligne_data.quantite:
+                    raise HTTPException(status_code=400, detail=f"Pas assez d'unités disponibles pour {produit.nom}")
+
+                for unite in unites_dispo:
+                    unite.statut = "en cours"
+                    unite.commande_vente_id = commande.id
+                    unite.date_modification = datetime.utcnow()
+                    
+            # 🔁 Mise à jour du stock disponible APRÈS modification des unités
+            quantite_restante = db.query(UniteProduit).filter(
                 UniteProduit.produit_id == produit.id,
                 UniteProduit.statut == "disponible"
-            ).limit(ligne_data.quantite).all()
-
-            if len(unites_dispo) < ligne_data.quantite:
-                raise HTTPException(status_code=400, detail=f"Pas assez d'unités disponibles pour {produit.nom}")
-
-            for unite in unites_dispo:
-                unite.statut = "en cours"
-                unite.commande_vente_id = commande.id
-                unite.date_modification = datetime.utcnow()
-                
-        # 🔁 Mise à jour du stock disponible APRÈS modification des unités
-        quantite_restante = db.query(UniteProduit).filter(
-            UniteProduit.produit_id == produit.id,
-            UniteProduit.statut == "disponible"
-        ).count()
-        produit.quantite = quantite_restante    
+            ).count()
+            produit.quantite = quantite_restante    
                 
         # 🧠 Création d'un enregistrement ClientProduit
         client_produit = ClientProduit(
@@ -141,8 +144,15 @@ def create_commande_vente(
     
 
     # Calcul des totaux de la commande
+    if not current_user.is_main_user:
+        taux_tva = current_user.tva
+    else:
+        taux_tva = current_user.tva
+
+    taux_tva = taux_tva or 0.0
+
     commande.total_ht = total_ht
-    commande.tva = 0.18 * total_ht if data.tva_appliquee else 0
+    commande.tva = taux_tva * total_ht if data.tva_appliquee else 0
     commande.total_ttc = total_ht + commande.tva
 
     db.commit()
@@ -152,7 +162,7 @@ def create_commande_vente(
     log_action(
         db=db,
         current_user=current_user,
-        action="Vente Effectuer",
+        action="Bordereau de vente ou de Livrable Effectuer",
         type_entite="commande_vente",
         entite_id=commande.id,
         details=f"Commande #{commande.id} pour Client {client.nom} — Total TTC: {commande.total_ttc:.2f} {current_user.devise}"
@@ -160,7 +170,7 @@ def create_commande_vente(
 
     # Génération et exportation de la facture en PDF
     facture = generate_facture_from_commande(db, commande, "vente")
-    tmp_path = generate_facture_pdf(facture)
+    tmp_path = generate_facture_pdf(facture, db)
     filename = os.path.basename(tmp_path)
 
     return {"message": "Commande vente creee", "commande_id": commande.id, "facture": filename}
@@ -236,12 +246,16 @@ def create_commande_achat(
             )
             db.add(unite)
 
+    taux_tva = current_user.main_user.tva if not current_user.is_main_user else current_user.tva
+    taux_tva = taux_tva or 0.0
+
     commande.total_ht = total_ht
-    commande.tva = 0.18 * total_ht if data.tva_appliquee else 0
+    commande.tva = taux_tva * total_ht if data.tva_appliquee else 0
     commande.total_ttc = total_ht + commande.tva
 
     db.commit()
     db.refresh(commande)
+
     
     log_action(
         db=db,

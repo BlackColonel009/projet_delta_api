@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey
+from sqlalchemy import Column, Float, Integer, String, Boolean, ForeignKey
 from sqlalchemy.orm import relationship
 from app.database import Base
 from sqlalchemy import DateTime
@@ -22,7 +22,11 @@ class User(Base):
     telephone = Column(String, nullable=True)
     logo_entreprise = Column(String, nullable=True)
     addresse = Column(String, nullable=True)
+    nif = Column(String, unique=True, nullable=True)
+    tva = Column(Float, default=0.18, nullable=False)  # par exemple 18%
     parent_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    facture_color = Column(String, default="#5C6BC0")  # Par exemple un bleu doux
+
 
     sub_users = relationship("SubUser", back_populates="parent_user", cascade="all, delete")
 
@@ -44,6 +48,9 @@ class SubUser(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     telephone = Column(String, nullable=True)
     devise = Column(String(10), nullable=True)
+    tva = Column(Float, default=0.18, nullable=False)  # par exemple 18%
+    nif = Column(String, unique=True, nullable=True)
+    addresse = Column(String, nullable=True)
 
 
     parent_user_id = Column(Integer, ForeignKey("users.id"))

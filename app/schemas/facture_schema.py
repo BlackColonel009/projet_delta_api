@@ -4,6 +4,8 @@ from datetime import datetime
 from app.models.model_facture import TypeFacture
 from app.schemas.client_schema import ClientOut
 from app.schemas.fournisseur_schema import FournisseurOut
+from app.schemas.produit_schema import ProduitOut
+from app.schemas.unite_produit_schema import UniteProduitOut
 # 🧾 Schemas
 class LigneFactureIn(BaseModel):
     produit_id: int
@@ -21,9 +23,20 @@ class FactureCreate(BaseModel):
     devise: str = "FCFA"
 
 
-class LigneFactureOut(LigneFactureIn):
+# class LigneFactureOut(LigneFactureIn):
+#     id: int
+#     total_ligne: float
+#     produit: Optional[dict]  # on garde produit simplifié (nom, caracs)
+#     unites: List[UniteProduitOut]  # ⚠️ ajouté ici
+
+class LigneFactureOut(BaseModel):
     id: int
+    description: str
+    quantite: int
+    prix_unitaire: float
     total_ligne: float
+    produit: Optional[dict] = None  # nom + caracs
+    unites: List[UniteProduitOut] = []
 
     class Config:
         from_attributes = True
@@ -44,6 +57,7 @@ class FactureOut(BaseModel):
     tva: float
     lignes: List[LigneFactureOut]
     total_paye: float
+    
 
     class Config:
         from_attributes = True

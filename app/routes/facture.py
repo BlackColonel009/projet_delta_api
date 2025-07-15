@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
 from app.models.model_commande import CommandeVente
-from app.models.model_facture import Facture, LigneFacture
+from app.models.model_facture import Facture, LigneFacture, TypeFacture
+from app.models.model_produit import Produit
 from app.models.model_unite_produit import UniteProduit
 from app.schemas.facture_schema import FactureOut, FactureCreate
 from fastapi.responses import FileResponse
@@ -63,29 +64,114 @@ def create_facture(
     db.refresh(facture)
     return facture
 
+#changer le type de la facture
+@router.patch("/{facture_id}/type", response_model=dict)
+def update_facture_type(
+    facture_id: int,
+    nouveau_type: TypeFacture,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([
+        RoleEnum.admin, 
+        RoleEnum.gestionnaire_stock
+    ]))
+):
+    facture = db.query(Facture).filter(Facture.id == facture_id).first()
+
+    if not facture:
+        raise HTTPException(status_code=404, detail="Facture non trouvée")
+
+    ancien_type = facture.type
+    facture.type = nouveau_type
+    db.commit()
+
+    return {
+        "message": f"Type de la facture #{facture_id} mis à jour de '{ancien_type.value}' à '{nouveau_type.value}'"
+    }
+
+
 # 🔍 Lire une facture avec ses lignes
 # 🔍 Lire une facture avec ses lignes
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session, joinedload, selectinload
+
+
 @router.get("/{facture_id}", response_model=FactureOut)
 def get_facture(
     facture_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock , RoleEnum.commercial]))
+    current_user=Depends(check_role([
+        RoleEnum.admin,
+        RoleEnum.gestionnaire_stock,
+        RoleEnum.commercial
+    ]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = (
+        current_user.parent_user_id
+        if not current_user.is_main_user
+        else current_user.id
+    )
 
     facture = db.query(Facture)\
-        .options(joinedload(Facture.fournisseur), joinedload(Facture.client))\
+        .options(
+            joinedload(Facture.fournisseur),
+            joinedload(Facture.client),
+            joinedload(Facture.lignes)
+                .joinedload(LigneFacture.produit)
+                .joinedload(Produit.unites)
+        )\
         .filter(
             Facture.id == facture_id,
             Facture.user_id == parent_user_id
         )\
         .first()
 
-
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
 
-    total_paye = sum(p.montant for p in facture.paiements)  # Assure-toi que la relation existe
+    # Récupérer toutes les unités liées à la commande vente (si facture liée)
+    all_unites = []
+    if facture.commande_id:
+        all_unites = db.query(UniteProduit).filter(
+            UniteProduit.commande_vente_id == facture.commande_id
+        ).order_by(UniteProduit.id).all()
+
+    index_unites = 0
+    lignes_data = []
+
+    for ligne in facture.lignes:
+        produit = ligne.produit
+        quantite = ligne.quantite or 0
+
+        # Prendre uniquement les unités correspondantes à la quantité de la ligne
+        unites_for_line = all_unites[index_unites : index_unites + quantite]
+        index_unites += quantite
+
+        lignes_data.append({
+            "id": ligne.id,
+            "description": ligne.description,
+            "quantite": quantite,
+            "prix_unitaire": ligne.prix_unitaire,
+            "total_ligne": ligne.total_ligne,
+            "produit": {
+                "id": produit.id,
+                "nom": produit.nom,
+                "caracteristiques": produit.caracteristiques or {}
+            } if produit else None,
+            "unites": [
+                {
+                    "id": u.id,
+                    "produit_id": u.produit_id,
+                    "tracabilite": u.tracabilite,
+                    "code_barre": u.code_barre,
+                    "statut": u.statut,
+                    "date_creation": u.date_creation,
+                    "date_modification": u.date_modification,
+                }
+                for u in unites_for_line
+            ]
+        })
+
+    total_paye = sum(p.montant for p in facture.paiements)
 
     return {
         "id": facture.id,
@@ -99,11 +185,10 @@ def get_facture(
         "remarques": facture.remarques,
         "total_ht": facture.total_ht,
         "total_ttc": facture.total_ttc,
-        "total_paye": sum(p.montant for p in facture.paiements),  # ✅ injecté ici
+        "total_paye": total_paye,
         "tva": facture.tva,
-        "lignes": facture.lignes
+        "lignes": lignes_data
     }
-
 
 
 # 🔄 Mettre à jour le statut d'une facture
@@ -136,14 +221,35 @@ def list_factures(
         current_user.parent_user_id if not current_user.is_main_user else current_user.id
     )
 
-    factures = db.query(Facture).filter(Facture.user_id == parent_user_id).all()
+    factures = db.query(Facture)\
+        .options(
+            joinedload(Facture.fournisseur),
+            joinedload(Facture.client),
+            joinedload(Facture.lignes).joinedload(LigneFacture.produit)
+        )\
+        .filter(Facture.user_id == parent_user_id).all()
+
     result = []
 
     for f in factures:
-        # 🔢 Calcul du total payé à partir des paiements liés
         total_paye = sum(p.montant for p in f.paiements) if f.paiements else 0.0
 
-        # 🔁 Construction manuelle de chaque entrée enrichie
+        lignes_data = []
+        for ligne in f.lignes:
+            produit = ligne.produit
+            lignes_data.append({
+                "id": ligne.id,
+                "description": ligne.description,
+                "quantite": ligne.quantite,
+                "prix_unitaire": ligne.prix_unitaire,
+                "total_ligne": ligne.total_ligne,
+                "produit": {
+                    "id": produit.id,
+                    "nom": produit.nom,
+                    "caracteristiques": produit.caracteristiques or {},
+                } if produit else None
+            })
+
         result.append(FactureOut(
             id=f.id,
             total_ttc=f.total_ttc,
@@ -156,12 +262,10 @@ def list_factures(
             date_creation=f.date_creation,
             remarques=f.remarques,
             total_paye=total_paye,
-            client=f.client, 
-            fournisseur=f.fournisseur,# 🟢 Ajouté ici
-            lignes=f.lignes         # 🟢 Ajouté ici
-            
+            client=f.client,
+            fournisseur=f.fournisseur,
+            lignes=lignes_data
         ))
-
 
     return result
 
@@ -259,6 +363,27 @@ def annuler_facture(
 
     else:
         raise HTTPException(status_code=400, detail="Type de facture non pris en charge")
+    
+    # ❌ Supprimer les traces dans ClientProduit
+    from app.models.model_client_produit import ClientProduit
+
+    client_produits = db.query(ClientProduit).filter(
+        ClientProduit.commande_id == facture.commande_id
+    ).all()
+
+    for cp in client_produits:
+        log_action(
+            db=db,
+            current_user=current_user,
+            action="Suppression ClientProduit",
+            type_entite="client_produit",
+            entite_id=cp.id,
+            details=f"Lien client-produit supprimé suite à annulation de facture #{facture.id}"
+        )
+        db.delete(cp)
+
+
+
 
     db.commit()
 

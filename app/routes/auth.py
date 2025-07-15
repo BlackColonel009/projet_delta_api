@@ -199,23 +199,57 @@ def update_my_user(
     avatar_url: Optional[str] = Body(None),
     bio: Optional[str] = Body(None),
     societe_ou_entreprise: Optional[str] = Body(None),
-    logo_entreprise : Optional[str] = Body(None),
+    logo_entreprise: Optional[str] = Body(None),
+    addresse: Optional[str] = Body(None),
+    nif: Optional[str] = Body(None),
+    tva: Optional[float] = Body(None),
     username: Optional[str] = Body(None),
     devise: Optional[str] = Body(None),
     telephone: Optional[str] = Body(None),
+    facture_color: Optional[str] = Body(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if email: current_user.email = email
-    if password: current_user.password_hash = hash_password(password)
-    if avatar_url: current_user.avatar_url = avatar_url
-    if bio: current_user.bio = bio
-    if societe_ou_entreprise: current_user.societe_ou_entreprise = societe_ou_entreprise
-    if username: current_user.username = username
-    if devise: current_user.devise = devise
-    if telephone: current_user.telephone = telephone
-    if logo_entreprise: current_user.logo_entreprise = logo_entreprise
+    if email:
+        current_user.email = email
+    if password:
+        current_user.password_hash = hash_password(password)
+    if avatar_url:
+        current_user.avatar_url = avatar_url
+    if bio:
+        current_user.bio = bio
+    if societe_ou_entreprise:
+        current_user.societe_ou_entreprise = societe_ou_entreprise
+    if addresse:
+        current_user.addresse = addresse
+    if nif:
+        current_user.nif = nif
+    if tva is not None:
+        current_user.tva = tva
+    if username:
+        current_user.username = username
+    if devise:
+        current_user.devise = devise
+    if telephone:
+        current_user.telephone = telephone
+    if logo_entreprise:
+        current_user.logo_entreprise = logo_entreprise
+    if facture_color:
+        current_user.facture_color = facture_color
+        print(f"[DEBUG] Mise à jour facture_color: {facture_color}")
+
+    # Propagation aux subusers des champs modifiés (TVA, NIF, adresse)
+    subusers = db.query(SubUser).filter(SubUser.parent_user_id == current_user.id).all()
+    for subuser in subusers:
+        if tva is not None:
+            subuser.tva = tva
+        if nif is not None:
+            subuser.nif = nif
+        if addresse is not None:
+            subuser.addresse = addresse
+
     db.commit()
+    print("[DEBUG] Commit effectué")
 
     log_action(
         db=db,
@@ -223,10 +257,11 @@ def update_my_user(
         action="Modification utilisateur principal",
         type_entite="utilisateur",
         entite_id=current_user.id,
-        details="Mise à jour de ses propres informations"
+        details="Mise à jour de ses propres informations avec propagation aux subusers"
     )
 
     return {"message": "Informations utilisateur mises à jour avec succès."}
+
 
 # 🔄 Modifier infos subuser
 @router.put("/me-sub", tags=["SubUsers"])
@@ -388,6 +423,9 @@ def get_my_profile(current_user: User = Depends(get_current_user)):
         "username": current_user.username,
         "societe_ou_entreprise": current_user.societe_ou_entreprise,
         "logo_entreprise": current_user.logo_entreprise,
+        "nif": current_user.nif,
+        "tva": current_user.tva,
+        "addresse": current_user.addresse,
         "account_type": current_user.account_type,
         "devise": current_user.devise,
         "telephone" : current_user.telephone,
@@ -409,6 +447,10 @@ def get_my_subuser_profile(current_sub: SubUser = Depends(get_current_sub_user),
                 "societe_ou_entreprise": parent.societe_ou_entreprise,
                 "logo_entreprise": parent.logo_entreprise,
                 "devise": parent.devise,
+                "nif": parent.nif,
+                "tva": parent.tva,
+                "addresse": parent.addresse,
+                "facture_color": parent.facture_color,
             }
     }
 

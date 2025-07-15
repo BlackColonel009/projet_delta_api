@@ -23,6 +23,7 @@ class UniteProduitOut(BaseModel):
     code_barre: Optional[str] 
     statut: str
     date_creation: datetime
+    date_modification: Optional[datetime]
 
     class Config:
         from_attributes = True

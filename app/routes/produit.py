@@ -392,7 +392,11 @@ def get_stock_disponible(produit_id: int, db: Session = Depends(get_db)):
         UniteProduit.produit_id == produit_id,
         UniteProduit.statut == "disponible"
     ).count()
-    return {"stock_total": total, "stock_reel": disponible}
+    en_cours = db.query(UniteProduit).filter(
+        UniteProduit.produit_id == produit_id,
+        UniteProduit.statut == "en_cours"
+    ).count()
+    return {"stock_total": total, "stock_reel": disponible, "stock_en_attente": en_cours}
 
 
 
