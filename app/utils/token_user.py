@@ -1,3 +1,6 @@
+from app.models.model_user import User
+
+
 def simulate_current_user(user_obj, is_main=True, parent_id=None):
     class SimulatedUser:
         def __init__(self, user_obj, is_main, parent_id):
@@ -9,3 +12,10 @@ def simulate_current_user(user_obj, is_main=True, parent_id=None):
         return SimulatedUser(user_obj, True, None)
     else:
         return SimulatedUser(user_obj, False, parent_id)
+
+def resolve_subscription_owner(user: User) -> int:
+    return (
+        user.parent_user_id
+        if not user.is_main_user
+        else user.id
+    )

@@ -13,7 +13,11 @@ class Paiement(Base):
     moyen_paiement = Column(String, default="espèces")  # espèces, virement, mobile money, etc.
     devise = Column(String, default="FCFA")#dans une liste déroulante on laisse choisir l'utilisateur
 
+    # commande_id = Column(Integer, ForeignKey("commandes_ventes.id"), nullable=True)
+
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    
     user = relationship("User", backref="paiements")
 
     facture = relationship("Facture", back_populates="paiements")
+    # commande = relationship("CommandeVente", back_populates="paiements")

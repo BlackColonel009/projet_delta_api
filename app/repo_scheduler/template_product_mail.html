@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>{{ produit.nom }}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 12mm 14mm;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: Helvetica, Arial, sans-serif;
+      font-size: 11px;
+      color: #241a29;
+      background-color: #fcfafd;
+    }
+
+    .accent {
+      height: 7px;
+      background-color: {{ theme.primary_dark }};
+    }
+
+    .page {
+      padding: 0;
+    }
+
+    .header-table,
+    .contact-table {
+      width: 100%;
+      border-collapse: collapse;
+      background-color: {{ theme.primary_dark }};
+    }
+
+    .header-table td,
+    .contact-table td {
+      border: 0;
+      vertical-align: middle;
+    }
+
+    .header-table td {
+      padding: 0;
+    }
+
+    .logo-cell {
+      width: 68px;
+      padding-right: 10px;
+      background-color: #ffffff;
+    }
+
+    .logo {
+      width: 52px;
+      height: 52px;
+      object-fit: contain;
+      border-radius: 12px;
+    }
+
+    .company-name {
+      margin: 0 0 5px 0;
+      font-size: 19px;
+      line-height: 1.2;
+      color: {{ theme.on_primary }};
+      font-weight: bold;
+    }
+
+    .company-meta {
+      margin: 0;
+      color: {{ theme.on_primary }};
+      font-size: 10px;
+    }
+
+    .company-meta img {
+      width: 13px;
+      height: 13px;
+      vertical-align: middle;
+      margin-right: 5px;
+    }
+
+    .eyebrow {
+      margin-top: 18px;
+      color: {{ theme.primary }};
+      font-size: 9px;
+      letter-spacing: 1.4px;
+      font-weight: bold;
+      text-transform: uppercase;
+      text-align: center;
+    }
+
+    .product-name {
+      margin: 6px 0 13px 0;
+      font-size: 24px;
+      line-height: 1.15;
+      font-weight: bold;
+      color: #241a29;
+      text-align: center;
+    }
+
+    .product-card {
+      padding: 8px;
+      border: 2px solid {{ theme.primary_soft }};
+      background-color: #ffffff;
+      border-radius: 16px;
+      text-align: center;
+    }
+
+    .product-image {
+      width: 430px;
+      height: 250px;
+      object-fit: contain;
+    }
+
+    .details {
+      margin-top: 13px;
+      padding: 13px 16px;
+      background-color: {{ theme.primary_pale }};
+      border-left: 5px solid {{ theme.primary }};
+      border-radius: 10px;
+    }
+
+    .details-title {
+      margin: 0 0 8px 0;
+      font-size: 14px;
+      color: {{ theme.primary_dark }};
+      font-weight: bold;
+    }
+
+    .details-text {
+      margin: 0;
+      line-height: 1.55;
+      color: #4f4454;
+    }
+
+    .contact-wrap {
+      margin-top: 300px;
+      padding: 0;
+      background-color: {{ theme.primary_dark }};
+      color: #ffffff;
+      border-radius: 12px;
+    }
+
+    .contact-table td {
+      width: 33.33%;
+      padding: 9px 7px;
+      text-align: center;
+      color: #ffffff;
+      font-size: 9px;
+    }
+
+    .contact-table img {
+      width: 16px;
+      height: 16px;
+      margin-bottom: 4px;
+    }
+
+    .contact-value {
+      color: #ffffff;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div class="accent"></div>
+  <div class="page">
+    <table class="header-table">
+      <tr>
+        <td class="logo-cell">
+          {% if logo_url %}<img src="{{ logo_url }}" alt="Logo" class="logo" width="52" height="52">{% endif %}
+        </td>
+        <td>
+          <div class="company-name">{{ societe.nom }}</div>
+          <p class="company-meta">
+            <img src="{{ icons.location }}" alt="">{{ societe.adresse }}
+          </p>
+        </td>
+      </tr>
+    </table>
+
+    <div class="eyebrow">Sélection produit</div>
+    <div class="product-name">{{ produit.nom }}</div>
+
+    <div class="product-card">
+      {% if produit.image %}<img src="{{ produit.image }}" alt="{{ produit.nom }}" class="product-image" width="430" height="250">{% endif %}
+    </div>
+
+    <div class="details">
+      <div class="details-title">Fiche technique</div>
+      <p class="details-text">{{ produit.caracteristiques or "Aucune description disponible" }}</p>
+    </div>
+
+    <div class="contact-wrap">
+      <table class="contact-table" bgcolor="{{ theme.primary_dark }}">
+        <tr>
+          <td>
+            <img src="{{ icons.account }}" alt=""><br>
+            <span class="contact-value">{{ societe.nom }}</span>
+          </td>
+          <td>
+            <img src="{{ icons.phone }}" alt=""><br>
+            <span class="contact-value">{{ societe.telephone }}</span>
+          </td>
+          <td>
+            <img src="{{ icons.mail }}" alt=""><br>
+            <span class="contact-value">{{ societe.email }}</span>
+          </td>
+        </tr>
+      </table>
+    </div>
+  </div>
+</body>
+</html>

@@ -16,6 +16,7 @@ from app.models.model_rapport import Rapport
 from app.schemas.user_schema import SubUserOut, UserCreate, SubUserCreate, UserLogin, GroupUserLogin
 from app.models.model_user import User, SubUser
 from app.models.model_role import Role
+from app.services.subscription_service import create_trial_subscription
 from app.utils.security import (
     hash_password, verify_password, create_access_token,
     get_current_user, get_current_sub_user, require_role, 
@@ -52,6 +53,9 @@ def register_user(data: UserCreate, db: Session = Depends(get_db)):
     time.sleep(0.5)
     
     db.refresh(new_user)
+    
+    # 2️⃣ Créer automatiquement l'abonnement trial
+    create_trial_subscription(db, user_id=new_user.id)
     
     # ✅ On génère le token directement
     access_token = create_access_token({
@@ -143,7 +147,6 @@ def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = D
     )
 
     return {"access_token": access_token, "token_type": "bearer"}
-
 
 # 🔑 Connexion sous-utilisateur
 @router.post("/group_login")

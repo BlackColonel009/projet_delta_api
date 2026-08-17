@@ -20,6 +20,7 @@ class Facture(Base):
     type = Column(Enum(TypeFacture), nullable=False)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=True)
     fournisseur_id = Column(Integer, ForeignKey("fournisseurs.id"), nullable=True)
+    # depot_id = Column(Integer, ForeignKey("depots.id"), nullable=True)
     date_creation = Column(DateTime, default=datetime.utcnow)
     statut = Column(String, default="en attente")  # ex: brouillon, envoyé, payé, annulé
     remarques = Column(Text, nullable=True)
@@ -32,6 +33,7 @@ class Facture(Base):
     commande_id = Column(Integer, ForeignKey("commandes_ventes.id"), nullable=True)
     commande = relationship("CommandeVente")
 
+    # depot = relationship("Depot", back_populates="facture", uselist=False)
     
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     user = relationship("User", backref="factures")

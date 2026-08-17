@@ -6,10 +6,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
+from app.models.model_clientfollowup import ClientFollowup
 from app.models.model_commande import CommandeVente
+from app.models.model_depot import Depot
 from app.models.model_facture import Facture, LigneFacture, TypeFacture
+from app.models.model_facture_depot import FactureDepot
 from app.models.model_produit import Produit
 from app.models.model_unite_produit import UniteProduit
+from app.routes import depot
+from app.schemas.facture_depot_schema import FactureDepotOut
 from app.schemas.facture_schema import FactureOut, FactureCreate
 from fastapi.responses import FileResponse
 from app.utils.logger import log_action
@@ -17,8 +22,6 @@ from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
 from sqlalchemy.orm import joinedload
-
-
 import os
 
 router = APIRouter(prefix="/factures", tags=["Facturation"])
@@ -88,8 +91,6 @@ def update_facture_type(
         "message": f"Type de la facture #{facture_id} mis à jour de '{ancien_type.value}' à '{nouveau_type.value}'"
     }
 
-
-# 🔍 Lire une facture avec ses lignes
 # 🔍 Lire une facture avec ses lignes
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -318,6 +319,7 @@ def annuler_facture(
             raise HTTPException(status_code=404, detail="Commande de vente non trouvée")
 
         commande.statut = "annulée"
+        
 
         # ✅ Réinitialiser les unités à "disponible"
         unites = db.query(UniteProduit).filter(
@@ -337,6 +339,27 @@ def annuler_facture(
                 entite_id=unite.id,
                 details=f"Unité {unite.tracabilite} remise à disponible après annulation facture #{facture.id}"
             )
+        
+
+        # ----------------------------------------------
+        # Suppression automatique des suivis liés à cette commande annulée
+        suivis_a_supprimer = db.query(ClientFollowup).filter(
+            ClientFollowup.commande_id == facture.commande_id
+        ).all()
+
+        for suivi in suivis_a_supprimer:
+            log_action(
+                db=db,
+                current_user=current_user,
+                action="Suppression suivi auto après annulation facture",
+                type_entite="client_followup",
+                entite_id=suivi.id,
+                details=f"Suivi supprimé car commande #{facture.commande_id} annulée via facture #{facture.id}"
+            )
+            db.delete(suivi)
+
+        
+        # ----------------------------------------------
 
     elif facture.type.value == "achat":
         commande = db.query(CommandeAchat).filter(CommandeAchat.id == facture.commande_id).first()
@@ -372,15 +395,18 @@ def annuler_facture(
     ).all()
 
     for cp in client_produits:
+        cp.note = "rejeté"
+        cp.date_modification = datetime.utcnow()
+
         log_action(
             db=db,
             current_user=current_user,
-            action="Suppression ClientProduit",
+            action="Marquage rejet",
             type_entite="client_produit",
             entite_id=cp.id,
-            details=f"Lien client-produit supprimé suite à annulation de facture #{facture.id}"
+            details=f"Note changée en 'rejeté' suite à l'annulation de la facture #{facture.id}"
         )
-        db.delete(cp)
+
 
 
 
@@ -399,3 +425,47 @@ def annuler_facture(
 
     return {"message": f"Facture #{facture.id} annulée avec succès."}
 
+@router.post("/facture-rapide/{depot_id}", response_model=FactureDepotOut)
+def create_quick_facture_from_depot(
+    depot_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
+):
+    depot = db.query(Depot).filter(Depot.id == depot_id).first()
+    if not depot:
+        raise HTTPException(status_code=404, detail="Dépôt introuvable")
+
+    if depot.statut != "retire":
+        raise HTTPException(status_code=400, detail="Le dépôt n'est pas encore retiré.")
+
+    existing_facture = db.query(FactureDepot).filter_by(depot_id=depot_id).first()
+    if existing_facture:
+        raise HTTPException(status_code=400, detail="Une facture existe déjà pour ce dépôt.")
+
+    montant_ht = depot.prix_total or 0
+    tva = 0  # tu peux adapter ici
+    montant_ttc = montant_ht + tva
+
+    facture = FactureDepot(
+        depot_id=depot.id,
+        client_id=depot.client_id,
+        montant_ht=montant_ht,
+        tva=tva,
+        montant_ttc=montant_ttc,
+        statut="en_attente",
+        date_facture=datetime.utcnow()
+    )
+
+    db.add(facture)
+    depot.statut = "retire"
+    db.commit()
+    db.refresh(facture)
+
+    return facture
+
+@router.get("/by-depot/{depot_id}", response_model=FactureDepotOut)
+def get_facture_by_depot(depot_id: int, db: Session = Depends(get_db)):
+    facture = db.query(FactureDepot).filter(FactureDepot.depot_id == depot_id).first()
+    if not facture:
+        raise HTTPException(status_code=404, detail="Pas de facture pour ce dépôt")
+    return facture

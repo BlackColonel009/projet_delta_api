@@ -16,13 +16,17 @@ class CommandeVente(Base):
     tva = Column(Float, default=0)
     tva_appliquee = Column(Boolean, default=False)
     statut = Column(String, default="en_attente")
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    
 
     unites_vendues = relationship("UniteProduit", back_populates="commande_vente")
 
-
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    
     user = relationship("User", backref="commandes_ventes")
+    # paiements = relationship("Paiement", back_populates="commande", cascade="all, delete-orphan")
+
+
+    # Dans CommandeVente
+    followups = relationship("ClientFollowup", back_populates="commandes")
 
 
 

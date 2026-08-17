@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Produit recommandé</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            color: #333;
+            background-color: #f7f7f7;
+        }
+        .flyer {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            max-width: 600px;
+            margin: auto;
+            box-shadow: 0 0 15px rgba(0,0,0,0.1);
+        }
+        .top-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .top-header img {
+            max-height: 20px;
+        }
+        .top-header h1 {
+            font-size: 24px;
+            color: #004080;
+            margin: 0;
+            flex-grow: 1;
+            text-align: right;
+        }
+        .image {
+            text-align: center;
+            margin-top: 20px;
+        }
+        .image img {
+            max-width: 100%;
+            border-radius: 8px;
+        }
+        .description {
+            margin-top: 20px;
+        }
+        .contact {
+            margin-top: 30px;
+            font-size: 14px;
+            color: #555;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+<div class="flyer">
+    <div class="top-header">
+        {% if logo_url %}
+        <img src="{{ logo_url }}" alt="Logo entreprise">
+        {% endif %}
+        <h1>{{ produit.nom }}</h1>
+    </div>
+
+    <div class="image">
+        <img src="{{ produit.image }}" alt="Image produit">
+    </div>
+
+    <div class="description">
+        <h3>Fiche technique</h3>
+        <p>{{ produit.caracteristiques or "Aucune description disponible" }}</p>
+    </div>
+
+   <div class="contact" style="text-align: center; font-size: 14px; color: #555; margin-top: 30px;">
+    <p><strong>Contactez-nous :</strong>
+        <img src="https://img.icons8.com/ios-filled/16/000000/company.png" alt="Nom" style="vertical-align: middle;"> {{ societe.nom }} |
+        <img src="https://img.icons8.com/ios-filled/16/000000/address.png" alt="Adresse" style="vertical-align: middle;"> {{ societe.adresse }} |
+        <img src="https://img.icons8.com/ios-filled/16/000000/phone.png" alt="Téléphone" style="vertical-align: middle;"> {{ societe.telephone }} |
+        <img src="https://img.icons8.com/ios-filled/16/000000/email.png" alt="Email" style="vertical-align: middle;"> {{ societe.email }}
+    </p>
+</div>
+
+</div>
+</body>
+</html>

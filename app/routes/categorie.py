@@ -17,7 +17,8 @@ router = APIRouter(prefix="/categories", tags=["Catégories"])
 def create_categorie(
     data: CategorieCreate, 
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])),
+    
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     if db.query(Categorie).filter(Categorie.nom == data.nom, Categorie.user_id == current_user.id).first():

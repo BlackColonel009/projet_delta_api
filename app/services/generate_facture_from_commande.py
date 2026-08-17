@@ -10,7 +10,9 @@ from fastapi_mail import FastMail, MessageSchema, MessageType
 from app.models.model_facture import Facture, LigneFacture
 from app.models.model_unite_produit import UniteProduit
 from app.models.model_user import SubUser, User
-from app.config import conf, settings
+from app.config import conf
+from app.utils.public_url import public_url
+from app.utils.color_theme import build_document_palette
 from app.utils.security import get_current_sub_user
 from datetime import datetime
 import re
@@ -130,7 +132,7 @@ def montant_to_words(montant: float, devise="FCFA"):
 def generate_facture_pdf(facture, db: Session ):
     devise = facture.user.devise or "XOF"
     montant_en_lettres = montant_to_words(facture.total_ttc, devise)
-    logo_url = f"{settings.DOMAIN}{facture.user.logo_entreprise}" if facture.user.logo_entreprise else "file:///absolute/path/to/logo.png"
+    logo_url = public_url(facture.user.logo_entreprise)
 
     env = Environment(
         loader=FileSystemLoader("app/template"),
@@ -169,19 +171,10 @@ def generate_facture_pdf(facture, db: Session ):
             produit.caracteristiques = safe_parse_caracteristiques(produit.caracteristiques)
 
 
-    # Exemple de couleur principale enregistrée
-    main_color = facture.user.facture_color or "#5C6BC0"
-
-    # Générer des variantes plus claires si tu veux (optionnel)
-    def lighten(hex_color, factor=0.85):
-        hex_color = hex_color.lstrip("#")
-        r = int(hex_color[0:2], 16)
-        g = int(hex_color[2:4], 16)
-        b = int(hex_color[4:6], 16)
-        r = min(int(r + (255 - r) * factor), 255)
-        g = min(int(g + (255 - g) * factor), 255)
-        b = min(int(b + (255 - b) * factor), 255)
-        return f"#{r:02x}{g:02x}{b:02x}"
+    palette = build_document_palette(
+        facture.user.facture_color,
+        fallback="#5C6BC0",
+    )
 
 
 
@@ -199,9 +192,11 @@ def generate_facture_pdf(facture, db: Session ):
         vendeur=vendeur,
         logo_url=logo_url,
         montant_en_lettres=montant_en_lettres,
-        color_background=lighten(main_color, 0.9),
-        color_text=main_color,
-        color_highlight=lighten(main_color, 0.8),
+        color_background=palette["primary_pale"],
+        color_text=palette["primary"],
+        color_dark=palette["primary_dark"],
+        color_highlight=palette["primary_soft"],
+        color_on_primary=palette["on_primary"],
     )
 
     buffer = BytesIO()

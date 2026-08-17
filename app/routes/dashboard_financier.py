@@ -4,260 +4,100 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, extract, text
 from datetime import datetime
 from app.database import get_db
-from app.models.model_commande import CommandeVente, CommandeAchat
+from app.models.model_commande import CommandeVente, CommandeAchat, LigneCommandeVente
 from app.models.model_facture import Facture
 from app.models.model_paiement import Paiement
 from app.models.model_depense import Depense
+from app.models.model_produit import Produit
 from app.schemas.user_schema import RoleEnum
 from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard Financier"])
 
-# ➡ Total des ventes par mois
+# -------------------- Helper Année --------------------
+def get_year(year: int | None):
+    return year or datetime.utcnow().year
+
+# -------------------- Ventes par mois --------------------
 @router.get("/ventes-par-mois")
 def ventes_par_mois(
+    year: int | None = None,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.caissier, RoleEnum.comptable]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable]))
 ):
+    selected_year = get_year(year)
     ventes = (
         db.query(
-            extract('year', CommandeVente.date_commande).label('year'),
             extract('month', CommandeVente.date_commande).label('month'),
             func.sum(CommandeVente.total_ttc).label('total_ventes')
         )
         .filter(
             CommandeVente.user_id == current_user.id,
-            CommandeVente.statut == "validée"
+            CommandeVente.statut == "validée",
+            extract('year', CommandeVente.date_commande) == selected_year
         )
-
-        .group_by('year', 'month')
-        .order_by('year', 'month')
+        .group_by('month')
+        .order_by('month')
         .all()
     )
     return [
-        {"mois": f"{int(v.year)}-{int(v.month):02}", "total_ventes": float(v.total_ventes)}
+        {"mois": f"{selected_year}-{int(v.month):02}", "total_ventes": float(v.total_ventes)}
         for v in ventes
     ]
 
-# ➡ Total des achats par mois
+# -------------------- Achats par mois --------------------
 @router.get("/achats-par-mois")
 def achats_par_mois(
+    year: int | None = None,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.caissier, RoleEnum.comptable]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable]))
 ):
+    selected_year = get_year(year)
     achats = (
         db.query(
-            extract('year', CommandeAchat.date_commande).label('year'),
             extract('month', CommandeAchat.date_commande).label('month'),
             func.sum(CommandeAchat.total_ttc).label('total_achats')
         )
-        . filter(
+        .filter(
             CommandeAchat.user_id == current_user.id,
-            CommandeAchat.statut == "validée"
+            CommandeAchat.statut == "validée",
+            extract('year', CommandeAchat.date_commande) == selected_year
         )
-
-        .group_by('year', 'month')
-        .order_by('year', 'month')
+        .group_by('month')
+        .order_by('month')
         .all()
     )
     return [
-        {"mois": f"{int(a.year)}-{int(a.month):02}", "total_achats": float(a.total_achats)}
+        {"mois": f"{selected_year}-{int(a.month):02}", "total_achats": float(a.total_achats)}
         for a in achats
     ]
 
-# ➡ Bénéfice brut (Ventes - Achats)
-@router.get("/benefice-brut")
-def benefice_brut(
-    db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable]))
-):
-    from app.models.model_commande import CommandeVente, LigneCommandeVente
-    from app.models.model_produit import Produit
-
-    # 1. Récupérer toutes les lignes de commande validées
-    lignes = (
-        db.query(LigneCommandeVente)
-        .join(CommandeVente)
-        .filter(
-            CommandeVente.user_id == current_user.id,
-            CommandeVente.statut == "validée"
-        )
-        .all()
-    )
-
-    total_ventes = 0
-    cout_achats_estimes = 0
-
-    # 2. Calcule du total TTC & coût des achats (basé sur le prix_achat unitaire)
-    for ligne in lignes:
-        total_ventes += ligne.total_ligne
-        produit = db.query(Produit).filter(Produit.id == ligne.produit_id).first()
-        prix_achat = produit.prix_achat if produit and produit.prix_achat is not None else 0
-
-        cout_achats_estimes += prix_achat * ligne.quantite
-
-    return {
-        "total_ventes": float(total_ventes),
-        "cout_achats_estimes": float(cout_achats_estimes),
-        "benefice_brut": float(total_ventes - cout_achats_estimes)
-    }
-
-
-# ➡ TVA collectée sur les ventes
-@router.get("/tva-collectee")
-def tva_collectee(
-    db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable]))
-):
-    total_tva = (
-        db.query(func.sum(Facture.tva))
-        .join(CommandeVente, Facture.commande_id == CommandeVente.id)
-        .filter(
-            Facture.user_id == current_user.id,
-            Facture.type == "vente",
-            Facture.statut == "payée",
-            CommandeVente.statut == "validée"
-        )
-        .scalar()
-        or 0
-    )
-    return {"tva_collectee": float(total_tva)}
-
-# @router.get("/tva-sql-brute")
-# def tva_sql_brute(
-#     db: Session = Depends(get_db),
-#     current_user=Depends(get_current_user)
-# ):
-#     query = text("""
-#         SELECT SUM(f.tva)
-#         FROM factures f
-#         JOIN commandes_ventes cv ON f.commande_id = cv.id
-#         WHERE f.user_id = :user_id
-#         AND f.type = 'vente'
-#         AND f.statut = 'payée'
-#         AND cv.statut = 'validée'
-#     """)
-    
-#     result = db.execute(query, {"user_id": current_user.id}).scalar() or 0
-
-#     return {"tva_collectee_sql": float(result)}
-
-
-# ➡ Clients en retard de paiement
-@router.get("/clients-en-retard")
-def clients_en_retard(
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
-):
-    factures = db.query(Facture).filter(
-        Facture.type == "vente",
-        Facture.user_id == current_user.id,
-        Facture.statut.notin_(["payée", "annulée"])
-    ).all()
-
-    result = []
-    for f in factures:
-        total_paye = sum(p.montant for p in f.paiements)
-        reste = f.total_ttc - total_paye
-        if reste > 0:
-            result.append({
-                "facture_id": f.id,
-                "client": f.client.nom if f.client else None,
-                "total_facture": f.total_ttc,
-                "montant_paye": total_paye,
-                "reste_a_payer": reste,
-                "statut": f.statut
-            })
-    return result
-
-# ➡ Fournisseurs à payer
-@router.get("/fournisseurs-a-payer")
-def fournisseurs_a_payer(
-    db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.caissier]))
-):
-    factures = db.query(Facture).filter(
-        Facture.type == "achat",
-        Facture.user_id == current_user.id,
-        Facture.statut != "payée"
-    ).all()
-
-    result = []
-    for f in factures:
-        total_paye = sum(p.montant for p in f.paiements)
-        reste = f.total_ttc - total_paye
-        if reste > 0:
-            result.append({
-                "facture_id": f.id,
-                "fournisseur": f.fournisseur.nom if f.fournisseur else None,
-                "total_facture": f.total_ttc,
-                "montant_paye": total_paye,
-                "reste_a_payer": reste,
-                "statut": f.statut
-            })
-    return result
-
-# ➡ Total des dépenses par mois
+# -------------------- Dépenses par mois --------------------
 @router.get("/depenses-par-mois")
 def depenses_par_mois(
+    year: int | None = None,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.caissier, RoleEnum.comptable]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable]))
 ):
+    selected_year = get_year(year)
     depenses = (
         db.query(
-            extract('year', Depense.date_depense).label('year'),
             extract('month', Depense.date_depense).label('month'),
             func.sum(Depense.montant).label('total_depenses')
         )
-        .filter(Depense.user_id == current_user.id)
-        .group_by('year', 'month')
-        .order_by('year', 'month')
+        .filter(
+            Depense.user_id == current_user.id,
+            extract('year', Depense.date_depense) == selected_year
+        )
+        .group_by('month')
+        .order_by('month')
         .all()
     )
     return [
-        {"mois": f"{int(d.year)}-{int(d.month):02}", "total_depenses": float(d.total_depenses)}
+        {"mois": f"{selected_year}-{int(d.month):02}", "total_depenses": float(d.total_depenses)}
         for d in depenses
     ]
-
-# ➡ Bénéfice net = ventes - achats - dépenses
-@router.get("/benefice-net")
-def benefice_net(
-    db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable]))
-):
-    from app.models.model_commande import CommandeVente, LigneCommandeVente
-    from app.models.model_produit import Produit
-
-    # 1. Ventes validées uniquement
-    ventes = (
-        db.query(LigneCommandeVente)
-        .join(CommandeVente)
-        .filter(CommandeVente.user_id == current_user.id, CommandeVente.statut == "validée")
-        .all()
-    )
-
-    # 2. Calcul du total_ventes et coût des produits vendus
-    total_ventes = 0
-    cout_achat_total = 0
-
-    for ligne in ventes:
-        total_ventes += ligne.total_ligne
-        produit = db.query(Produit).filter(Produit.id == ligne.produit_id).first()
-        cout_unitaire = produit.prix_achat if produit and produit.prix_achat is not None else 0
-        cout_achat_total += cout_unitaire * ligne.quantite
-
-    # 3. Dépenses classiques
-    total_depenses = db.query(func.sum(Depense.montant)).filter(Depense.user_id == current_user.id).scalar() or 0
-
-    # 4. Résultat
-    return {
-        "total_ventes": float(total_ventes),
-        "cout_achats_estimes": float(cout_achat_total),
-        "total_depenses": float(total_depenses),
-        "benefice_net": float(total_ventes - cout_achat_total - total_depenses)
-    }
-
 
 # ➡ Dépenses par catégorie
 @router.get("/depenses-par-categorie")
@@ -279,45 +119,88 @@ def depenses_par_categorie(
         for d in depenses
     ]
 
-# 🔎 Tout le dashboard résumé
-@router.get("/overview")
-def dashboard_overview(
+# -------------------- Bénéfice brut --------------------
+@router.get("/benefice-brut")
+def benefice_brut(
+    year: int | None = None,
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable]))
 ):
-    from app.models.model_commande import CommandeVente, CommandeAchat, LigneCommandeVente
-    from app.models.model_produit import Produit
-
-    # Ventes validées
-    ventes = (
+    selected_year = get_year(year)
+    lignes = (
         db.query(LigneCommandeVente)
         .join(CommandeVente)
-        .filter(CommandeVente.user_id == current_user.id, CommandeVente.statut == "validée")
+        .filter(
+            CommandeVente.user_id == current_user.id,
+            CommandeVente.statut == "validée",
+            extract('year', CommandeVente.date_commande) == selected_year
+        )
         .all()
     )
 
-    # Total ventes TTC + coût d’achat estimé
     total_ventes = 0
-    cout_achat_total = 0
+    cout_achats_estimes = 0
 
-    for ligne in ventes:
+    for ligne in lignes:
         total_ventes += ligne.total_ligne
         produit = db.query(Produit).filter(Produit.id == ligne.produit_id).first()
-        cout_unitaire = produit.prix_achat if produit and produit.prix_achat is not None else 0
+        prix_achat = produit.prix_achat if produit and produit.prix_achat is not None else 0
+        cout_achats_estimes += prix_achat * ligne.quantite
+
+    return {
+        "total_ventes": float(total_ventes),
+        "cout_achats_estimes": float(cout_achats_estimes),
+        "benefice_brut": float(total_ventes - cout_achats_estimes)
+    }
+
+# -------------------- Bénéfice net --------------------
+@router.get("/benefice-net")
+def benefice_net(
+    year: int | None = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable]))
+):
+    selected_year = get_year(year)
+
+    lignes = (
+        db.query(LigneCommandeVente)
+        .join(CommandeVente)
+        .filter(
+            CommandeVente.user_id == current_user.id,
+            CommandeVente.statut == "validée",
+            extract('year', CommandeVente.date_commande) == selected_year
+        )
+        .all()
+    )
+
+    total_ventes = 0
+    cout_achat_total = 0
+    for ligne in lignes:
+        total_ventes += ligne.total_ligne
+        produit = db.query(Produit).filter(Produit.id == ligne.produit_id).first()
+        cout_unitaire = produit.prix_achat if produit and produit.prix_achat else 0
         cout_achat_total += cout_unitaire * ligne.quantite
 
-    # Achats validés
-    total_achats = db.query(func.sum(CommandeAchat.total_ttc)).filter(
-        CommandeAchat.user_id == current_user.id,
-        CommandeAchat.statut == "validée"
-    ).scalar() or 0
-
-    # Dépenses
     total_depenses = db.query(func.sum(Depense.montant)).filter(
-        Depense.user_id == current_user.id
+        Depense.user_id == current_user.id,
+        extract('year', Depense.date_depense) == selected_year
     ).scalar() or 0
 
-    # TVA collectée uniquement sur factures payées + commandes validées
+    return {
+        "total_ventes": float(total_ventes),
+        "cout_achats_estimes": float(cout_achat_total),
+        "total_depenses": float(total_depenses),
+        "benefice_net": float(total_ventes - cout_achat_total - total_depenses)
+    }
+
+# -------------------- TVA collectée --------------------
+@router.get("/tva-collectee")
+def tva_collectee(
+    year: int | None = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable]))
+):
+    selected_year = get_year(year)
     query = text("""
         SELECT SUM(f.tva)
         FROM factures f
@@ -326,14 +209,129 @@ def dashboard_overview(
         AND f.type = 'vente'
         AND f.statut = 'payée'
         AND cv.statut = 'validée'
+        AND EXTRACT(YEAR FROM f.date_creation) = :year
     """)
-    tva_collectee = db.execute(query, {"user_id": current_user.id}).scalar() or 0
+    total_tva = db.execute(query, {"user_id": current_user.id, "year": selected_year}).scalar() or 0
+    return {"tva_collectee": float(total_tva)}
 
-    # Clients en retard (non payées & non annulées avec reste à payer)
+# -------------------- Clients en retard --------------------
+@router.get("/clients-en-retard")
+def clients_en_retard(
+    year: int | None = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    selected_year = get_year(year)
+    factures = db.query(Facture).filter(
+        Facture.type == "vente",
+        Facture.user_id == current_user.id,
+        Facture.statut.notin_(["payée", "annulée"]),
+        extract('year', Facture.date_creation) == selected_year
+    ).all()
+
+    result = []
+    for f in factures:
+        total_paye = sum(p.montant for p in f.paiements)
+        reste = f.total_ttc - total_paye
+        if reste > 0:
+            result.append({
+                "facture_id": f.id,
+                "client": f.client.nom if f.client else None,
+                "total_facture": f.total_ttc,
+                "montant_paye": total_paye,
+                "reste_a_payer": reste,
+                "statut": f.statut
+            })
+    return result
+
+# -------------------- Fournisseurs à payer --------------------
+@router.get("/fournisseurs-a-payer")
+def fournisseurs_a_payer(
+    year: int | None = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
+):
+    selected_year = get_year(year)
+    factures = db.query(Facture).filter(
+        Facture.type == "achat",
+        Facture.user_id == current_user.id,
+        Facture.statut != "payée",
+        extract('year', Facture.date_creation) == selected_year
+    ).all()
+
+    result = []
+    for f in factures:
+        total_paye = sum(p.montant for p in f.paiements)
+        reste = f.total_ttc - total_paye
+        if reste > 0:
+            result.append({
+                "facture_id": f.id,
+                "fournisseur": f.fournisseur.nom if f.fournisseur else None,
+                "total_facture": f.total_ttc,
+                "montant_paye": total_paye,
+                "reste_a_payer": reste,
+                "statut": f.statut
+            })
+    return result
+
+# -------------------- Overview --------------------
+@router.get("/overview")
+def dashboard_overview(
+    year: int | None = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable]))
+):
+    selected_year = get_year(year)
+
+    # Ventes
+    lignes = (
+        db.query(LigneCommandeVente)
+        .join(CommandeVente)
+        .filter(
+            CommandeVente.user_id == current_user.id,
+            CommandeVente.statut == "validée",
+            extract('year', CommandeVente.date_commande) == selected_year
+        )
+        .all()
+    )
+    total_ventes = sum(l.total_ligne for l in lignes)
+    cout_achat_total = sum(
+        (db.query(Produit).filter(Produit.id == l.produit_id).first().prix_achat or 0) * l.quantite
+        for l in lignes
+    )
+
+    # Achats
+    total_achats = db.query(func.sum(CommandeAchat.total_ttc)).filter(
+        CommandeAchat.user_id == current_user.id,
+        CommandeAchat.statut == "validée",
+        extract('year', CommandeAchat.date_commande) == selected_year
+    ).scalar() or 0
+
+    # Dépenses
+    total_depenses = db.query(func.sum(Depense.montant)).filter(
+        Depense.user_id == current_user.id,
+        extract('year', Depense.date_depense) == selected_year
+    ).scalar() or 0
+
+    # TVA
+    query = text("""
+        SELECT SUM(f.tva)
+        FROM factures f
+        JOIN commandes_ventes cv ON f.commande_id = cv.id
+        WHERE f.user_id = :user_id
+        AND f.type = 'vente'
+        AND f.statut = 'payée'
+        AND cv.statut = 'validée'
+        AND EXTRACT(YEAR FROM f.date_creation) = :year
+    """)
+    tva_collectee = db.execute(query, {"user_id": current_user.id, "year": selected_year}).scalar() or 0
+
+    # Clients en retard
     factures_clients_retard = db.query(Facture).filter(
         Facture.type == "vente",
         Facture.user_id == current_user.id,
-        Facture.statut.notin_(["payée", "annulée"])
+        Facture.statut.notin_(["payée", "annulée"]),
+        extract('year', Facture.date_creation) == selected_year
     ).all()
     clients_en_retard = sum(
         1 for f in factures_clients_retard
@@ -344,7 +342,8 @@ def dashboard_overview(
     factures_fournisseurs = db.query(Facture).filter(
         Facture.type == "achat",
         Facture.user_id == current_user.id,
-        Facture.statut != "payée"
+        Facture.statut != "payée",
+        extract('year', Facture.date_creation) == selected_year
     ).all()
     fournisseurs_a_payer = sum(
         1 for f in factures_fournisseurs
@@ -361,6 +360,25 @@ def dashboard_overview(
         "clients_en_retard": clients_en_retard,
         "fournisseurs_a_payer": fournisseurs_a_payer,
     }
+
+# -------------------- Années disponibles --------------------
+@router.get("/annees-disponibles")
+def annees_disponibles(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    years_ventes = db.query(extract("year", CommandeVente.date_commande).label("year")).filter(
+        CommandeVente.user_id == current_user.id
+    )
+    years_achats = db.query(extract("year", CommandeAchat.date_commande).label("year")).filter(
+        CommandeAchat.user_id == current_user.id
+    )
+    years_depenses = db.query(extract("year", Depense.date_depense).label("year")).filter(
+        Depense.user_id == current_user.id
+    )
+
+    years = years_ventes.union(years_achats).union(years_depenses).distinct().order_by("year").all()
+    return [int(y.year) for y in years if y.year]
 
 
 # ******************ROUTES DE V & A ANNULEE**************

@@ -25,3 +25,5 @@ class ClientProduit(Base):
     client = relationship("Client", back_populates="produits_achetes")
     commande = relationship("CommandeVente")
     produit = relationship("Produit")
+
+    date_modification = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -6,18 +6,24 @@ SQLAlchemy
 alembic
 python-dotenv
 python-jose
-passlib[bcrypt]
+passlib[bcrypt]==1.7.4
+# Passlib 1.7.4 n'est pas compatible avec bcrypt 5.x.
+# Ce verrou conserve la lecture des hashes bcrypt déjà stockés en production.
+bcrypt==4.0.1
 pydantic==2.10.6
 pydantic[email]
 fastapi-mail==1.4.2
 pydantic-settings==2.6.1
 reportlab>=4.0.0
+matplotlib>=3.10.0
+num2words>=0.5.14
 qrcode[pil]
 jinja2
 xhtml2pdf
 pillow
 jose
 supabase
+apscheduler
 
 
 

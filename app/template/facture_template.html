@@ -1,176 +1,336 @@
 <!DOCTYPE html>
 <html lang="fr">
-
 <head>
-    <meta charset="UTF-8">
-    <title>Facture #{{ facture.id }}</title>
-   <style>
-        body {
-            font-family: Arial, sans-serif;
-            font-size: 13px;
-            margin: 0;
-            padding: 40px;
-            background: "{{ color_background or '#e6f7f9' }}";
-        }
+  <meta charset="UTF-8">
+  <title>Facture #{{ facture.id }}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 10mm 12mm;
+    }
 
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
-        }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: Helvetica, Arial, sans-serif;
+      font-size: 10px;
+      line-height: 1.4;
+      color: #241a29;
+      background-color: #ffffff;
+    }
 
-        th,
-        td {
-            border: 1px solid #ccc;
-            padding: 8px;
-        }
+    .accent {
+      height: 6px;
+      background-color: {{ color_dark or color_text or '#5c6bc0' }};
+    }
 
-        .header-title {
-            font-size: 22px;
-            color: "{{ color_text or '#003366' }}";
-            text-transform: uppercase;
-        }
+    .page {
+      padding: 0;
+    }
 
-        .section {
-            margin-top: 20px;
-        }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
 
-        .right {
-            text-align: right;
-        }
+    .header td {
+      border: 0;
+      vertical-align: top;
+    }
 
-        .totaux {
-            width: 300px;
-            float: right;
-            margin-top: 20px;
-            border-collapse: collapse;
-        }
+    .document-cell {
+      width: 280px;
+      padding-right: 16px;
+    }
 
-        .totaux td {
-            padding: 6px;
-        }
+    .company-cell {
+      width: 240px;
+      padding: 8px 11px;
+      background-color: {{ color_text or '#5c6bc0' }};
+      border-radius: 10px;
+    }
 
-        .totaux td:first-child {
-            font-weight: bold;
-        }
+    .document-label {
+      color: {{ color_dark or color_text or '#5c6bc0' }};
+      font-size: 9px;
+      letter-spacing: 1.3px;
+      font-weight: bold;
+      text-transform: uppercase;
+    }
 
-        .highlight {
-            background-color: "{{ color_highlight or '#d9f0f2' }}";
-        }
-    </style>
+    .document-title {
+      margin: 5px 0 9px 0;
+      font-size: 30px;
+      line-height: 1.1;
+      color: #241a29;
+      font-weight: bold;
+      text-transform: uppercase;
+    }
 
+    .document-meta {
+      color: #6c6072;
+      font-size: 10px;
+    }
+
+    .document-meta strong {
+      color: #241a29;
+    }
+
+    .logo {
+      width: 48px;
+      height: 40px;
+      object-fit: contain;
+      margin-bottom: 7px;
+    }
+
+    .company-name {
+      margin-bottom: 5px;
+      color: {{ color_on_primary or '#ffffff' }};
+      font-size: 14px;
+      line-height: 1.2;
+      font-weight: bold;
+    }
+
+    .company-details {
+      color: {{ color_on_primary or '#ffffff' }};
+      font-size: 9px;
+      line-height: 1.45;
+    }
+
+    .client-card {
+      margin-top: 14px;
+      border-collapse: collapse;
+    }
+
+    .client-card td {
+      padding: 9px 12px;
+      border: 1px solid #e4dce8;
+      border-left: 4px solid {{ color_text or '#5c6bc0' }};
+      background-color: {{ color_background or '#f5f1f8' }};
+    }
+
+    .section-label {
+      margin-bottom: 5px;
+      color: #6c6072;
+      font-size: 8px;
+      letter-spacing: 1px;
+      font-weight: bold;
+      text-transform: uppercase;
+    }
+
+    .client-name {
+      margin-bottom: 3px;
+      color: #241a29;
+      font-size: 12px;
+      font-weight: bold;
+    }
+
+    .items {
+      margin-top: 14px;
+      table-layout: fixed;
+    }
+
+    .items th {
+      padding: 6px 7px;
+      border: 0;
+      background-color: {{ color_dark or color_text or '#5c6bc0' }};
+      color: #ffffff;
+      font-size: 9px;
+      font-weight: bold;
+      text-transform: uppercase;
+    }
+
+    .items td {
+      padding: 6px 7px;
+      border: 0;
+      border-bottom: 1px solid #e4dce8;
+      vertical-align: top;
+      background-color: #ffffff;
+    }
+
+    .items tr:nth-child(even) td {
+      background-color: #faf8fb;
+    }
+
+    .description-column { width: 52%; }
+    .quantity-column { width: 10%; }
+    .price-column { width: 19%; }
+    .total-column { width: 19%; }
+
+    .right { text-align: right; }
+
+    .item-details {
+      color: #746879;
+      font-size: 8px;
+      line-height: 1.25;
+    }
+
+    .totals-wrap {
+      margin-top: 10px;
+    }
+
+    .totals-spacer {
+      width: 260px;
+      border: 0;
+    }
+
+    .totals-cell {
+      width: 260px;
+      border: 0;
+      padding: 0;
+    }
+
+    .totals td {
+      padding: 5px 8px;
+      border: 0;
+      border-bottom: 1px solid #e4dce8;
+    }
+
+    .totals .label {
+      color: #6c6072;
+      font-weight: bold;
+    }
+
+    .totals .grand-total td {
+      padding-top: 7px;
+      padding-bottom: 7px;
+      border: 0;
+      background-color: {{ color_text or '#5c6bc0' }};
+      color: {{ color_on_primary or '#ffffff' }};
+      font-size: 12px;
+      font-weight: bold;
+    }
+
+    .amount-words {
+      margin-top: 10px;
+      padding: 8px 10px;
+      background-color: {{ color_background or '#f6f2f8' }};
+      border-left: 4px solid {{ color_text or '#5c6bc0' }};
+      color: #5d5262;
+      border-radius: 8px;
+      font-size: 9px;
+    }
+
+    .amount-words strong {
+      color: #241a29;
+    }
+  </style>
 </head>
-
 <body>
+  <div class="accent"></div>
+  <div class="page">
+    <table class="header">
+      <tr>
+        <td class="document-cell">
+          <div class="document-label">Document commercial</div>
+          <div class="document-title">
+            {% if facture.type.value == "proforma" %}
+              Facture proforma
+            {% elif facture.type.value == "devis" %}
+              Devis
+            {% else %}
+              Facture
+            {% endif %}
+          </div>
+          <div class="document-meta">
+            <strong>Date :</strong> {{ facture.date_creation.strftime('%d/%m/%Y') }}<br>
+            <strong>N° :</strong> {{ facture.id }}
+          </div>
+        </td>
+        <td class="company-cell">
+          {% if logo_url %}<img src="{{ logo_url }}" alt="Logo" class="logo" width="48" height="40"><br>{% endif %}
+          <div class="company-name">{{ societe.nom }}</div>
+          <div class="company-details">
+            {{ societe.adresse }}<br>
+            NIF : {{ societe.nif }}<br>
+            Tél : {{ societe.telephone }}<br>
+            Email : {{ societe.email }}
+          </div>
+        </td>
+      </tr>
+    </table>
 
-    <!-- EN-TÊTE -->
-    <table>
+    <table class="client-card">
+      <tr>
+        <td>
+          <div class="section-label">Facturé à</div>
+          <div class="client-name">{{ facture.client.nom }}</div>
+          {{ facture.client.adresse }}<br>
+          Tél : {{ facture.client.telephone }}<br>
+          Email : {{ facture.client.email }}
+        </td>
+      </tr>
+    </table>
+
+    <table class="items">
+      <thead>
         <tr>
-            <td>
-                <span class="header-title">
-                    {% if facture.type.value == "proforma" %}
-                        FACTURE PROFORMA
-                    {% elif facture.type.value == "devis" %}
-                        DEVIS
-                    {% else %}
-                        FACTURE
-                    {% endif %}
-                </span><br>
-                <strong>Date :</strong> {{ facture.date_creation.strftime('%d/%m/%Y') }}<br>
-                <strong>N° :</strong> {{ facture.id }}
-            </td>
-            <td></td>
-            <td>
-                <div style="height: 60px; width:auto">
-                    <img src="{{ logo_url }}" alt="Logo" class="logo">
-                </div>
-                <strong>société</strong><br>
-                {{ societe.nom }}<br>
-                {{ societe.adresse }}<br>
-                NIF : {{ societe.nif }}<br>
-                Tél : {{ societe.telephone }}<br>
-                Email : {{ societe.email }}
-            </td>
+          <th class="description-column">Description</th>
+          <th class="quantity-column right">Qté</th>
+          <th class="price-column right">PU</th>
+          <th class="total-column right">Total</th>
         </tr>
+      </thead>
+      <tbody>
+        {% for ligne in facture.lignes %}
+        <tr>
+          <td>
+            <strong>{{ ligne.description }}</strong>
+            {% if ligne.produit %}
+              <div class="item-details">
+                {% if ligne.produit.caracteristiques %}
+                  {% if ligne.produit.caracteristiques is string %}
+                    {{ ligne.produit.caracteristiques }}
+                  {% else %}
+                    {% for k, v in ligne.produit.caracteristiques.items() %}
+                      {{ k }} : {{ v }}{% if not loop.last %}, {% endif %}
+                    {% endfor %}
+                  {% endif %}
+                {% endif %}
+                {% if ligne.unites %}
+                  <br>Code(s/n) :
+                  {% for unite in ligne.unites %}
+                    {{ unite.tracabilite }}{% if not loop.last %}, {% endif %}
+                  {% endfor %}
+                {% endif %}
+              </div>
+            {% endif %}
+          </td>
+          <td class="right">{{ ligne.quantite }}</td>
+          <td class="right">{{ '%.2f'|format(ligne.prix_unitaire) }} {{ devise }}</td>
+          <td class="right">{{ '%.2f'|format(ligne.total_ligne) }} {{ devise }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
     </table>
 
-    <!-- INFOS CLIENT -->
-    <div class="section">
-        <strong>Facturé à :</strong><br>
-        {{ facture.client.nom }}<br>
-        {{ facture.client.adresse }}<br>
-        Tél : {{ facture.client.telephone }}<br>
-        Email : {{ facture.client.email }}
+    <table class="totals-wrap">
+      <tr>
+        <td class="totals-spacer"></td>
+        <td class="totals-cell">
+          <table class="totals">
+            <tr>
+              <td class="label">Total HT</td>
+              <td class="right">{{ '%.2f'|format(facture.total_ht) }} {{ devise }}</td>
+            </tr>
+            {% if facture.tva > 0 %}
+            <tr>
+              <td class="label">TVA ({{ societe.tva }}%)</td>
+              <td class="right">{{ '%.2f'|format(facture.total_ttc - facture.total_ht) }} {{ devise }}</td>
+            </tr>
+            {% endif %}
+            <tr class="grand-total">
+              <td>Total TTC</td>
+              <td class="right">{{ '%.2f'|format(facture.total_ttc) }} {{ devise }}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+
+    <div class="amount-words">
+      Montant en lettres : <strong>{{ montant_en_lettres }}</strong>
     </div>
-
-    <!-- TABLEAU DES LIGNES -->
-    <table>
-        <thead>
-            <tr>
-                <th>Description</th>
-                <th class="right">Qté</th>
-                <th class="right">PU</th>
-                <th class="right">Total</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for ligne in facture.lignes %}
-            <tr>
-                <td>
-                    {{ ligne.description }}
-                    {% if ligne.produit %}
-                        <br>
-                        <small>
-                            {% if ligne.produit.caracteristiques %}
-                                {% if ligne.produit.caracteristiques is string %}
-                                    {{ ligne.produit.caracteristiques }}
-                                {% else %}
-                                    {% for k, v in ligne.produit.caracteristiques.items() %}
-                                        {{ k }} : {{ v }}{% if not loop.last %}, {% endif %}
-                                    {% endfor %}
-                                {% endif %}
-                            {% endif %}
-                            {% if ligne.unites %}
-                                <br>Code(s/n) :
-                                {% for unite in ligne.unites %}
-                                    {{ unite.tracabilite }}{% if not loop.last %}, {% endif %}
-                                {% endfor %}
-                            {% endif %}
-                        </small>
-                    {% endif %}
-                </td>
-
-
-                <td class="right">{{ ligne.quantite }}</td>
-                <td class="right">{{ '%.2f'|format(ligne.prix_unitaire) }} {{ devise }}</td>
-                <td class="right">{{ '%.2f'|format(ligne.total_ligne) }} {{ devise }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-
-    <!-- TOTAUX -->
-    <table class="totaux">
-        <tr class="highlight">
-            <td>Total HT :</td>
-            <td class="right">{{ '%.2f'|format(facture.total_ht) }} {{ devise }}</td>
-        </tr>
-        {% if facture.tva > 0 %}
-        <tr class="highlight">
-            <td>TVA ({{ societe.tva }}%) :</td>
-            <td class="right">{{ '%.2f'|format(facture.total_ttc - facture.total_ht) }} {{ devise }}</td>
-        </tr>
-        {% endif %}
-        <tr class="highlight">
-            <td>Total TTC :</td>
-            <td class="right">{{ '%.2f'|format(facture.total_ttc) }} {{ devise }}</td>
-        </tr>
-    </table>
-
-    <!-- PHRASE DE FIN -->
-    <p style="font-size: 12px;">
-        Montant en lettres : <strong>{{ montant_en_lettres }}</strong>
-    </p>
-
+  </div>
 </body>
 </html>

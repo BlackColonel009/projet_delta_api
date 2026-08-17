@@ -1,6 +1,7 @@
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from app.core.mail import send_email_message
 from app.database import get_db
 from app.models.model_commande import CommandeVente
 from app.models.model_paiement import Paiement
@@ -16,9 +17,11 @@ from app.models.model_user import User
 from sqlalchemy import func
 
 router = APIRouter(prefix="/paiements", tags=["Paiements"])
+
+
 # ➕ Créer un paiement (admin + caissier)
 @router.post("/", response_model=dict)
-def create_paiement(
+async def create_paiement(
     data: PaiementCreate,
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
@@ -38,6 +41,8 @@ def create_paiement(
     total_paye = db.query(func.sum(Paiement.montant)).filter(
         Paiement.facture_id == facture.id
     ).scalar() or 0.0
+    
+    
 
     # 🔁 Si facture totalement payée
     if total_paye >= facture.total_ttc:
@@ -79,6 +84,14 @@ def create_paiement(
 
     db.commit()
 
+     # 📧 Envoi de mail au client (si vente uniquement et email présent)
+    if facture.client and facture.client.email:
+        try:
+            await envoyer_mail_confirmation_paiement(facture.client, facture, paiement, total_paye)
+        except Exception as e:
+            print("Erreur lors de l'envoi de l'email de paiement :", e)
+
+
     # 📝 Log global du paiement
     log_action(
         db=db,
@@ -90,6 +103,33 @@ def create_paiement(
     )
 
     return {"message": f"Paiement enregistré sur la facture #{facture.id}"}
+
+async def envoyer_mail_confirmation_paiement(client, facture, paiement, total_paye):
+    sujet = f"Confirmation de paiement - Facture #{facture.id}"
+    devise = facture.user.devise if hasattr(facture, "user") else ""
+    
+
+    contenu = f"""
+    Bonjour {client.nom},
+
+    Nous vous confirmons la réception d’un paiement de {paiement.montant:.2f} {devise}
+    pour la facture n°{facture.id} datée du {facture.date_creation.strftime('%d/%m/%Y')}.
+
+    Statut actuel de la facture : {facture.statut.upper()}.
+    Montant total dû : {facture.total_ttc:.2f} {devise}
+    Total payé à ce jour : {facture.total_ttc if facture.statut == "payée" else total_paye:.2f} {devise}
+    Moyen de paiement utilisé : {paiement.moyen_paiement}
+    
+    Merci pour votre confiance.
+
+    — L’équipe {facture.user.societe_ou_entreprise if facture.user else "Trade Care"}
+    """
+
+    await send_email_message(
+        to_email=client.email,
+        subject=sujet,
+        body=contenu,
+    )
 
 
 

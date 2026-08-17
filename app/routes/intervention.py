@@ -1,8 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
+from app.core.mail import send_email_message
 from app.database import get_db
+from app.models.model_client import Client
 from app.models.model_intervention import Intervention, intervention_produits
+from app.models.model_user import User
 from app.schemas.intervention_schema import InterventionOut, InterventionCreate
 from app.utils.security import get_current_user
 from app.utils.permissions import check_role
@@ -69,22 +72,32 @@ def create_intervention(
 
     )
 
+
 @router.put("/{intervention_id}", response_model=InterventionOut)
 def update_intervention(
     intervention_id: int,
     data: InterventionCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.technicien]))
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.technicien])),
+    background_tasks: BackgroundTasks = None
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    user = db.query(User).filter(User.id == parent_user_id).first()  # 👈 le user principal
+
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
 
     intervention = db.query(Intervention).filter(
         Intervention.id == intervention_id,
         Intervention.user_id == parent_user_id
     ).first()
 
+
     if not intervention:
         raise HTTPException(status_code=404, detail="Intervention non trouvée")
+
+    statut_avant = intervention.statut  # pour détecter le changement
+    
 
     # Mise à jour des champs
     intervention.client_id = data.client_id
@@ -99,7 +112,9 @@ def update_intervention(
     from app.models.model_produit import Produit
     produits = db.query(Produit).filter(Produit.id.in_(data.produits_ids)).all()
     intervention.produits = produits
-
+    
+    facturation = intervention.commentaire_ex  # pour le mail
+    
     db.commit()
     db.refresh(intervention)
 
@@ -111,6 +126,33 @@ def update_intervention(
         entite_id=intervention.id,
         details=f"Intervention #{intervention.id} mise à jour"
     )
+
+    # Si statut passe à "termine", on envoie un mail au client
+    if statut_avant != "termine" and data.statut == "termine":
+        client = db.query(Client).filter(Client.id == data.client_id).first()
+
+        # Préparer le nom du ou des produits
+        nom_produits = ""
+        if produits:  # Si des produits liés existent
+            nom_produits = ", ".join([p.nom for p in produits])
+        elif data.produit_ex:
+            nom_produits = data.produit_ex
+        else:
+            nom_produits = "votre équipement"
+
+        if client and client.email:
+            subject = f" Intervention terminée - {user.societe_ou_entreprise}"
+            body = (
+                f"Bonjour {client.nom},\n\n"
+                f"L’intervention sur << {nom_produits} >> est maintenant terminée.\n"
+                f"Vous pouvez passer à notre entreprise pour le récupérer.\n\n"
+                f"L'intervention est Facturé à << {facturation} >>.\n\n"
+                f"Merci de votre confiance.\n"
+                f"L’équipe {user.societe_ou_entreprise}."
+            )
+
+            # Envoi en tâche de fond
+            background_tasks.add_task(send_email_message, to_email=client.email, subject=subject, body=body)
 
     return InterventionOut(
         id=intervention.id,

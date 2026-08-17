@@ -7,8 +7,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from jose import JWTError
 import jwt
+from app.repo_scheduler.scheduler import start_scheduler
 from app.utils.policy import afficher_banner
-from app.routes import auth, client_produit, galerie, tutoriel  # Tu ajouteras d'autres routes ici
+from app.routes import admin_subscription, auth, client_produit, depot, depot_service, depot_tarif, facture_depot, followup, galerie, rapport_financier, tutoriel  # Tu ajouteras d'autres routes ici
 from app.config import settings
 from app.routes import client
 from app.routes import produit
@@ -62,9 +63,17 @@ app.include_router(auth.router, prefix="/auth", tags=["Authentification"])
 
 app.mount("/static", StaticFiles(directory="upload"), name="static")
 
+app.include_router(admin_subscription.router)
+
 app.include_router(client.router)
 
 app.include_router(produit.router)
+
+app.include_router(depot_service.router)
+
+app.include_router(depot.router)
+
+app.include_router(depot_tarif.router)
 
 app.include_router(galerie.router)
 
@@ -82,7 +91,10 @@ app.include_router(facture.router)
 
 app.include_router(facture_pdf.router)
 
+app.include_router(facture_depot.router)
+
 app.include_router(commande.router_ventes)
+
 app.include_router(commande.router_achats)
 
 app.include_router(paiement.router)
@@ -105,6 +117,8 @@ app.include_router(client_produit.router)
 
 app.include_router(rapport.router)
 
+app.include_router(rapport_financier.router)
+
 app.include_router(notification.router)
 
 # ou facture_pdf selon ton fichier
@@ -113,6 +127,8 @@ app.include_router(File.router)
 app.include_router(tutoriel.router)
 
 app.include_router(reset.router)
+
+app.include_router(followup.router_followup)
 
 
 # Route de test
@@ -130,6 +146,13 @@ def head_root():
 # @app.get("/shared", dependencies=[Depends(require_any_role(["viewer", "editor", "manager"]))])
 # def shared_dashboard():
 #     return {"message": "Accès pour plusieurs rôles 👥"}
+
+
+
+@app.on_event("startup")
+def startup_event():
+    start_scheduler()
+
 
 
 @app.middleware("http")

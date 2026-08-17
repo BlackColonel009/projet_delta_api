@@ -244,13 +244,15 @@ async def send_facture_to_client_memory(
     db: Session = Depends(get_db),
     # current_user=Depends(All_required())
 ):
-    devise = ""
+   
     facture = db.query(Facture).options(
         joinedload(Facture.lignes).joinedload(LigneFacture.produit),
         joinedload(Facture.client),
         joinedload(Facture.fournisseur),
         joinedload(Facture.paiements)
     ).filter(Facture.id == facture_id).first()
+
+    devise = facture.user.devise if hasattr(facture, "user") else ""
 
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
@@ -449,3 +451,4 @@ async def send_facture_to_client_memory(
     os.remove(pdf_path)
 
     return {"message": f"Facture #{facture.id} envoyée à {facture.client.email}"}
+

@@ -2,11 +2,12 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from app.database import get_db
 from app.models.model_categorie import Categorie
 from app.models.model_client_produit import ClientProduit
+from app.models.model_clientfollowup import ClientFollowup, FollowupStatus
 from app.models.model_produit import Produit
 from app.models.model_client import Client
 from app.models.model_fournisseur import Fournisseur
@@ -127,19 +128,19 @@ def create_commande_vente(
             ).count()
             produit.quantite = quantite_restante    
                 
-        # 🧠 Création d'un enregistrement ClientProduit
-        client_produit = ClientProduit(
-            client_id=client.id,
-            commande_id=commande.id,
-            produit_id=produit.id,
-            nom_produit=produit.nom,
-            categorie_produit=categorie_nom,
-            prix_unitaire_backup=produit.prix_vente,
-            quantite=ligne_data.quantite,
-            prix_unitaire=prix_utilise,
-            date_achat=commande.date_commande,
-        )
-        db.add(client_produit)
+            # 🧠 Création d'un enregistrement ClientProduit
+            client_produit = ClientProduit(
+                client_id=client.id,
+                commande_id=commande.id,
+                produit_id=produit.id,
+                nom_produit=produit.nom,
+                categorie_produit=categorie_nom,
+                prix_unitaire_backup=produit.prix_vente,
+                quantite=ligne_data.quantite,
+                prix_unitaire=prix_utilise,
+                date_achat=commande.date_commande,
+            )
+            db.add(client_produit)
         
     
 
@@ -156,6 +157,42 @@ def create_commande_vente(
     commande.total_ttc = total_ht + commande.tva
 
     db.commit()
+
+    date_achat = commande.date_commande or datetime.utcnow()
+
+    # Déterminer le type de suivi selon le statut
+    if data.statut == "validée":
+        type_followup = "fidélisation"
+    elif data.statut == "en_attente":
+        type_followup = "relance_paiement"
+    else:
+        type_followup = None  # proforma, devis, etc. => pas de suivi
+
+    if type_followup:
+        followup = ClientFollowup(
+            user_id=parent_user_id,
+            client_id=commande.client_id,
+            commande_id=commande.id,
+            date_achat=date_achat,
+            statut=FollowupStatus.en_attente,
+            date_prochain_envoi=datetime.utcnow() + timedelta(days=1),  # 2 minutes
+            type_followup=type_followup
+        )
+
+        db.add(followup)
+        db.commit()
+        db.refresh(followup)
+
+        log_action(
+            db=db,
+            current_user=current_user,
+            action="Suivi client activé",
+            type_entite="client_followup",
+            entite_id=followup.id,
+            details=f"Suivi {followup.type_followup} pour commande #{commande.id} du client {client.nom}"
+        )
+
+
     db.refresh(commande)
 
     # Log d'action général de la commande

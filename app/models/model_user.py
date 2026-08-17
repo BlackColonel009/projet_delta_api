@@ -33,6 +33,17 @@ class User(Base):
     historiques = relationship("Historique", back_populates="user", overlaps="historiques_user")
     historiques_user = relationship("Historique", foreign_keys="[Historique.user_id]", overlaps="historiques")
 
+    depots = relationship("Depot", back_populates="user")
+    depot_services = relationship("DepotService", back_populates="user")
+    depot_tarifs = relationship("DepotTarif", back_populates="user")
+    factures_depot = relationship("FactureDepot", back_populates="user")
+    subscriptions = relationship(
+        "Subscription",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
+
+
     
 
     

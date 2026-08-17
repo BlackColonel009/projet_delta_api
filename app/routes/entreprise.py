@@ -120,3 +120,4 @@ def get_entreprise_info_complete(
         "dernieres_ventes": ventes_list,
         "chiffre_affaires": round(chiffre_affaires, 2)
     }
+

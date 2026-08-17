@@ -22,5 +22,11 @@ class Client(Base):
     commandes = relationship("CommandeVente", back_populates="client")
     factures = relationship("Facture", back_populates="client")
     produits_achetes = relationship("ClientProduit", back_populates="client", cascade="all, delete-orphan")
+    # Dans Client
+    followups = relationship("ClientFollowup", back_populates="client")
+
+    depots = relationship("Depot", back_populates="client")
+
+
     def __repr__(self):
         return f"<Client {self.nom}>"

@@ -161,3 +161,20 @@ String formatMontant(double montant, String devise) =>
 - `GET /client-produits/{id}` – Détails d’un produit acheté
 - `DELETE /client-produits/{id}` – Supprimer un lien client-produit
 - 'GET /client-produits/client/{client_id}/export'
+
+
+
+radecare.service
+             ├─1246583 /var/www/tradecare-api/venv/bin/python3.12 /var/www/tradecare-api/venv/bin/gunicorn app.main:app -k uvicorn.workers.U>
+             └─1246585 /var/www/tradecare-api/venv/bin/python3.12 /var/www/tradecare-api/venv/bin/gunicorn app.main:app -k uvicorn.workers.U>
+
+Feb 17 17:52:58 vmi2639306 gunicorn[1246585]:     return dialect.connect(*cargs, **cparams)
+Feb 17 17:52:58 vmi2639306 gunicorn[1246585]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Feb 17 17:52:58 vmi2639306 gunicorn[1246585]:   File "/var/www/tradecare-api/venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py">
+Feb 17 17:52:58 vmi2639306 gunicorn[1246585]:     return self.loaded_dbapi.connect(*cargs, **cparams)  # type: ignore[no-any-return]  # NOQA>
+Feb 17 17:52:58 vmi2639306 gunicorn[1246585]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Feb 17 17:52:58 vmi2639306 gunicorn[1246585]:   File "/var/www/tradecare-api/venv/lib/python3.12/site-packages/psycopg2/__init__.py", line 1>
+Feb 17 17:52:58 vmi2639306 gunicorn[1246585]:     conn = _connect(dsn, connection_factory=connection_factory, **kwasync)
+Feb 17 17:52:58 vmi2639306 gunicorn[1246585]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Feb 17 17:52:58 vmi2639306 gunicorn[1246585]: sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) could not translate host name "aw>
+Feb 17 17:52:58 vmi2639306 gunicorn[1246585]: (Background on this error at: https://sqlalche.me/e/20/e3q8)

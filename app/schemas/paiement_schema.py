@@ -6,3 +6,4 @@ class PaiementCreate(BaseModel):
     montant: float
     moyen_paiement: str = "espèces"
     devise: str = "FCFA"
+    # commande_id: int | None = None
