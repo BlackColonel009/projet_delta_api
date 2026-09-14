@@ -11,7 +11,7 @@ from app.repo_scheduler.scheduler_ai import run_followup_scheduler
 from app.schemas.followup_schema import UpdateDelaiRelanceSchema
 from app.utils.logger import log_action
 from app.utils.permissions import check_role, RoleEnum
-from app.utils.security import get_current_user
+from app.utils.security import get_active_user
 
 router_followup = APIRouter(prefix="/followups", tags=["Suivi client"])
 
@@ -31,11 +31,17 @@ def test_suivi_scheduler(
 @router_followup.get("/count")
 def get_unique_followup_clients_count(
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_active_user)
 ):
+    parent_user_id = (
+        current_user.parent_user_id
+        if not current_user.is_main_user
+        else current_user.id
+    )
+
     count = db.query(ClientFollowup.client_id).filter(
         ClientFollowup.type_followup == "fidélisation",
-        ClientFollowup.user_id == current_user.id
+        ClientFollowup.user_id == parent_user_id
     ).distinct().count()
     
     return {"count": count}

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
@@ -21,14 +22,24 @@ def create_categorie(
     
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    if db.query(Categorie).filter(Categorie.nom == data.nom, Categorie.user_id == current_user.id).first():
+    if db.query(Categorie).filter(
+        Categorie.nom == data.nom,
+        Categorie.user_id == parent_user_id,
+    ).first():
         raise HTTPException(status_code=400, detail="Cette catégorie existe déjà.")
     
     
     # 🔐 Liaison automatique à l'utilisateur connecté
     categorie = Categorie(**data.dict(), user_id=parent_user_id)
     db.add(categorie)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Cette catégorie existe déjà.",
+        )
     db.refresh(categorie)
     
     log_action(
@@ -86,11 +97,29 @@ def update_categorie(
     ).first()
     if not categorie:
         raise HTTPException(status_code=404, detail="Catégorie non trouvée")
+
+    duplicate = db.query(Categorie).filter(
+        Categorie.nom == data.nom,
+        Categorie.user_id == parent_user_id,
+        Categorie.id != categorie_id,
+    ).first()
+    if duplicate:
+        raise HTTPException(status_code=400, detail="Cette catégorie existe déjà.")
     
     for key, value in data.dict().items():
         setattr(categorie, key, value)
     
     
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Cette catégorie existe déjà.",
+        )
+    db.refresh(categorie)
+
     log_action(
         db=db,
         current_user=current_user,
@@ -100,10 +129,6 @@ def update_categorie(
         details=f"Catégorie modifiée : {categorie.nom}"
     )
 
-    
-    
-    db.commit()
-    db.refresh(categorie)
     return categorie
 
 # ❌ Supprimer une catégorie

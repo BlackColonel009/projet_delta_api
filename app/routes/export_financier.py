@@ -519,34 +519,48 @@ def export_etat_stock(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier])),
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    devise = current_user.devise or "FCFA"
+    parent_user = getattr(current_user, "parent_user", None)
+    devise = current_user.devise or getattr(parent_user, "devise", None) or "FCFA"
     produits = (
         db.query(Produit)
         .filter(Produit.user_id == parent_user_id, Produit.date_suppression.is_(None))
         .order_by(Produit.nom.asc())
         .all()
     )
+
+    initial_stock_by_product = defaultdict(int)
+    available_stock_by_product = defaultdict(int)
     traceability_by_product = defaultdict(list)
-    for product_id, traceability in db.query(
-        UniteProduit.produit_id, UniteProduit.tracabilite
-    ).filter(UniteProduit.tracabilite.isnot(None)).all():
-        traceability_by_product[product_id].append(traceability)
+    unit_rows = (
+        db.query(
+            UniteProduit.produit_id,
+            UniteProduit.tracabilite,
+            UniteProduit.statut,
+        )
+        .join(Produit, UniteProduit.produit_id == Produit.id)
+        .filter(
+            Produit.user_id == parent_user_id,
+            Produit.date_suppression.is_(None),
+        )
+        .all()
+    )
+    for product_id, traceability, status in unit_rows:
+        initial_stock_by_product[product_id] += 1
+        if status == "disponible":
+            available_stock_by_product[product_id] += 1
+        if traceability:
+            traceability_by_product[product_id].append(traceability)
 
     rows = []
     for product in produits:
-        initial_stock = db.query(UniteProduit).filter(UniteProduit.produit_id == product.id).count()
-        available_stock = db.query(UniteProduit).filter(
-            UniteProduit.produit_id == product.id,
-            UniteProduit.statut == "disponible",
-        ).count()
         rows.append(
             {
                 "id": product.id,
                 "name": product.nom,
                 "characteristics": product.caracteristiques or "-",
                 "traceability": sorted(set(traceability_by_product.get(product.id, []))) or ["-"],
-                "initial": initial_stock,
-                "available": available_stock,
+                "initial": initial_stock_by_product[product.id],
+                "available": available_stock_by_product[product.id],
                 "price": product.prix_vente,
             }
         )
