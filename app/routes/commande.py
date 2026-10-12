@@ -1,7 +1,7 @@
 # 📦 ROUTES POUR Commande Vente et Achat
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from datetime import datetime, timedelta
 from typing import Optional
 from app.database import get_db
@@ -15,7 +15,13 @@ from app.models.model_commande import CommandeVente, LigneCommandeVente, Command
 from app.models.model_unite_produit import UniteProduit
 from app.models.model_user import User
 from app.services.generate_facture_from_commande import generate_facture_from_commande, generate_facture_pdf
-from app.schemas.commande_schema import CommandeVenteCreate, CommandeAchatCreate
+from app.services.traceability_service import create_generated_unit
+from app.schemas.commande_schema import (
+    CommandeAchatCreate,
+    CommandeAchatOut,
+    CommandeVenteCreate,
+    CommandeVenteOut,
+)
 from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
@@ -24,6 +30,49 @@ import os
 
 router_ventes = APIRouter(prefix="/commandes-ventes", tags=["Commandes Ventes"])
 router_achats = APIRouter(prefix="/commandes-achats", tags=["Commandes Achats"])
+
+
+def _serialize_ligne_commande(ligne):
+    """Conserve le nom historique même si la fiche produit a été supprimée."""
+    produit = getattr(ligne, "produit", None)
+    nom_produit = getattr(produit, "nom", None) or ligne.description
+    return {
+        "id": ligne.id,
+        "produit_id": ligne.produit_id,
+        "nom_produit": nom_produit or f"Produit #{ligne.produit_id}",
+        "description": ligne.description,
+        "quantite": ligne.quantite,
+        "prix_unitaire": ligne.prix_unitaire,
+        "total_ligne": ligne.total_ligne,
+    }
+
+
+def _serialize_commande_vente(commande):
+    return {
+        "id": commande.id,
+        "client_id": commande.client_id,
+        "date_commande": commande.date_commande,
+        "total_ht": commande.total_ht,
+        "total_ttc": commande.total_ttc,
+        "tva": commande.tva,
+        "tva_appliquee": commande.tva_appliquee,
+        "statut": commande.statut,
+        "lignes": [_serialize_ligne_commande(ligne) for ligne in commande.lignes],
+    }
+
+
+def _serialize_commande_achat(commande):
+    return {
+        "id": commande.id,
+        "fournisseur_id": commande.fournisseur_id,
+        "date_commande": commande.date_commande,
+        "total_ht": commande.total_ht,
+        "total_ttc": commande.total_ttc,
+        "tva": commande.tva,
+        "tva_appliquee": commande.tva_appliquee,
+        "statut": commande.statut,
+        "lignes": [_serialize_ligne_commande(ligne) for ligne in commande.lignes],
+    }
 
 # ➕ Créer une commande vente
 @router_ventes.post("/")
@@ -53,7 +102,9 @@ def create_commande_vente(
         statut = data.statut
     )
     db.add(commande)
-    db.commit()
+    # L'ID est nécessaire pour rattacher les unités, mais la commande ne doit
+    # être validée qu'après toutes les vérifications de stock.
+    db.flush()
     db.refresh(commande)
     print("🧾 Statut reçu :", data.statut)
 
@@ -93,15 +144,32 @@ def create_commande_vente(
         if data.statut == "en_attente":
             # Si des codes QR sont fournis, on les valide et on les marque comme vendus
             if ligne_data.codes:
-                print("codes reçus:", ligne_data.codes)
-                for code in ligne_data.codes:
+                codes = list(dict.fromkeys(
+                    code.strip() for code in ligne_data.codes if code and code.strip()
+                ))
+                if len(codes) != ligne_data.quantite:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Le nombre d'unités QR uniques doit correspondre "
+                            "à la quantité vendue."
+                        ),
+                    )
+                print("codes reçus:", codes)
+                for code in codes:
                     unite = db.query(UniteProduit).filter(
                         UniteProduit.tracabilite == code,
                         UniteProduit.produit_id == produit.id,
                         UniteProduit.statut == "disponible"
-                    ).first()
+                    ).with_for_update().first()
                     if not unite:
-                        raise HTTPException(status_code=400, detail=f"Unité avec code {code} non trouvée ou déjà utilisée")
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                f"L'unité {code} n'est plus disponible. "
+                                "Elle est peut-être vendue, indisponible ou déjà en cours de vente."
+                            ),
+                        )
                     unite.statut = "en cours"
                     unite.commande_vente_id = commande.id
                     unite.date_modification = datetime.utcnow()
@@ -111,7 +179,7 @@ def create_commande_vente(
                 unites_dispo = db.query(UniteProduit).filter(
                     UniteProduit.produit_id == produit.id,
                     UniteProduit.statut == "disponible"
-                ).limit(ligne_data.quantite).all()
+                ).with_for_update().limit(ligne_data.quantite).all()
 
                 if len(unites_dispo) < ligne_data.quantite:
                     raise HTTPException(status_code=400, detail=f"Pas assez d'unités disponibles pour {produit.nom}")
@@ -227,71 +295,91 @@ def create_commande_achat(
     if not fournisseur:
         raise HTTPException(status_code=404, detail="Fournisseur non trouvé")
 
-    commande = CommandeAchat(
-        fournisseur_id=data.fournisseur_id,
-        tva_appliquee=data.tva_appliquee,
-        user_id=parent_user_id,  # 🔐 Liaison sécurisée
-        statut = data.statut
-    )
-    db.add(commande)
-    db.commit()
-    db.refresh(commande)
+    try:
+        commande = CommandeAchat(
+            fournisseur_id=data.fournisseur_id,
+            tva_appliquee=data.tva_appliquee,
+            user_id=parent_user_id,
+            statut=data.statut,
+        )
+        db.add(commande)
+        # L'ID est requis pour les lignes et les unités, sans valider une
+        # commande partielle en base.
+        db.flush()
 
-    total_ht = 0
-    for ligne_data in data.lignes:
-        produit = db.query(Produit).filter(
-            Produit.id == ligne_data.produit_id,
-            Produit.user_id == parent_user_id
-        ).first()
-        if not produit:
-            raise HTTPException(status_code=400, detail=f"Produit non trouvé")
+        total_ht = 0.0
+        for ligne_data in data.lignes:
+            # Le verrou empêche deux achats simultanés de modifier le même
+            # stock sans voir les changements de l'autre transaction.
+            produit = db.query(Produit).filter(
+                Produit.id == ligne_data.produit_id,
+                Produit.user_id == parent_user_id,
+                Produit.date_suppression.is_(None),
+            ).with_for_update().first()
+            if not produit:
+                raise HTTPException(status_code=400, detail="Produit non trouvé")
 
-        # 🔁 Détermine le prix unitaire réel utilisé
-        prix_utilise = ligne_data.prix_unitaire if ligne_data.prix_unitaire is not None else produit.prix_achat
-
-        # Mise à jour de la quantité et du prix achat si souhaité
-        produit.quantite += ligne_data.quantite
-        
-        produit.prix_achat = prix_utilise  # (facultatif si tu veux garder en mémoire ce nouveau prix)
-
-        total_ligne = prix_utilise * ligne_data.quantite
-        total_ht += total_ligne
-
-
-        db.add(LigneCommandeAchat(
-            commande_id=commande.id,
-            produit_id=produit.id,
-            description=produit.nom,
-            quantite=ligne_data.quantite,
-            prix_unitaire=prix_utilise,
-            total_ligne=total_ligne
-        ))
-        
-        # ➕ Création automatique des unités QR
-        # Reprendre le compteur à partir de l’existant
-        compteur_depart = db.query(UniteProduit).filter(UniteProduit.produit_id == produit.id).count()
-
-        for i in range(1, ligne_data.quantite + 1):
-            numero = compteur_depart + i
-            qr_code = f"TRAC-{produit.id}-{str(numero).zfill(4)}-{fournisseur.nom.replace(' ', '_')}"
-                    
-            unite = UniteProduit(
-                produit_id=produit.id,
-                tracabilite=qr_code,
-                statut="disponible",
-                date_creation=datetime.utcnow()
+            prix_utilise = (
+                ligne_data.prix_unitaire
+                if ligne_data.prix_unitaire is not None
+                else produit.prix_achat
             )
-            db.add(unite)
+            if prix_utilise is None or prix_utilise < 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Prix d'achat invalide pour {produit.nom}",
+                )
 
-    taux_tva = current_user.main_user.tva if not current_user.is_main_user else current_user.tva
-    taux_tva = taux_tva or 0.0
+            total_ligne = prix_utilise * ligne_data.quantite
+            total_ht += total_ligne
+            produit.prix_achat = prix_utilise
 
-    commande.total_ht = total_ht
-    commande.tva = taux_tva * total_ht if data.tva_appliquee else 0
-    commande.total_ttc = total_ht + commande.tva
+            db.add(LigneCommandeAchat(
+                commande_id=commande.id,
+                produit_id=produit.id,
+                description=produit.nom,
+                quantite=ligne_data.quantite,
+                prix_unitaire=prix_utilise,
+                total_ligne=total_ligne,
+            ))
 
-    db.commit()
-    db.refresh(commande)
+            for _ in range(ligne_data.quantite):
+                create_generated_unit(
+                    db,
+                    produit_id=produit.id,
+                    suffix=fournisseur.nom,
+                    commande_achat_id=commande.id,
+                )
+
+            # La quantité affichée reste dérivée des unités réellement
+            # disponibles, même après une suppression définitive du stock.
+            produit.quantite = db.query(UniteProduit).filter(
+                UniteProduit.produit_id == produit.id,
+                UniteProduit.statut == "disponible",
+            ).count()
+
+        taux_tva = (
+            current_user.main_user.tva
+            if not current_user.is_main_user
+            else current_user.tva
+        ) or 0.0
+        commande.total_ht = total_ht
+        commande.tva = taux_tva * total_ht if data.tva_appliquee else 0
+        commande.total_ttc = total_ht + commande.tva
+
+        # Une seule validation : commande, lignes, stock et unités réussissent
+        # ensemble ou sont tous annulés.
+        db.commit()
+        db.refresh(commande)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="L'achat n'a pas pu être enregistré. Aucune modification partielle n'a été conservée.",
+        ) from error
 
     
     log_action(
@@ -309,61 +397,69 @@ def create_commande_achat(
     return {"message": "Commande achat creee", "commande_id": commande.id}
 
 # 📋 Lister les commandes ventes
-@router_ventes.get("/")
+@router_ventes.get("/", response_model=list[CommandeVenteOut])
 def get_commandes_ventes(
     start: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier,  RoleEnum.commercial, RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    query = db.query(CommandeVente).filter(CommandeVente.user_id == parent_user_id)
+    query = db.query(CommandeVente).options(
+        selectinload(CommandeVente.lignes).selectinload(LigneCommandeVente.produit)
+    ).filter(CommandeVente.user_id == parent_user_id)
     if start:
         date_start = datetime.strptime(start, "%Y-%m-%d").date()
         query = query.filter(CommandeVente.date_commande >= date_start)
-    return query.all()
+    return [_serialize_commande_vente(commande) for commande in query.all()]
 
 # 🔍 Détail d'une commande vente
-@router_ventes.get("/{commande_id}")
+@router_ventes.get("/{commande_id}", response_model=CommandeVenteOut)
 def get_commande_vente(
     commande_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier,  RoleEnum.commercial, RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    commande = db.query(CommandeVente).filter(
+    commande = db.query(CommandeVente).options(
+        selectinload(CommandeVente.lignes).selectinload(LigneCommandeVente.produit)
+    ).filter(
         CommandeVente.id == commande_id,
         CommandeVente.user_id == parent_user_id
     ).first()
     if not commande:
         raise HTTPException(status_code=404, detail="Commande vente non trouvée")
-    return commande
+    return _serialize_commande_vente(commande)
 
 # 📋 Lister les commandes achats
-@router_achats.get("/")
+@router_achats.get("/", response_model=list[CommandeAchatOut])
 def get_commandes_achats(
     start: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.gestionnaire_stock]))
 ):  
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    query = db.query(CommandeAchat).filter(CommandeAchat.user_id == parent_user_id)
+    query = db.query(CommandeAchat).options(
+        selectinload(CommandeAchat.lignes).selectinload(LigneCommandeAchat.produit)
+    ).filter(CommandeAchat.user_id == parent_user_id)
     if start:
         date_start = datetime.strptime(start, "%Y-%m-%d").date()
         query = query.filter(CommandeAchat.date_commande >= date_start)
-    return query.all()
+    return [_serialize_commande_achat(commande) for commande in query.all()]
 
 # 🔍 Détail d'une commande achat
-@router_achats.get("/{commande_id}")
+@router_achats.get("/{commande_id}", response_model=CommandeAchatOut)
 def get_commande_achat(
     commande_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    commande = db.query(CommandeAchat).filter(
+    commande = db.query(CommandeAchat).options(
+        selectinload(CommandeAchat.lignes).selectinload(LigneCommandeAchat.produit)
+    ).filter(
         CommandeAchat.id == commande_id,
         CommandeAchat.user_id == parent_user_id
     ).first()
     if not commande:
         raise HTTPException(status_code=404, detail="Commande achat non trouvée")
-    return commande
+    return _serialize_commande_achat(commande)

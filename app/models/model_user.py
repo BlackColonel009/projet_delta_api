@@ -26,6 +26,13 @@ class User(Base):
     tva = Column(Float, default=0.18, nullable=False)  # par exemple 18%
     parent_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     facture_color = Column(String, default="#5C6BC0")  # Par exemple un bleu doux
+    app_theme = Column(String(32), default="tradecare", nullable=False)
+    theme_mode = Column(String(16), default="system", nullable=False)
+    daily_report_reminder_enabled = Column(Boolean, default=False, nullable=False)
+    daily_report_reminder_hour = Column(Integer, default=18, nullable=False)
+    daily_report_reminder_minute = Column(Integer, default=0, nullable=False)
+    daily_report_reminder_revision = Column(Integer, default=0, nullable=False)
+    daily_report_reminder_updated_at = Column(DateTime, nullable=True)
 
 
     sub_users = relationship("SubUser", back_populates="parent_user", cascade="all, delete")

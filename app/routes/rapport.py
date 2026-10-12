@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import List
 from app.database import get_db
 from app.models.model_rapport import Rapport
@@ -12,7 +12,6 @@ from fastapi.responses import StreamingResponse
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from io import BytesIO
-from sqlalchemy import or_
 from datetime import datetime, date
 
 
@@ -50,7 +49,10 @@ def create_rapport(
         "date_creation": rapport.date_creation,
         "user_id": rapport.user_id,
         "sub_user_id": None,
-        "auteur": current_user.username or current_user.email
+        "auteur": current_user.username or current_user.email,
+        "avatar_url": current_user.avatar_url,
+        "role": "Administrateur",
+        "is_mine": True,
     }
 
 
@@ -86,7 +88,10 @@ def create_rapport_sub(
         "date_creation": rapport.date_creation,
         "user_id": rapport.user_id,
         "sub_user_id": rapport.sub_user_id,
-        "auteur": current_sub.username
+        "auteur": current_sub.username,
+        "avatar_url": current_sub.avatar_url,
+        "role": current_sub.role,
+        "is_mine": True,
     }
 
 
@@ -99,15 +104,13 @@ def list_rapports(
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
 
-    rapports = db.query(Rapport)\
-        .filter(
-            or_(
-                Rapport.user_id == parent_user_id,
-                Rapport.sub_user.has(parent_user_id=parent_user_id)
-            )
-        )\
-        .order_by(Rapport.date_creation.desc())\
+    rapports = (
+        db.query(Rapport)
+        .options(joinedload(Rapport.user), joinedload(Rapport.sub_user))
+        .filter(Rapport.user_id == parent_user_id)
+        .order_by(Rapport.date_creation.desc())
         .all()
+    )
 
     result = []
     for r in rapports:
@@ -119,7 +122,7 @@ def list_rapports(
         elif r.user:
             auteur = r.user.username or r.user.email
             avatar_url = r.user.avatar_url
-            role = "Main user"
+            role = "Administrateur"
         else:
             auteur = "Inconnu"
             avatar_url = None
@@ -135,7 +138,12 @@ def list_rapports(
             "sub_user_id": r.sub_user_id,
             "auteur": auteur,
             "avatar_url": avatar_url,
-            "role": role
+            "role": role,
+            "is_mine": (
+                r.sub_user_id == current_user.id
+                if not current_user.is_main_user
+                else r.sub_user_id is None and r.user_id == current_user.id
+            ),
         })
 
     return result
@@ -145,14 +153,19 @@ def list_rapports(
 @router.delete("/{rapport_id}")
 def delete_rapport(rapport_id: int, db: Session = Depends(get_db), current_user=Depends(All_required())):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    rapport = db.query(Rapport).filter(Rapport.id == rapport_id).first()
+    rapport = db.query(Rapport).filter(
+        Rapport.id == rapport_id,
+        Rapport.user_id == parent_user_id,
+    ).first()
 
     if not rapport:
         raise HTTPException(status_code=404, detail="Rapport introuvable")
 
-    # Optionnel : vérifier que le rapport appartient bien à ce user
-    if rapport.user_id != parent_user_id:
-        raise HTTPException(status_code=403, detail="Accès interdit")
+    if not current_user.is_main_user and rapport.sub_user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Vous ne pouvez supprimer que vos propres rapports",
+        )
 
     db.delete(rapport)
     db.commit()

@@ -8,6 +8,8 @@ from app.schemas.galerie_schema import GalerieOut
 import shutil, os
 from uuid import uuid4
 from datetime import datetime
+from app.utils.permissions import check_role
+from app.schemas.user_schema import RoleEnum
 
 
 router = APIRouter(prefix="/galerie", tags=["Galerie Produit"])
@@ -16,9 +18,19 @@ router = APIRouter(prefix="/galerie", tags=["Galerie Produit"])
 def ajouter_photo_galerie(
     produit_id: int = Form(...),
     file: UploadFile = File(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])),
 ):
-    produit = db.query(Produit).filter(Produit.id == produit_id).first()
+    parent_user_id = (
+        current_user.parent_user_id
+        if not current_user.is_main_user
+        else current_user.id
+    )
+    produit = db.query(Produit).filter(
+        Produit.id == produit_id,
+        Produit.user_id == parent_user_id,
+        Produit.date_suppression.is_(None),
+    ).first()
     if not produit:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
 
@@ -46,9 +58,14 @@ def ajouter_photo_galerie(
 def update_image_galerie(
     image_id: int,
     file: UploadFile = File(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])),
 ):
-    image = db.query(GaleriePhoto).filter(GaleriePhoto.id == image_id).first()
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    image = db.query(GaleriePhoto).join(GaleriePhoto.produit).filter(
+        GaleriePhoto.id == image_id,
+        Produit.user_id == parent_user_id,
+    ).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image non trouvée")
 
@@ -73,8 +90,16 @@ def update_image_galerie(
     return {"message": "Image mise à jour avec succès", "image_url": image.image_url}
 
 @router.delete("/{image_id}", response_model=dict)
-def delete_image_galerie(image_id: int, db: Session = Depends(get_db)):
-    image = db.query(GaleriePhoto).filter(GaleriePhoto.id == image_id).first()
+def delete_image_galerie(
+    image_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])),
+):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    image = db.query(GaleriePhoto).join(GaleriePhoto.produit).filter(
+        GaleriePhoto.id == image_id,
+        Produit.user_id == parent_user_id,
+    ).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image non trouvée")
 
@@ -92,6 +117,20 @@ def delete_image_galerie(image_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{produit_id}", response_model=List[GalerieOut])
-def get_galerie_by_produit(produit_id: int, db: Session = Depends(get_db)):
-    images = db.query(GaleriePhoto).filter(GaleriePhoto.produit_id == produit_id).order_by(GaleriePhoto.date_ajout.desc()).all()
+def get_galerie_by_produit(
+    produit_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([
+        RoleEnum.admin,
+        RoleEnum.gestionnaire_stock,
+        RoleEnum.technicien,
+        RoleEnum.caissier,
+        RoleEnum.commercial,
+    ])),
+):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    images = db.query(GaleriePhoto).join(GaleriePhoto.produit).filter(
+        GaleriePhoto.produit_id == produit_id,
+        Produit.user_id == parent_user_id,
+    ).order_by(GaleriePhoto.date_ajout.desc()).all()
     return images

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import Literal, Optional
 from enum import Enum
 
 class UserCreate(BaseModel):
@@ -34,6 +34,20 @@ class MainUserData(BaseModel):
     nif: Optional[str]
     addresse: Optional[str]
     facture_color: Optional[str] 
+    app_theme: Optional[str] = "tradecare"
+    theme_mode: Optional[str] = "system"
+
+
+class CompanyThemeUpdate(BaseModel):
+    app_theme: Literal[
+        "tradecare",
+        "ocean",
+        "emerald",
+        "sunset",
+        "ruby",
+        "midnight",
+    ]
+    theme_mode: Literal["system", "light", "dark"]
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -46,6 +60,7 @@ class GroupUserLogin(BaseModel):
     
 class SubUserOut(BaseModel):
     id: int
+    is_main_user: bool = False
     username: str
     bio: Optional[str]
     avatar_url: Optional[str]

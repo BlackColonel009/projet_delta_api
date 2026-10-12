@@ -13,7 +13,7 @@ from app.models.model_historique_intervention import HistoriqueIntervention
 from app.models.model_intervention import Intervention
 from app.models.model_produit import Produit
 from app.models.model_rapport import Rapport
-from app.schemas.user_schema import SubUserOut, UserCreate, SubUserCreate, UserLogin, GroupUserLogin
+from app.schemas.user_schema import CompanyThemeUpdate, SubUserOut, UserCreate, SubUserCreate, UserLogin, GroupUserLogin
 from app.models.model_user import User, SubUser
 from app.models.model_role import Role
 from app.services.subscription_service import create_trial_subscription
@@ -24,6 +24,7 @@ from app.utils.security import (
 )
 from app.database import get_db
 from app.utils.logger import log_action
+from app.utils.permissions import All_required
 
 router = APIRouter()
 
@@ -194,6 +195,78 @@ def login_sub_user(data: GroupUserLogin, db: Session = Depends(get_db)):
 def list_my_subusers(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return db.query(SubUser).filter(SubUser.parent_user_id == current_user.id).all()
 
+
+@router.put("/theme", tags=["Users"])
+def update_company_theme(
+    data: CompanyThemeUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(All_required()),
+):
+    """Enregistre le thème commun à toute l'entreprise."""
+    if not current_user.is_main_user and str(current_user.role).lower() != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Seuls les administrateurs peuvent modifier les paramètres.",
+        )
+    owner = current_user if current_user.is_main_user else db.query(User).filter(
+        User.id == current_user.parent_user_id
+    ).first()
+    if not owner:
+        raise HTTPException(status_code=404, detail="Entreprise introuvable")
+    owner.app_theme = data.app_theme
+    owner.theme_mode = data.theme_mode
+    db.commit()
+    db.refresh(owner)
+    return {
+        "app_theme": owner.app_theme,
+        "theme_mode": owner.theme_mode,
+    }
+
+
+@router.put("/facture-theme", tags=["Users"])
+def update_company_invoice_theme(
+    facture_color: str = Body(..., embed=True),
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    if not current_user.is_main_user and str(current_user.role).lower() != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Seuls les administrateurs peuvent modifier les paramètres.",
+        )
+    if not facture_color.startswith("#") or len(facture_color) not in (7, 9):
+        raise HTTPException(status_code=422, detail="Couleur de facture invalide")
+    owner = current_user if current_user.is_main_user else db.query(User).filter(
+        User.id == current_user.parent_user_id
+    ).first()
+    if not owner:
+        raise HTTPException(status_code=404, detail="Entreprise introuvable")
+    owner.facture_color = facture_color.upper()
+    db.commit()
+    db.refresh(owner)
+    return {"facture_color": owner.facture_color}
+
+
+@router.put("/me-sub/password", tags=["SubUsers"])
+def update_own_subuser_password(
+    password: str = Body(..., embed=True),
+    db: Session = Depends(get_db),
+    current_sub: SubUser = Depends(get_current_sub_user),
+):
+    if str(current_sub.role).lower() != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Seuls les administrateurs peuvent modifier les paramètres.",
+        )
+    if len(password) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="Le mot de passe doit contenir au moins 8 caractères",
+        )
+    current_sub.password_hash = hash_password(password)
+    db.commit()
+    return {"message": "Mot de passe modifié avec succès"}
+
 # 🔄 Modifier infos principal
 @router.put("/me", tags=["Users"])
 def update_my_user(
@@ -295,6 +368,7 @@ def update_my_subuser(
 
     return {
         "id": current_sub.id,
+        "is_main_user": False,
         "username": current_sub.username,
         "role": current_sub.role,
         "bio": current_sub.bio,
@@ -317,18 +391,53 @@ def update_subuser(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    
-    sub = db.query(SubUser).filter(SubUser.id == sub_id, SubUser.parent_user_id == current_user.id).first()
+    sub = db.query(SubUser).filter(
+        SubUser.id == sub_id,
+        SubUser.parent_user_id == current_user.id,
+    ).first()
     if not sub:
-        raise HTTPException(status_code=404, detail="Sub-user not found")
+        raise HTTPException(status_code=404, detail="Sous-utilisateur introuvable")
 
-    if username: sub.username = username
-    if password: sub.password_hash = hash_password(password)
-    if role: sub.role = role
-    if avatar_url: sub.avatar_url = avatar_url
-    if bio: sub.bio = bio
-    if telephone: sub.telephone = telephone
+    if username is not None:
+        normalized_username = username.strip()
+        if not normalized_username:
+            raise HTTPException(status_code=400, detail="Le pseudo est obligatoire")
+
+        duplicate = db.query(SubUser).filter(
+            SubUser.parent_user_id == current_user.id,
+            SubUser.username == normalized_username,
+            SubUser.id != sub_id,
+        ).first()
+        if duplicate:
+            raise HTTPException(
+                status_code=409,
+                detail="Ce pseudo est déjà utilisé dans votre entreprise",
+            )
+        sub.username = normalized_username
+
+    if password is not None:
+        if password and len(password) < 8:
+            raise HTTPException(
+                status_code=400,
+                detail="Le mot de passe doit contenir au moins 8 caractères",
+            )
+        if password:
+            sub.password_hash = hash_password(password)
+
+    if role is not None:
+        normalized_role = role.strip()
+        if not normalized_role:
+            raise HTTPException(status_code=400, detail="Le rôle est obligatoire")
+        sub.role = normalized_role
+    if avatar_url is not None:
+        sub.avatar_url = avatar_url.strip() or None
+    if bio is not None:
+        sub.bio = bio.strip() or None
+    if telephone is not None:
+        sub.telephone = telephone.strip() or None
+
     db.commit()
+    db.refresh(sub)
 
     log_action(
         db=db,
@@ -339,7 +448,18 @@ def update_subuser(
         details=f"Sub-user {sub.username} mis à jour"
     )
 
-    return {"message": "Sub-user updated successfully"}
+    return {
+        "message": "Sous-utilisateur mis à jour avec succès",
+        "sub_user": {
+            "id": sub.id,
+            "username": sub.username,
+            "role": sub.role,
+            "bio": sub.bio,
+            "telephone": sub.telephone,
+            "avatar_url": sub.avatar_url,
+            "created_at": sub.created_at,
+        },
+    }
 
 # ❌ Supprimer subuser
 @router.delete("/subuser/{sub_id}", tags=["SubUsers"])
@@ -432,6 +552,8 @@ def get_my_profile(current_user: User = Depends(get_current_user)):
         "account_type": current_user.account_type,
         "devise": current_user.devise,
         "telephone" : current_user.telephone,
+        "app_theme": current_user.app_theme or "tradecare",
+        "theme_mode": current_user.theme_mode or "system",
     }
 
 # 👁 Voir son profil subuser
@@ -454,6 +576,8 @@ def get_my_subuser_profile(current_sub: SubUser = Depends(get_current_sub_user),
                 "tva": parent.tva,
                 "addresse": parent.addresse,
                 "facture_color": parent.facture_color,
+                "app_theme": parent.app_theme or "tradecare",
+                "theme_mode": parent.theme_mode or "system",
             }
     }
 

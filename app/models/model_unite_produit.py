@@ -19,6 +19,15 @@ class UniteProduit(Base):
     commande_vente_id = Column(Integer, ForeignKey("commandes_ventes.id"), nullable=True)
     commande_vente = relationship("CommandeVente", back_populates="unites_vendues")
 
+    # Permet d'annuler proprement un achat sans toucher aux unités provenant
+    # d'une autre commande.
+    commande_achat_id = Column(
+        Integer,
+        ForeignKey("commandes_achats.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
 
     produit = relationship("Produit", back_populates="unites")
     

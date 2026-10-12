@@ -3,19 +3,37 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.model_facture_depot import FactureDepot
 from app.schemas import facture_depot_schema as schemas
+from app.models.model_depot import Depot
+from app.utils.permissions import All_required
 from datetime import datetime
 
 router = APIRouter(prefix="/factures-depot", tags=["Factures Dépôt"])
 
 
 @router.post("/", response_model=schemas.FactureDepotOut)
-def create_facture_depot(payload: schemas.FactureDepotCreate, db: Session = Depends(get_db)):
-    existing = db.query(FactureDepot).filter_by(depot_id=payload.depot_id).first()
+def create_facture_depot(
+    payload: schemas.FactureDepotCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    depot = db.query(Depot).filter(
+        Depot.id == payload.depot_id,
+        Depot.user_id == parent_user_id,
+    ).first()
+    if not depot:
+        raise HTTPException(status_code=404, detail="Dépôt introuvable")
+    existing = db.query(FactureDepot).filter(
+        FactureDepot.depot_id == payload.depot_id,
+        FactureDepot.user_id == parent_user_id,
+    ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Une facture existe déjà pour ce dépôt.")
 
     facture = FactureDepot(
-        **payload.dict(),
+        **payload.model_dump(exclude={"client_id"}),
+        client_id=depot.client_id,
+        user_id=parent_user_id,
         date_facture=datetime.utcnow()
     )
     db.add(facture)

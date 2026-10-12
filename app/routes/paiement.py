@@ -26,21 +26,37 @@ async def create_paiement(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     # 🔎 Récupérer la facture
-    facture = db.query(Facture).filter(Facture.id == data.facture_id).first()
+    facture = db.query(Facture).filter(
+        Facture.id == data.facture_id,
+        Facture.user_id == parent_user_id,
+    ).with_for_update().first()
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
+    if facture.statut == "annulée":
+        raise HTTPException(
+            status_code=409,
+            detail="Aucun paiement ne peut être ajouté à une facture annulée.",
+        )
 
-    # ➕ Enregistrer le paiement
-    paiement = Paiement(**data.dict())
-    db.add(paiement)
-    db.commit()
-    db.refresh(paiement)
-
-    # 🧮 Total payé à ce jour
-    total_paye = db.query(func.sum(Paiement.montant)).filter(
+    total_avant = db.query(func.sum(Paiement.montant)).filter(
         Paiement.facture_id == facture.id
     ).scalar() or 0.0
+    reste = max(float(facture.total_ttc or 0) - float(total_avant), 0.0)
+    if data.montant > reste + 0.000001:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Le paiement dépasse le reste dû ({reste:.2f}).",
+        )
+
+    # ➕ Enregistrer le paiement
+    paiement = Paiement(**data.model_dump(), user_id=parent_user_id)
+    db.add(paiement)
+    db.flush()
+
+    # 🧮 Total payé à ce jour
+    total_paye = float(total_avant) + data.montant
     
     
 
@@ -57,23 +73,18 @@ async def create_paiement(
                 unites = db.query(UniteProduit).filter(
                     UniteProduit.commande_vente_id == commande.id,
                     UniteProduit.statut.in_(["en cours", "disponible"])
-                ).all()
+                ).with_for_update().all()
 
                 for unite in unites:
                     unite.statut = "vendu"
                     unite.date_modification = datetime.utcnow()
 
-                    log_action(
-                        db=db,
-                        current_user=current_user,
-                        action="Vente finalisée",
-                        type_entite="unite_produit",
-                        entite_id=unite.id,
-                        details=f"Unité {unite.tracabilite} marquée comme vendue (facture #{facture.id})"
-                    )
         elif facture.type.value == "achat":
             from app.models.model_commande import CommandeAchat
-            commande = db.query(CommandeAchat).filter(CommandeAchat.id == facture.commande_id).first()
+            commande = db.query(CommandeAchat).filter(
+                CommandeAchat.id == facture.commande_achat_id,
+                CommandeAchat.user_id == parent_user_id,
+            ).first()
             if commande:
                 commande.statut = "validée"
                 
@@ -83,6 +94,7 @@ async def create_paiement(
         facture.statut = "non payée"
 
     db.commit()
+    db.refresh(paiement)
 
      # 📧 Envoi de mail au client (si vente uniquement et email présent)
     if facture.client and facture.client.email:

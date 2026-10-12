@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
 from app.models.model_clientfollowup import ClientFollowup
+from app.models.model_client import Client
+from app.models.model_fournisseur import Fournisseur
 from app.models.model_commande import CommandeVente
 from app.models.model_depot import Depot
 from app.models.model_facture import Facture, LigneFacture, TypeFacture
@@ -26,6 +28,10 @@ import os
 
 router = APIRouter(prefix="/factures", tags=["Facturation"])
 
+
+def _can_delete_unit_after_purchase_cancellation(status: str | None) -> bool:
+    return (status or "").strip().lower() in ("disponible", "indisponible")
+
 # ➕ Créer une facture complète
 @router.post("/", response_model=FactureOut)
 def create_facture(
@@ -34,6 +40,32 @@ def create_facture(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock, RoleEnum.commercial]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    if data.client_id is not None and not db.query(Client).filter(
+        Client.id == data.client_id,
+        Client.user_id == parent_user_id,
+    ).first():
+        raise HTTPException(status_code=404, detail="Client introuvable")
+    if data.fournisseur_id is not None and not db.query(Fournisseur).filter(
+        Fournisseur.id == data.fournisseur_id,
+        Fournisseur.user_id == parent_user_id,
+    ).first():
+        raise HTTPException(status_code=404, detail="Fournisseur introuvable")
+
+    product_ids = {line.produit_id for line in data.lignes}
+    company_product_ids = {
+        product_id
+        for (product_id,) in db.query(Produit.id).filter(
+            Produit.id.in_(product_ids),
+            Produit.user_id == parent_user_id,
+            Produit.date_suppression.is_(None),
+        ).all()
+    }
+    if company_product_ids != product_ids:
+        raise HTTPException(
+            status_code=404,
+            detail="Un ou plusieurs produits sont introuvables dans cette entreprise.",
+        )
+
     total_ht = sum(l.quantite * l.prix_unitaire for l in data.lignes)
     total_ttc = total_ht * (1 + data.tva / 100)
 
@@ -299,16 +331,16 @@ def annuler_facture(
     from app.models.model_commande import CommandeVente, CommandeAchat
     from app.models.model_unite_produit import UniteProduit
 
-    facture = db.query(Facture).filter(Facture.id == facture_id).first()
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    facture = db.query(Facture).filter(
+        Facture.id == facture_id,
+        Facture.user_id == parent_user_id,
+    ).first()
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
 
     if facture.statut == "annulée":
         raise HTTPException(status_code=400, detail="Cette facture a déjà été annulée")
-
-    commande = db.query(CommandeVente).filter(CommandeVente.id == facture.commande_id).first()
-    if not commande:
-        raise HTTPException(status_code=404, detail="Commande associée non trouvée")
 
     facture.statut = "annulée"
 
@@ -327,19 +359,23 @@ def annuler_facture(
             UniteProduit.statut.in_(["en cours", "vendu"])
         ).all()
 
+        affected_product_ids = {unite.produit_id for unite in unites}
         for unite in unites:
             unite.statut = "disponible"
+            unite.commande_vente_id = None
             unite.date_modification = datetime.utcnow()
 
-            log_action(
-                db=db,
-                current_user=current_user,
-                action="Annulation vente",
-                type_entite="unite_produit",
-                entite_id=unite.id,
-                details=f"Unité {unite.tracabilite} remise à disponible après annulation facture #{facture.id}"
-            )
-        
+        db.flush()
+        for produit_id in affected_product_ids:
+            produit = db.query(Produit).filter(
+                Produit.id == produit_id,
+                Produit.user_id == parent_user_id,
+            ).first()
+            if produit:
+                produit.quantite = db.query(UniteProduit).filter(
+                    UniteProduit.produit_id == produit_id,
+                    UniteProduit.statut == "disponible",
+                ).count()
 
         # ----------------------------------------------
         # Suppression automatique des suivis liés à cette commande annulée
@@ -348,41 +384,55 @@ def annuler_facture(
         ).all()
 
         for suivi in suivis_a_supprimer:
-            log_action(
-                db=db,
-                current_user=current_user,
-                action="Suppression suivi auto après annulation facture",
-                type_entite="client_followup",
-                entite_id=suivi.id,
-                details=f"Suivi supprimé car commande #{facture.commande_id} annulée via facture #{facture.id}"
-            )
             db.delete(suivi)
 
         
         # ----------------------------------------------
 
     elif facture.type.value == "achat":
-        commande = db.query(CommandeAchat).filter(CommandeAchat.id == facture.commande_id).first()
+        commande = db.query(CommandeAchat).filter(
+            CommandeAchat.id == facture.commande_achat_id,
+            CommandeAchat.user_id == parent_user_id,
+        ).first()
         if not commande:
             raise HTTPException(status_code=404, detail="Commande d'achat non trouvée")
-
-        commande.statut = "annulée"
         
-        # ✅ Supprimer les unités associées à cette commande
+        # Une annulation d'achat ne doit jamais effacer une unité vendue ou
+        # déjà engagée dans une vente.
         unites = db.query(UniteProduit).filter(
             UniteProduit.commande_achat_id == commande.id
-        ).all()
+        ).with_for_update().all()
+        protected = [
+            unite for unite in unites
+            if not _can_delete_unit_after_purchase_cancellation(unite.statut)
+        ]
+        if protected:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Impossible d'annuler cet achat : certaines unités sont "
+                    "vendues ou en cours de vente."
+                ),
+            )
+
+        commande.statut = "annulée"
+        affected_product_ids = {unite.produit_id for unite in unites}
 
         for unite in unites:
-            log_action(
-                db=db,
-                current_user=current_user,
-                action="Suppression unité achat",
-                type_entite="unite_produit",
-                entite_id=unite.id,
-                details=f"Unité {unite.tracabilite} supprimée après annulation achat facture #{facture.id}"
-            )
             db.delete(unite)
+
+        db.flush()
+        for produit_id in affected_product_ids:
+            produit = db.query(Produit).filter(
+                Produit.id == produit_id,
+                Produit.user_id == parent_user_id,
+            ).first()
+            if produit:
+                produit.quantite = db.query(UniteProduit).filter(
+                    UniteProduit.produit_id == produit_id,
+                    UniteProduit.statut == "disponible",
+                ).count()
 
     else:
         raise HTTPException(status_code=400, detail="Type de facture non pris en charge")
@@ -397,19 +447,6 @@ def annuler_facture(
     for cp in client_produits:
         cp.note = "rejeté"
         cp.date_modification = datetime.utcnow()
-
-        log_action(
-            db=db,
-            current_user=current_user,
-            action="Marquage rejet",
-            type_entite="client_produit",
-            entite_id=cp.id,
-            details=f"Note changée en 'rejeté' suite à l'annulation de la facture #{facture.id}"
-        )
-
-
-
-
 
     db.commit()
 

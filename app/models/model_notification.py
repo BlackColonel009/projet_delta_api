@@ -1,11 +1,19 @@
 # ✅ app/models/model_notification.py
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
 
 class Notification(Base):
     __tablename__ = "notifications"
+    __table_args__ = (
+        Index(
+            "ix_notifications_parent_unread_created",
+            "parent_user_id",
+            "is_read",
+            "created_at",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     titre = Column(String, nullable=False)

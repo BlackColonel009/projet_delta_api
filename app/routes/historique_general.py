@@ -2,7 +2,7 @@
 # Fichier : app/routes/historique.py
 from app.utils.security import require_super_user
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 from datetime import datetime
 from app.database import get_db
@@ -29,30 +29,7 @@ def add_historique(
     db.refresh(h)
     return h
 
-# 📋 Lister avec filtres par date/heure
-@router.get("/", response_model=List[HistoriqueOut])
-def list_historiques(
-    start: Optional[datetime] = Query(None),
-    end: Optional[datetime] = Query(None),
-    type_entite: Optional[str] = Query(None),
-    db: Session = Depends(get_db),
-    current_user = Depends(All_required())
-
-):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    query = db.query(Historique).filter(Historique.user_id == parent_user_id)
-    
-    if start:
-        query = query.filter(Historique.date_action >= start)
-    if end:
-        query = query.filter(Historique.date_action <= end)
-    if type_entite:
-        query = query.filter(Historique.type_entite == type_entite)
-
-    return query.order_by(Historique.date_action.desc()).all()
-
-
-#Get historique all data
+# Historique de l'entreprise, enrichi avec l'auteur de chaque action.
 @router.get("/", response_model=List[dict])
 def list_historiques(
     start: Optional[datetime] = Query(None),

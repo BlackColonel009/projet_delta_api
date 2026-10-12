@@ -1,5 +1,5 @@
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 from app.models.model_facture import TypeFacture
 from app.schemas.client_schema import ClientOut
@@ -10,16 +10,16 @@ from app.schemas.unite_produit_schema import UniteProduitOut
 class LigneFactureIn(BaseModel):
     produit_id: int
     description: str
-    quantite: int
-    prix_unitaire: float
+    quantite: int = Field(gt=0)
+    prix_unitaire: float = Field(ge=0)
 
 class FactureCreate(BaseModel):
     type: TypeFacture
     client_id: Optional[int] = None
     fournisseur_id: Optional[int] = None
     remarques: Optional[str] = None
-    tva: float = 0.0
-    lignes: List[LigneFactureIn]
+    tva: float = Field(default=0.0, ge=0, le=100)
+    lignes: List[LigneFactureIn] = Field(min_length=1)
     devise: str = "FCFA"
 
 
@@ -36,7 +36,7 @@ class LigneFactureOut(BaseModel):
     prix_unitaire: float
     total_ligne: float
     produit: Optional[dict] = None  # nom + caracs
-    unites: List[UniteProduitOut] = []
+    unites: List[UniteProduitOut] = Field(default_factory=list)
 
     class Config:
         from_attributes = True

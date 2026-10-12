@@ -16,7 +16,8 @@ def create_tutoriel(
     description: str = Form(None),
     navigation: str = Form(None),
     image: UploadFile = File(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user=Depends(require_super_user),
 ):
     image_url = save_file_locally(image) if image else None
 
@@ -38,7 +39,8 @@ def update_tutoriel(
     description: str = Form(None),
     navigation: str = Form(None),
     image: UploadFile = File(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user=Depends(require_super_user),
 ):
     tutoriel = db.query(Tutoriel).filter(Tutoriel.id == id).first()
 
@@ -64,12 +66,8 @@ def get_all_tutoriels(db: Session = Depends(get_db)):
 def delete_tutoriel(
     id: int,
     db: Session = Depends(get_db),
-    # current_user = Depends(require_super_user)
+    current_user=Depends(require_super_user),
 ):
-    # if not current_user:
-        # HTTPException(status_code= 401, detail= "Vous n'êtes pas un superAdmin")
-
-    
     tutoriel = db.query(Tutoriel).filter(Tutoriel.id == id).first()
     if not tutoriel:
         raise HTTPException(status_code=404, detail="Tutoriel introuvable")

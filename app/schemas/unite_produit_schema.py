@@ -15,6 +15,10 @@ class UniteProduitCreate(BaseModel):
     code_barre: Optional[str] = None
 
 
+class StockCleanupRequest(BaseModel):
+    confirmation: str
+
+
 # Schéma pour affichage ou réponse API
 class UniteProduitOut(BaseModel):
     id: int

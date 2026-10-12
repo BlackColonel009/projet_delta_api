@@ -2,6 +2,7 @@ import datetime
 from collections import defaultdict
 from html import escape
 from io import BytesIO
+from textwrap import wrap
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -17,6 +18,7 @@ from reportlab.platypus import (
     SimpleDocTemplate,
     Spacer,
     Table,
+    LongTable,
     TableStyle,
 )
 from sqlalchemy import func
@@ -160,7 +162,33 @@ def _p(value, style):
     return Paragraph(escape(str(value if value is not None else "")), style)
 
 
-def _styled_table(data, col_widths, *, alignments=None, danger_rows=None):
+def _content_chunks(values, *, max_lines=10, line_width=28):
+    """Découpe une cellule volumineuse en fragments tenant sur une page PDF."""
+    lines = []
+    for value in values:
+        text = str(value if value is not None else "").strip()
+        wrapped = wrap(
+            text or "-",
+            width=line_width,
+            break_long_words=True,
+            break_on_hyphens=False,
+        )
+        lines.extend(wrapped or ["-"])
+
+    return [
+        lines[index:index + max_lines]
+        for index in range(0, len(lines), max_lines)
+    ] or [["-"]]
+
+
+def _styled_table(
+    data,
+    col_widths,
+    *,
+    alignments=None,
+    danger_rows=None,
+    use_long_table=False,
+):
     style_commands = [
         ("BACKGROUND", (0, 0), (-1, 0), PRIMARY_DARK),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -191,7 +219,14 @@ def _styled_table(data, col_widths, *, alignments=None, danger_rows=None):
             ]
         )
 
-    table = Table(data, colWidths=col_widths, repeatRows=1, hAlign="LEFT")
+    table_class = LongTable if use_long_table else Table
+    table = table_class(
+        data,
+        colWidths=col_widths,
+        repeatRows=1,
+        hAlign="LEFT",
+        splitByRow=1,
+    )
     table.setStyle(TableStyle(style_commands))
     return table
 
@@ -364,19 +399,56 @@ def _build_stock_report(buffer, devise, rows):
     data = [["ID", "Nom du produit", "Caractéristiques", "Codes / Traçabilités", "Stock initial", "Disponible", f"Prix ({devise})"]]
     danger_rows = []
     for row in rows:
-        data.append(
-            [
-                _p(row["id"], center),
-                _p(row["name"], body),
-                _p(row["characteristics"], body),
-                Paragraph("<br/>".join(escape(code) for code in row["traceability"]), body),
-                _p(row["initial"], center),
-                _p(row["available"], center),
-                _p(f"{row['price']:.2f}", body),
-            ]
+        name_chunks = _content_chunks([row["name"]])
+        characteristic_chunks = _content_chunks([row["characteristics"]])
+        traceability_chunks = _content_chunks(row["traceability"])
+        chunk_count = max(
+            len(name_chunks),
+            len(characteristic_chunks),
+            len(traceability_chunks),
         )
-        if row["available"] == 0:
-            danger_rows.append(len(data) - 1)
+
+        for chunk_index in range(chunk_count):
+            first_chunk = chunk_index == 0
+            characteristics = (
+                characteristic_chunks[chunk_index]
+                if chunk_index < len(characteristic_chunks)
+                else []
+            )
+            traceability = (
+                traceability_chunks[chunk_index]
+                if chunk_index < len(traceability_chunks)
+                else []
+            )
+            names = (
+                name_chunks[chunk_index]
+                if chunk_index < len(name_chunks)
+                else []
+            )
+            raw_price = row.get("price")
+            price = f"{float(raw_price or 0):.2f}" if first_chunk else ""
+            data.append(
+                [
+                    _p(row["id"] if first_chunk else "", center),
+                    Paragraph(
+                        "<br/>".join(escape(line) for line in names),
+                        body,
+                    ),
+                    Paragraph(
+                        "<br/>".join(escape(line) for line in characteristics),
+                        body,
+                    ),
+                    Paragraph(
+                        "<br/>".join(escape(line) for line in traceability),
+                        body,
+                    ),
+                    _p(row["initial"] if first_chunk else "", center),
+                    _p(row["available"] if first_chunk else "", center),
+                    _p(price, body),
+                ]
+            )
+            if row["available"] == 0:
+                danger_rows.append(len(data) - 1)
     story = [*_title_block("État du Stock", styles)]
     story.append(
         _styled_table(
@@ -384,6 +456,7 @@ def _build_stock_report(buffer, devise, rows):
             [1.3 * cm, 4.6 * cm, 5.1 * cm, 5.3 * cm, 2.7 * cm, 2.7 * cm, 3.2 * cm],
             alignments={0: "CENTER", 4: "RIGHT", 5: "RIGHT", 6: "RIGHT"},
             danger_rows=danger_rows,
+            use_long_table=True,
         )
     )
     _document(buffer, landscape_mode=True).build(
@@ -546,22 +619,28 @@ def export_etat_stock(
     )
     for product_id, traceability, status in unit_rows:
         initial_stock_by_product[product_id] += 1
-        if status == "disponible":
+        if str(status or "").strip().lower() == "disponible":
             available_stock_by_product[product_id] += 1
         if traceability:
             traceability_by_product[product_id].append(traceability)
 
     rows = []
     for product in produits:
+        tracked_units = initial_stock_by_product[product.id]
+        declared_stock = max(int(product.quantite or 0), 0)
         rows.append(
             {
                 "id": product.id,
                 "name": product.nom,
                 "characteristics": product.caracteristiques or "-",
                 "traceability": sorted(set(traceability_by_product.get(product.id, []))) or ["-"],
-                "initial": initial_stock_by_product[product.id],
-                "available": available_stock_by_product[product.id],
-                "price": product.prix_vente,
+                "initial": tracked_units or declared_stock,
+                "available": (
+                    available_stock_by_product[product.id]
+                    if tracked_units
+                    else declared_stock
+                ),
+                "price": product.prix_vente or 0,
             }
         )
 

@@ -13,6 +13,8 @@ from app.utils.security import get_current_user
 from app.models.model_user import User
 from app.schemas.user_schema import RoleEnum
 from app.models.model_unite_produit import UniteProduit
+from app.services.traceability_service import create_generated_unit
+from sqlalchemy import or_
 import shutil
 import os
 
@@ -74,7 +76,7 @@ def create_produit(
         )
 
         db.add(produit)
-        db.commit()
+        db.flush()
         db.refresh(produit)
         
         # Parse les codes-barres s'ils existent
@@ -90,7 +92,12 @@ def create_produit(
         if scanned_barcodes and len(scanned_barcodes) > 0:
             unites = []
             for code in scanned_barcodes:
-                exists = db.query(UniteProduit).filter(UniteProduit.code_barre == code).first()
+                exists = db.query(UniteProduit).filter(
+                    or_(
+                        UniteProduit.code_barre == code,
+                        UniteProduit.tracabilite == code,
+                    )
+                ).first()
                 if exists:
                     print(f"⚠️ Doublon ignoré : {code}")
                     continue
@@ -109,7 +116,7 @@ def create_produit(
                 # ✅ AJOUTE CETTE LIGNE ICI
                 produit.quantite = len(unites)
                 
-                db.commit()
+                db.flush()
                 db.refresh(produit)
 
                 log_action(
@@ -123,17 +130,10 @@ def create_produit(
 
         # ⚙️ Sinon : génération automatique par nombre
         elif quantite  > 0:
-            for i in range(1, quantite  + 1):
-                qr_code = f"TRAC-{produit.id}-{str(i).zfill(4)}"
-                unite = UniteProduit(
-                    produit_id=produit.id,
-                    tracabilite=qr_code,
-                    code_barre=None,
-                    statut="disponible"
-                )
-                db.add(unite)
+            for _ in range(quantite):
+                create_generated_unit(db, produit_id=produit.id)
 
-            db.commit()
+            db.flush()
 
             log_action(
                 db=db,
@@ -144,6 +144,7 @@ def create_produit(
                 details=f"{quantite} unités générées avec QR pour produit {produit.nom}"
             )
 
+        db.commit()
         return {"message": "Produit créé avec succès", "produit_id": produit.id}
 
     except Exception as e:
@@ -162,7 +163,10 @@ def list_produits(
     current_user=Depends(All_required())
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    return db.query(Produit).filter(Produit.date_suppression == None, Produit.user_id == parent_user_id).all()
+    return db.query(Produit).filter(
+        Produit.date_suppression == None,
+        Produit.user_id == parent_user_id,
+    ).order_by(Produit.date_creation.desc()).all()
 
 # 🔍 Voir un produit par ID
 @router.get("/{produit_id}", response_model=ProduitOut)
@@ -171,10 +175,11 @@ def get_produit(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     produit = db.query(Produit).filter(
         Produit.id == produit_id,
         Produit.date_suppression == None,
-        Produit.user_id == current_user.id  # ✅ filtre par propriétaire
+        Produit.user_id == parent_user_id,
     ).first()
 
     if not produit:
@@ -207,7 +212,12 @@ def update_produit(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    produit = db.query(Produit).filter(Produit.id == produit_id).first()
+    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    produit = db.query(Produit).filter(
+        Produit.id == produit_id,
+        Produit.user_id == parent_user_id,
+        Produit.date_suppression.is_(None),
+    ).first()
     if not produit:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
 
@@ -249,21 +259,32 @@ def update_produit(
         try:
             barcodes = json.loads(scanned_barcodes)
             new_count = 0
-            for code in barcodes:
-                exists = db.query(UniteProduit).filter(UniteProduit.code_barre == code).first()
+            normalized_barcodes = list(dict.fromkeys(
+                code.strip() for code in barcodes
+                if isinstance(code, str) and code.strip()
+            ))
+            for code in normalized_barcodes:
+                exists = db.query(UniteProduit).filter(
+                    UniteProduit.code_barre == code
+                ).first()
                 if not exists:
                     new_unite = UniteProduit(
                         produit_id=produit.id,
                         tracabilite=code,
                         code_barre=code,
-                        statut="disponible"
+                        statut="disponible",
+                        date_creation=datetime.utcnow(),
                     )
                     db.add(new_unite)
                     new_count += 1
 
             if new_count > 0:
                 produit.a_des_barcodes = True
-                produit.quantite += new_count
+                db.flush()
+                produit.quantite = db.query(UniteProduit).filter(
+                    UniteProduit.produit_id == produit.id,
+                    UniteProduit.statut == "disponible",
+                ).count()
 
                 log_action(
                     db=db,
