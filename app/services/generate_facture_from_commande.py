@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import Depends
 from sqlalchemy.orm import Session
 import os
-from tempfile import NamedTemporaryFile
+from pathlib import Path
 from jinja2 import Environment, select_autoescape, FileSystemLoader
 from xhtml2pdf import pisa
 from fastapi_mail import FastMail, MessageSchema, MessageType
@@ -134,10 +134,12 @@ def generate_facture_pdf(facture, db: Session ):
     montant_en_lettres = montant_to_words(facture.total_ttc, devise)
     logo_url = public_url(facture.user.logo_entreprise)
 
+    template_directory = Path(__file__).resolve().parent.parent / "template"
     env = Environment(
-        loader=FileSystemLoader("app/template"),
+        loader=FileSystemLoader(str(template_directory)),
         autoescape=select_autoescape(['html', 'xml'])
     )
+    env.filters["parse_characteristics"] = safe_parse_caracteristiques
     template = env.get_template("facture_template.html")
 
     vendeur = {
@@ -148,28 +150,24 @@ def generate_facture_pdf(facture, db: Session ):
         "poste": "Administrateur"
     }
 
-    import json
-
-    # Convertir les caractéristiques de chaque ligne en dict (si possible)
-    # 🔁 Normalisation des données ligne par ligne
-   # 🧠 Ajout manuel des unités concernées pour chaque ligne
+    # Ajout des unités concernées sans modifier les produits persistés.
     for ligne in facture.lignes:
         produit = ligne.produit
         if produit:
-            caract = produit.caracteristiques
-            print("🔍 Produit:", produit.nom)
-            print("📦 Type de caracteristiques:", type(caract))
-            print("📄 Valeur de caracteristiques:", caract)
-
-            # Assigner les unités concernées (liées à la commande vente)
-            ligne.unites = db.query(UniteProduit).filter(
-                UniteProduit.produit_id == produit.id,
-                UniteProduit.commande_vente_id == facture.commande_id
-            ).all()
-
-            # Utiliser la fonction safe pour parser ou garder string
-            produit.caracteristiques = safe_parse_caracteristiques(produit.caracteristiques)
-
+            unit_filters = [UniteProduit.produit_id == produit.id]
+            if facture.commande_id:
+                unit_filters.append(
+                    UniteProduit.commande_vente_id == facture.commande_id
+                )
+            elif facture.commande_achat_id:
+                unit_filters.append(
+                    UniteProduit.commande_achat_id == facture.commande_achat_id
+                )
+            ligne.unites = (
+                db.query(UniteProduit).filter(*unit_filters).all()
+                if len(unit_filters) > 1
+                else []
+            )
 
     palette = build_document_palette(
         facture.user.facture_color,
@@ -200,19 +198,17 @@ def generate_facture_pdf(facture, db: Session ):
     )
 
     buffer = BytesIO()
-    pisa.CreatePDF(html_content, dest=buffer)
+    pdf_result = pisa.CreatePDF(html_content, dest=buffer)
+    if pdf_result.err:
+        raise RuntimeError("La facture professionnelle n'a pas pu être générée.")
     buffer.seek(0)
 
-
-
-    
-
-    # Récupérer le dossier temporaire correct (Windows/Linux/Mac)
-    temp_dir = tempfile.gettempdir()
-
     # Nettoyer nom du client
+    destinataire = facture.client or facture.fournisseur
     client_nom = (
-        re.sub(r'\W+', '_', facture.client.nom.strip()) if facture.client else "SansClient"
+        re.sub(r'\W+', '_', destinataire.nom.strip())
+        if destinataire
+        else "SansDestinataire"
     )
 
     # Type de facture
@@ -221,15 +217,13 @@ def generate_facture_pdf(facture, db: Session ):
     # Date/heure
     date_str = datetime.now().strftime("%Y%m%d_%H%M")
 
-    # Nom final
-    filename = f"{facture_type}_{client_nom}_{date_str}.pdf"
-
-    # Chemin final du fichier
-    temp_path = os.path.join(temp_dir, filename)
-
-    # Sauvegarde PDF
-    with open(temp_path, "wb") as f:
-        f.write(buffer.getvalue())
-
-    return temp_path
+    prefix = re.sub(r'\W+', '_', f"{facture_type}_{client_nom}_{date_str}")
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        prefix=f"{prefix}_",
+        suffix=".pdf",
+        delete=False,
+    ) as pdf_file:
+        pdf_file.write(buffer.getvalue())
+        return pdf_file.name
 

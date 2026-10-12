@@ -253,11 +253,19 @@
     <table class="client-card">
       <tr>
         <td>
-          <div class="section-label">Facturé à</div>
-          <div class="client-name">{{ facture.client.nom }}</div>
-          {{ facture.client.adresse }}<br>
-          Tél : {{ facture.client.telephone }}<br>
-          Email : {{ facture.client.email }}
+          {% if facture.client %}
+            <div class="section-label">Facturé à</div>
+            <div class="client-name">{{ facture.client.nom }}</div>
+            {{ facture.client.adresse or '' }}<br>
+            Tél : {{ facture.client.telephone or '' }}<br>
+            Email : {{ facture.client.email or '' }}
+          {% elif facture.fournisseur %}
+            <div class="section-label">Fournisseur</div>
+            <div class="client-name">{{ facture.fournisseur.nom }}</div>
+            {{ facture.fournisseur.adresse or '' }}<br>
+            Tél : {{ facture.fournisseur.telephone or '' }}<br>
+            Email : {{ facture.fournisseur.email or '' }}
+          {% endif %}
         </td>
       </tr>
     </table>
@@ -278,11 +286,12 @@
             <strong>{{ ligne.description }}</strong>
             {% if ligne.produit %}
               <div class="item-details">
-                {% if ligne.produit.caracteristiques %}
-                  {% if ligne.produit.caracteristiques is string %}
-                    {{ ligne.produit.caracteristiques }}
+                {% set caracteristiques = ligne.produit.caracteristiques|parse_characteristics %}
+                {% if caracteristiques %}
+                  {% if caracteristiques is string %}
+                    {{ caracteristiques }}
                   {% else %}
-                    {% for k, v in ligne.produit.caracteristiques.items() %}
+                    {% for k, v in caracteristiques.items() %}
                       {{ k }} : {{ v }}{% if not loop.last %}, {% endif %}
                     {% endfor %}
                   {% endif %}

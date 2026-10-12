@@ -1,10 +1,11 @@
 # ✅ Routes corrigées : aperçu PDF + envoi email avec nom produit, quantité, PU, total ligne
 
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi_mail import FastMail, MessageSchema, MessageType
+from starlette.background import BackgroundTask
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
@@ -18,23 +19,50 @@ from app.config import conf
 from app.models.model_facture import LigneFacture 
 from reportlab.platypus import Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
+from typing import Literal
+import os
+import tempfile
+
+from app.services.generate_facture_from_commande import generate_facture_pdf
 
 router = APIRouter(prefix="/factures", tags=["Facturation"])
 
 @router.get("/{facture_id}/preview")
 def preview_facture_pdf(
     facture_id: int,
+    invoice_format: Literal["simple", "professional"] = Query(
+        "simple",
+        alias="template",
+    ),
     db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
 ):
+    parent_user_id = (
+        current_user.parent_user_id
+        if not current_user.is_main_user
+        else current_user.id
+    )
     facture = db.query(Facture).options(
         joinedload(Facture.lignes).joinedload(LigneFacture.produit),
         joinedload(Facture.client),
         joinedload(Facture.fournisseur),
         joinedload(Facture.paiements)
-    ).filter(Facture.id == facture_id).first()
+    ).filter(
+        Facture.id == facture_id,
+        Facture.user_id == parent_user_id,
+    ).first()
 
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
+
+    if invoice_format == "professional":
+        pdf_path = generate_facture_pdf(facture, db)
+        return FileResponse(
+            pdf_path,
+            media_type="application/pdf",
+            filename=f"facture_professionnelle_{facture.id}.pdf",
+            background=BackgroundTask(os.remove, pdf_path),
+        )
 
     total_paye = sum(p.montant for p in facture.paiements) if facture.paiements else 0.0
 
@@ -241,24 +269,61 @@ def preview_facture_pdf(
 @router.post("/{facture_id}/email-client")
 async def send_facture_to_client_memory(
     facture_id: int,
+    invoice_format: Literal["simple", "professional"] = Query(
+        "simple",
+        alias="template",
+    ),
     db: Session = Depends(get_db),
-    # current_user=Depends(All_required())
+    current_user=Depends(All_required()),
 ):
-   
+    parent_user_id = (
+        current_user.parent_user_id
+        if not current_user.is_main_user
+        else current_user.id
+    )
     facture = db.query(Facture).options(
         joinedload(Facture.lignes).joinedload(LigneFacture.produit),
         joinedload(Facture.client),
         joinedload(Facture.fournisseur),
         joinedload(Facture.paiements)
-    ).filter(Facture.id == facture_id).first()
-
-    devise = facture.user.devise if hasattr(facture, "user") else ""
+    ).filter(
+        Facture.id == facture_id,
+        Facture.user_id == parent_user_id,
+    ).first()
 
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
 
+    devise = facture.user.devise if hasattr(facture, "user") else ""
+
     if not facture.client or not facture.client.email:
         raise HTTPException(status_code=400, detail="Le client n'a pas d'adresse email")
+
+    if invoice_format == "professional":
+        pdf_path = generate_facture_pdf(facture, db)
+        try:
+            message = MessageSchema(
+                subject=f"Votre facture #{facture.id}",
+                recipients=[facture.client.email],
+                body=(
+                    f"Bonjour {facture.client.nom},\n\n"
+                    f"Veuillez trouver en pièce jointe votre facture "
+                    f"professionnelle #{facture.id}.\n\n"
+                    "Merci pour votre confiance."
+                ),
+                subtype=MessageType.plain,
+                attachments=[pdf_path],
+            )
+            await FastMail(conf).send_message(message)
+        finally:
+            if os.path.exists(pdf_path):
+                os.remove(pdf_path)
+        return {
+            "message": (
+                f"Facture professionnelle #{facture.id} envoyée à "
+                f"{facture.client.email}"
+            )
+        }
 
     total_paye = sum(p.montant for p in facture.paiements) if facture.paiements else 0.0
 
@@ -429,26 +494,28 @@ async def send_facture_to_client_memory(
     pdf.save()
     buffer.seek(0)
 
-    # Sauvegarder temporairement le PDF
-    pdf_path = f"temp_facture_{facture.id}.pdf"
-    with open(pdf_path, "wb") as f:
-        f.write(buffer.getvalue())
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        prefix=f"facture_simple_{facture.id}_",
+        suffix=".pdf",
+        delete=False,
+    ) as pdf_file:
+        pdf_file.write(buffer.getvalue())
+        pdf_path = pdf_file.name
 
-    # Envoyer le mail avec pièce jointe
-    message = MessageSchema(
-        subject=f"Votre facture #{facture.id}",
-        recipients=[facture.client.email],
-        body=f"Bonjour, veuillez trouver en pièce jointe votre facture #{facture.id}.",
-        subtype=MessageType.plain,
-        attachments=[pdf_path]
-    )
+    try:
+        message = MessageSchema(
+            subject=f"Votre facture #{facture.id}",
+            recipients=[facture.client.email],
+            body=f"Bonjour, veuillez trouver en pièce jointe votre facture #{facture.id}.",
+            subtype=MessageType.plain,
+            attachments=[pdf_path]
+        )
 
-    fm = FastMail(conf)
-    await fm.send_message(message)
-
-    # Supprimer le fichier temporaire
-    import os
-    os.remove(pdf_path)
+        await FastMail(conf).send_message(message)
+    finally:
+        if os.path.exists(pdf_path):
+            os.remove(pdf_path)
 
     return {"message": f"Facture #{facture.id} envoyée à {facture.client.email}"}
 

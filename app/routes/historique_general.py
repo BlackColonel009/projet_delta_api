@@ -35,6 +35,8 @@ def list_historiques(
     start: Optional[datetime] = Query(None),
     end: Optional[datetime] = Query(None),
     type_entite: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user = Depends(All_required())  # ✅ OK : FastAPI va exécuter la dépendance
 
@@ -53,7 +55,12 @@ def list_historiques(
     if type_entite:
         query = query.filter(Historique.type_entite == type_entite)
 
-    historiques = query.order_by(Historique.date_action.desc()).all()
+    historiques = (
+        query.order_by(Historique.date_action.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
+    )
 
     result = []
     for h in historiques:
@@ -64,7 +71,12 @@ def list_historiques(
             "entite_id": h.entite_id,
             "details": h.details,
             "date_action": h.date_action,
-            "done_by": h.sub_user.username if h.sub_user else h.user.email
+            "done_by": (
+                h.sub_user.username
+                if h.sub_user
+                else h.user.email if h.user else "Inconnu"
+            ),
+            "actor_type": "Employé" if h.sub_user else "Administrateur",
         })
 
     return result
