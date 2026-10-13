@@ -14,6 +14,7 @@ from app.config import conf
 from app.utils.public_url import public_url
 from app.utils.color_theme import build_document_palette
 from app.utils.security import get_current_sub_user
+from app.utils.i18n import language_of, translated
 from datetime import datetime
 import re
 import tempfile
@@ -93,10 +94,26 @@ def generate_facture_from_commande(
         and facture.client.email
     ):
         fm = FastMail(conf)
+        language = language_of(facture.sub_user or facture.user)
+        document_name = translated(
+            language,
+            type_enum.value.upper(),
+            "QUOTE" if type_enum.value == "devis" else (
+                "PROFORMA INVOICE" if type_enum.value == "proforma" else "INVOICE"
+            ),
+        )
         message = MessageSchema(
-            subject=f"Votre {type_enum.value.upper()} #{facture.id}",
+            subject=translated(
+                language,
+                f"Votre {document_name} #{facture.id}",
+                f"Your {document_name} #{facture.id}",
+            ),
             recipients=[facture.client.email],
-            body=f"Bonjour {facture.client.nom},\n\nVeuillez trouver votre {type_enum.value.upper()} #{facture.id} d'un montant total de {facture.total_ttc:.2f} {facture.devise}.\nMerci pour votre confiance.",
+            body=translated(
+                language,
+                f"Bonjour {facture.client.nom},\n\nVeuillez trouver votre {document_name} #{facture.id} d'un montant total de {facture.total_ttc:.2f} {facture.devise}.\nMerci pour votre confiance.",
+                f"Hello {facture.client.nom},\n\nPlease find your {document_name} #{facture.id}, for a total of {facture.total_ttc:.2f} {facture.devise}.\nThank you for your trust.",
+            ),
             subtype=MessageType.plain,
             attachments=[tmp_path]
         )
@@ -112,7 +129,7 @@ def generate_facture_from_commande(
 
 from num2words import num2words
 
-def montant_to_words(montant: float, devise="FCFA"):
+def montant_to_words(montant: float, devise="FCFA", language="fr"):
     devise_lettres = {
         "FCFA": "francs CFA",
         "XOF": "francs CFA",
@@ -134,8 +151,12 @@ def montant_to_words(montant: float, devise="FCFA"):
         "ZAR": "rands sud-africains",
     }
     try:
-        mots = num2words(montant, lang='fr')
-        devise_texte = devise_lettres.get(devise.upper(), devise)
+        mots = num2words(montant, lang=language)
+        devise_texte = (
+            devise_lettres.get(devise.upper(), devise)
+            if language == "fr"
+            else devise
+        )
         return mots.capitalize() + f" {devise_texte}"
     except Exception:
         return f"{montant:.2f} {devise}"
@@ -143,7 +164,8 @@ def montant_to_words(montant: float, devise="FCFA"):
 
 def generate_facture_pdf(facture, db: Session ):
     devise = facture.user.devise or "XOF"
-    montant_en_lettres = montant_to_words(facture.total_ttc, devise)
+    language = language_of(facture.sub_user or facture.user)
+    montant_en_lettres = montant_to_words(facture.total_ttc, devise, language)
     logo_url = public_url(facture.user.logo_entreprise)
 
     template_directory = Path(__file__).resolve().parent.parent / "template"
@@ -189,6 +211,7 @@ def generate_facture_pdf(facture, db: Session ):
 
 
     html_content = template.render(
+        lang=language,
         devise=devise,
         facture=facture,
         societe={

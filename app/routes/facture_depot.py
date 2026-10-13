@@ -14,6 +14,7 @@ from app.schemas import facture_depot_schema as schemas
 from app.services.report_design import ReportDesign, money
 from app.utils.permissions import All_required
 from app.utils.subscription_guard import enforce_invoice_quota
+from app.utils.i18n import language_of, translated
 
 router = APIRouter(prefix="/factures-depot", tags=["Factures Dépôt"])
 
@@ -82,17 +83,19 @@ def delete_facture_depot(id: int, db: Session = Depends(get_db), current_user=De
     return {"detail": "Facture supprimée"}
 
 
-def _document(facture, receipt):
+def _document(facture, receipt, language_user=None):
     depot, company = facture.depot, facture.user
+    language = language_of(language_user or company)
+    tr = lambda fr, en: translated(language, fr, en)
     design = ReportDesign(company)
     currency = getattr(company, "devise", None) or "FCFA"
-    service = getattr(getattr(depot, "service", None), "nom", None) or "Service de dépôt"
-    client = getattr(getattr(depot, "client", None), "nom", None) or "Client non renseigné"
+    service = getattr(getattr(depot, "service", None), "nom", None) or tr("Service de dépôt", "Deposit service")
+    client = getattr(getattr(depot, "client", None), "nom", None) or tr("Client non renseigné", "Customer not provided")
     issued = facture.created_at or facture.date_facture or datetime.utcnow()
     rows, calculated_total = [], 0.0
     for item in depot.tarif_items:
         tariff = getattr(item, "tarif", None)
-        label = getattr(tariff, "nom_tarif", None) or "Service"
+        label = getattr(tariff, "nom_tarif", None) or tr("Service", "Service")
         description = (getattr(item, "description", None) or "").strip()
         quantity = int(getattr(item, "quantite", 0) or 0)
         unit_price = float(getattr(item, "prix_personnalise", None) or getattr(tariff, "tarif_unitaire", None) or 0)
@@ -100,30 +103,30 @@ def _document(facture, receipt):
         calculated_total += line_total
         rows.append([f"{label} — {description}" if description else label, quantity,
                      money(unit_price, currency), money(line_total, currency)])
-    title = "ACCUSÉ DE DÉPÔT" if receipt else "FACTURE DE RETRAIT"
-    status = "À régler au retrait" if receipt else "Facture finale"
+    title = tr("ACCUSÉ DE DÉPÔT", "DEPOSIT RECEIPT") if receipt else tr("FACTURE DE RETRAIT", "COLLECTION INVOICE")
+    status = tr("À régler au retrait", "Payable on collection") if receipt else tr("Facture finale", "Final invoice")
     story = [Spacer(1, 18), *design.logo(), design.p(design.name, "Heading1"),
              design.p(title, "Title"), HRFlowable(width="100%", thickness=3, color=design.primary, spaceAfter=16),
-             design.table(["Référence", "Date d’émission", "Statut"],
+             design.table([tr("Référence", "Reference"), tr("Date d’émission", "Issue date"), tr("Statut", "Status")],
                           [[f"DEP-{issued.year}-{facture.id:05d}", issued.strftime("%d/%m/%Y"), status]]),
-             Spacer(1, 18), design.p("Informations du dépôt", "Heading2"),
-             design.table(["Client", "Service", "Bien confié", "Date de dépôt"],
+             Spacer(1, 18), design.p(tr("Informations du dépôt", "Deposit information"), "Heading2"),
+             design.table([tr("Client", "Customer"), tr("Service", "Service"), tr("Bien confié", "Deposited item"), tr("Date de dépôt", "Deposit date")],
                           [[client, service, depot.description_bien, depot.date_depot.strftime("%d/%m/%Y à %H:%M")]]),
-             Spacer(1, 18), design.p("Détail des prestations", "Heading2"),
-             design.table(["Désignation", "Qté", "Prix unitaire", "Total"], rows, widths=[230, 48, 100, 105]),
-             Spacer(1, 18), design.table(["Montant HT", "TVA", "Total TTC"],
+             Spacer(1, 18), design.p(tr("Détail des prestations", "Service details"), "Heading2"),
+             design.table([tr("Désignation", "Description"), tr("Qté", "Qty"), tr("Prix unitaire", "Unit price"), "Total"], rows, widths=[230, 48, 100, 105]),
+             Spacer(1, 18), design.table([tr("Montant HT", "Subtotal"), tr("TVA", "VAT"), tr("Total TTC", "Total incl. tax")],
                           [[money(facture.montant_ht, currency), money(facture.tva, currency),
                             money(facture.montant_ttc or calculated_total, currency)]]),
-             Spacer(1, 24), design.p("Ce document confirme la prise en charge du bien. Conservez sa référence pour tout suivi."
-                                     if receipt else "Merci pour votre confiance. Cette facture clôture les prestations du dépôt.")]
+             Spacer(1, 24), design.p(tr("Ce document confirme la prise en charge du bien. Conservez sa référence pour tout suivi.", "This document confirms receipt of the item. Keep its reference for any follow-up.")
+                                     if receipt else tr("Merci pour votre confiance. Cette facture clôture les prestations du dépôt.", "Thank you for your trust. This invoice closes the deposit services."))]
     buffer = BytesIO()
     design.build(buffer, story, pagesize=A4)
     return buffer
 
 
-def _response(facture, receipt):
+def _response(facture, receipt, language_user=None):
     prefix = "accuse_depot" if receipt else "facture_retrait"
-    return StreamingResponse(_document(facture, receipt), media_type="application/pdf",
+    return StreamingResponse(_document(facture, receipt, language_user), media_type="application/pdf",
                              headers={"Content-Disposition": f"inline; filename={prefix}_{facture.id}.pdf"})
 
 
@@ -132,7 +135,7 @@ def preview_final_invoice(facture_id: int, db: Session = Depends(get_db), curren
     facture = _query(db, facture_id, _owner_id(current_user)).first()
     if not facture:
         raise HTTPException(404, "Facture de dépôt non trouvée")
-    return _response(facture, False)
+    return _response(facture, False, current_user)
 
 
 @router.get("/{facture_id}/depot-preview")
@@ -140,4 +143,4 @@ def preview_deposit_receipt(facture_id: int, db: Session = Depends(get_db), curr
     facture = _query(db, facture_id, _owner_id(current_user)).first()
     if not facture:
         raise HTTPException(404, "Facture de dépôt non trouvée")
-    return _response(facture, True)
+    return _response(facture, True, current_user)

@@ -20,6 +20,7 @@ class BrandedEmailTemplateTests(unittest.TestCase):
             logo_entreprise="/static/logos/delta.png",
             facture_color="#0F766E",
             devise="XOF",
+            interface_language="fr",
         )
 
     def test_payment_reminder_is_branded_and_escapes_customer_data(self):
@@ -112,6 +113,37 @@ class BrandedEmailTemplateTests(unittest.TestCase):
         self.assertIn("Votre demande a été approuvée", html)
         self.assertIn("Votre accès est prêt &amp; actif.", html)
         self.assertIn("25 000,00 XOF", html)
+
+    def test_customer_emails_follow_saved_english_language(self):
+        self.user.interface_language = "en"
+        html = loyalty_email(
+            user=self.user,
+            client_name="Ama",
+            product_names=["Printer"],
+        )
+        self.assertIn("Thank you for your purchase", html)
+        self.assertIn("Customer care", html)
+        self.assertNotIn("Merci pour votre achat", html)
+
+    def test_superadmin_email_uses_recipient_language(self):
+        recipient = SimpleNamespace(interface_language="en")
+        plan = SimpleNamespace(name="Diamond")
+        request = SimpleNamespace(
+            billing_cycle="annual",
+            current_plan_code="classic",
+            requested_plan_code="diamond",
+            quoted_amount=480000,
+            currency="XOF",
+            note=None,
+        )
+        html = subscription_request_admin_email(
+            requester=self.user,
+            recipient=recipient,
+            plan=plan,
+            request=request,
+        )
+        self.assertIn("New upgrade request", html)
+        self.assertIn("Action required", html)
 
 
 if __name__ == "__main__":

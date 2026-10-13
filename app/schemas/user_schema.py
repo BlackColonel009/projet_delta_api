@@ -5,10 +5,11 @@ from enum import Enum
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
-    account_type: Optional[str] = "basic"
-    is_main_user: bool = False
+    account_type: Optional[str] = "bronze_free"
+    is_main_user: bool = True
     societe_ou_entreprise: Optional[str] = None  # ✅
     devise: Optional[str] = "€"
+    interface_language: Literal["fr", "en"] = "fr"
     
 class RoleEnum(str, Enum):
     technicien = "Technicien(ne)"
@@ -48,6 +49,10 @@ class CompanyThemeUpdate(BaseModel):
         "midnight",
     ]
     theme_mode: Literal["system", "light", "dark"]
+
+
+class InterfaceLanguageUpdate(BaseModel):
+    language: Literal["fr", "en"]
 
 
 class SessionLockUpdate(BaseModel):
@@ -102,4 +107,5 @@ class SubUserOut(BaseModel):
     main_user_data: Optional[MainUserData]
     session_lock_minutes: int = 0
     session_lock_configured: bool = False
+    interface_language: Literal["fr", "en"] = "fr"
 

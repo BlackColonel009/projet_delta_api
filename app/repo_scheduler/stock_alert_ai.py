@@ -21,6 +21,7 @@ from app.models.model_produit import Produit
 from app.models.model_unite_produit import UniteProduit
 from sqlalchemy.orm import Session
 import os
+from app.utils.i18n import language_of, translated
 
 
 async def run_stock_alert_scheduler(db: Session):
@@ -49,8 +50,9 @@ async def run_stock_alert_scheduler(db: Session):
 
         pdf_path = generate_stock_pdf(produits_stock_faible, user)
 
-        sujet = f"Alerte stock faible - {user.societe_ou_entreprise or 'Votre société'}"
-        corps = "Voici la liste des produits dont le stock est inférieur ou égal au seuil défini."
+        language = language_of(user)
+        sujet = translated(language, f"Alerte stock faible - {user.societe_ou_entreprise or 'Votre société'}", f"Low stock alert - {user.societe_ou_entreprise or 'Your company'}")
+        corps = translated(language, "Voici la liste des produits dont le stock est inférieur ou égal au seuil défini.", "Here is the list of products whose stock is at or below the defined threshold.")
 
         await send_email_message(
             to_email=user.email,

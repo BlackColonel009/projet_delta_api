@@ -7,6 +7,7 @@ from app.models.model_souscription import SubscriptionType
 
 
 class BillingCycle(str, Enum):
+    free = "free"
     trial = "trial"
     monthly = "monthly"
     annual = "annual"

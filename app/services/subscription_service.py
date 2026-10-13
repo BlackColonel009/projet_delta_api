@@ -12,20 +12,26 @@ def legacy_subscription_type(cycle: str) -> str:
     return "yearly" if cycle == "annual" else cycle
 
 
-def create_trial_subscription(db: Session, user_id: int):
+def create_free_subscription(db: Session, user_id: int):
     subscription = Subscription(
         user_id=user_id,
         plan_code="bronze_free",
-        type="trial",
+        type="free",
         status="active",
         start_date=datetime.utcnow(),
-        end_date=datetime.utcnow() + timedelta(days=30),
+        # Colonne historique non nullable. Le forfait gratuit n'expire pas et
+        # subscription_is_expired ignore cette date pour bronze_free.
+        end_date=datetime.utcnow() + timedelta(days=36500),
         granted_by_admin=False
     )
     db.add(subscription)
     db.commit()
     db.refresh(subscription)
     return subscription
+
+
+# Compatibilité pour les imports d'anciennes versions de l'API.
+create_trial_subscription = create_free_subscription
 
 
 def activate_subscription(

@@ -11,6 +11,7 @@ from reportlab.lib import colors
 from io import BytesIO
 
 from app.models.model_produit import Produit
+from app.utils.i18n import language_of, translated
 
 def generate_stock_pdf(produits: list[Produit], user) -> str:
     """
@@ -18,12 +19,14 @@ def generate_stock_pdf(produits: list[Produit], user) -> str:
     """
 
     # Préparer les données sous forme de liste de dicts (ou liste de listes)
+    language = language_of(user)
+    tr = lambda fr, en: translated(language, fr, en)
     data = []
     for p in produits:
         data.append({
-            "Produit": p.nom,
-            "Catégorie": p.categorie.nom if p.categorie else "N/A",
-            "Stock disponible": sum(
+            tr("Produit", "Product"): p.nom,
+            tr("Catégorie", "Category"): p.categorie.nom if p.categorie else "N/A",
+            tr("Stock disponible", "Available stock"): sum(
                 1 for unite in p.unites if unite.statut == "disponible"
             )
         })
@@ -33,10 +36,10 @@ def generate_stock_pdf(produits: list[Produit], user) -> str:
     doc = SimpleDocTemplate(buffer, pagesize=A4)
     styles = getSampleStyleSheet()
 
-    elements = [Paragraph("Liste des stocks faibles", styles['Title'])]
+    elements = [Paragraph(tr("Liste des stocks faibles", "Low stock list"), styles['Title'])]
 
     if not data:
-        elements.append(Paragraph("Aucun produit en stock faible.", styles['Normal']))
+        elements.append(Paragraph(tr("Aucun produit en stock faible.", "No low-stock products."), styles['Normal']))
     else:
         # Construire table : première ligne = headers
         table_data = [list(data[0].keys())]
@@ -60,7 +63,7 @@ def generate_stock_pdf(produits: list[Produit], user) -> str:
     # ✅ Texte ajouté en bas du PDF
         elements.append(
             Paragraph(
-                " Veuillez contacter s'il vous plaît votre fournisseur avant de nouvelles demandes de vos clients.",
+                tr("Veuillez contacter votre fournisseur avant de nouvelles demandes de vos clients.", "Please contact your supplier before accepting new customer requests."),
                 styles["Normal"]
             )
         )

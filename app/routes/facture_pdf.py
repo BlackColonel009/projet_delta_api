@@ -25,6 +25,7 @@ import tempfile
 
 from app.services.generate_facture_from_commande import generate_facture_pdf
 from app.utils.subscription_guard import enforce_feature_access
+from app.utils.i18n import language_of, translated
 
 router = APIRouter(prefix="/factures", tags=["Facturation"])
 
@@ -74,27 +75,29 @@ def preview_facture_pdf(
     y = height - 2 * cm
 
     devise = facture.user.devise if hasattr(facture, "user") else ""
+    language = language_of(current_user)
+    tr = lambda fr, en: translated(language, fr, en)
 
     pdf.setFont("Helvetica-Bold", 16)
-    pdf.drawString(2 * cm, y, f"Facture #{facture.id} - {facture.type.value.upper()}")
+    pdf.drawString(2 * cm, y, f"{tr('Facture', 'Invoice')} #{facture.id} - {facture.type.value.upper()}")
     y -= 1.2 * cm
     pdf.setFont("Helvetica", 11)
-    pdf.drawString(2 * cm, y, f"Date : {facture.date_creation.strftime('%d/%m/%Y')}")
+    pdf.drawString(2 * cm, y, f"{tr('Date :', 'Date:')} {facture.date_creation.strftime('%d/%m/%Y')}")
     y -= 0.8 * cm
 
     if facture.client:
-        pdf.drawString(2 * cm, y, f"Client : {facture.client.nom}")
+        pdf.drawString(2 * cm, y, f"{tr('Client :', 'Customer:')} {facture.client.nom}")
         y -= 0.6 * cm
     if facture.fournisseur:
-        pdf.drawString(2 * cm, y, f"Fournisseur : {facture.fournisseur.nom}")
+        pdf.drawString(2 * cm, y, f"{tr('Fournisseur :', 'Supplier:')} {facture.fournisseur.nom}")
         y -= 0.6 * cm
 
     y -= 1 * cm
     pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(2 * cm, y, "Produit")  # Aligné à gauche
+    pdf.drawString(2 * cm, y, tr("Produit", "Product"))
 
     # Qté : centré entre 9.5 et 11
-    pdf.drawCentredString(10.25 * cm, y, "Qté")
+    pdf.drawCentredString(10.25 * cm, y, tr("Qté", "Qty"))
 
     # PU : aligné à droite à 15.1 cm
     pdf.drawRightString(15.1 * cm, y, "PU")
@@ -145,9 +148,9 @@ def preview_facture_pdf(
         # Paragraphe avec retour à la ligne (7.2 cm max)
         text = f"<b>{nom_produit}</b><br/>"
         if caract_display:
-            text += f"<i>Caractéristiques :</i> {caract_display}<br/>"
+            text += f"<i>{tr('Caractéristiques :', 'Details:')}</i> {caract_display}<br/>"
         if codes_display:
-            text += f"<i>Codes :</i> {codes_display}"
+            text += f"<i>{tr('Codes :', 'Codes:')}</i> {codes_display}"
 
         para = Paragraph(text, styleN)
         max_para_width = 7.2 * cm
@@ -203,18 +206,18 @@ def preview_facture_pdf(
 
     y -= 1 * cm
     pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawRightString(15 * cm, y, "Total HT :")
+    pdf.drawRightString(15 * cm, y, tr("Total HT :", "Subtotal:"))
     pdf.drawRightString(19 * cm, y, f"{facture.total_ht:.2f} {devise}")
     y -= 0.5 * cm
-    pdf.drawRightString(15 * cm, y, f"TVA ({facture.tva:.0f}%) :")
+    pdf.drawRightString(15 * cm, y, f"{tr('TVA', 'VAT')} ({facture.tva:.0f}%) :")
     pdf.drawRightString(19 * cm, y, f"{facture.total_ttc - facture.total_ht:.2f} {devise}")
     y -= 0.5 * cm
-    pdf.drawRightString(15 * cm, y, "Total TTC :")
+    pdf.drawRightString(15 * cm, y, tr("Total TTC :", "Total incl. tax:"))
     pdf.drawRightString(19 * cm, y, f"{facture.total_ttc:.2f} {devise}")
 
 
     # Horodatage actuel
-    now_str = datetime.now().strftime("le %d/%m/%Y à %H:%M")
+    now_str = datetime.now().strftime(tr("le %d/%m/%Y à %H:%M", "on %d/%m/%Y at %H:%M"))
 
     if total_paye >= facture.total_ttc:
         pdf.saveState()
@@ -222,7 +225,7 @@ def preview_facture_pdf(
         pdf.setFillColorRGB(0.6, 0.1, 0.1)
         pdf.translate(13 * cm, 5 * cm)
         pdf.rotate(25)
-        pdf.drawString(0, 0, "PAYÉ")
+        pdf.drawString(0, 0, tr("PAYÉ", "PAID"))
         pdf.setFont("Helvetica-Oblique", 10)  # Italique et plus petit
         pdf.drawString(0, -20, now_str)
         pdf.restoreState()
@@ -233,7 +236,7 @@ def preview_facture_pdf(
         pdf.setFillColorRGB(0.6, 0.1, 0.1)
         pdf.translate(13 * cm, 5 * cm)
         pdf.rotate(25)
-        pdf.drawString(0, 0, "NON PAYÉ")
+        pdf.drawString(0, 0, tr("NON PAYÉ", "UNPAID"))
         pdf.setFont("Helvetica-Oblique", 10)
         pdf.drawString(0, -20, now_str)
         pdf.restoreState()
@@ -244,13 +247,16 @@ def preview_facture_pdf(
     heure = now.hour
 
     if heure < 12:
-        moment = "Bonne matinée"
+        moment = tr("Bonne matinée", "Have a good morning")
     elif 12 <= heure < 16:
-        moment = "Bon après-midi"
+        moment = tr("Bon après-midi", "Have a good afternoon")
     else:
-        moment = "Bonne soirée"
+        moment = tr("Bonne soirée", "Have a good evening")
 
-    message = f"Merci pour votre fidélité. – {moment}."
+    message = tr(
+        f"Merci pour votre fidélité. – {moment}.",
+        f"Thank you for your loyalty. – {moment}.",
+    )
 
     # Définir la police et la couleur
     pdf.setFont("Helvetica-Oblique", 10)
@@ -297,6 +303,8 @@ async def send_facture_to_client_memory(
         raise HTTPException(status_code=404, detail="Facture non trouvée")
 
     devise = facture.user.devise if hasattr(facture, "user") else ""
+    language = language_of(current_user)
+    tr = lambda fr, en: translated(language, fr, en)
 
     if not facture.client or not facture.client.email:
         raise HTTPException(status_code=400, detail="Le client n'a pas d'adresse email")
@@ -306,13 +314,11 @@ async def send_facture_to_client_memory(
         pdf_path = generate_facture_pdf(facture, db)
         try:
             message = MessageSchema(
-                subject=f"Votre facture #{facture.id}",
+                subject=tr(f"Votre facture #{facture.id}", f"Your invoice #{facture.id}"),
                 recipients=[facture.client.email],
-                body=(
-                    f"Bonjour {facture.client.nom},\n\n"
-                    f"Veuillez trouver en pièce jointe votre facture "
-                    f"professionnelle #{facture.id}.\n\n"
-                    "Merci pour votre confiance."
+                body=tr(
+                    f"Bonjour {facture.client.nom},\n\nVeuillez trouver en pièce jointe votre facture professionnelle #{facture.id}.\n\nMerci pour votre confiance.",
+                    f"Hello {facture.client.nom},\n\nPlease find your professional invoice #{facture.id} attached.\n\nThank you for your trust.",
                 ),
                 subtype=MessageType.plain,
                 attachments=[pdf_path],
@@ -336,23 +342,23 @@ async def send_facture_to_client_memory(
     y = height - 2 * cm
 
     pdf.setFont("Helvetica-Bold", 16)
-    pdf.drawString(2 * cm, y, f"Facture #{facture.id} - {facture.type.value.upper()}")
+    pdf.drawString(2 * cm, y, f"{tr('Facture', 'Invoice')} #{facture.id} - {facture.type.value.upper()}")
     y -= 1.2 * cm
     pdf.setFont("Helvetica", 11)
-    pdf.drawString(2 * cm, y, f"Date : {facture.date_creation.strftime('%d/%m/%Y')}")
+    pdf.drawString(2 * cm, y, f"{tr('Date :', 'Date:')} {facture.date_creation.strftime('%d/%m/%Y')}")
     y -= 0.8 * cm
 
     if facture.client:
-        pdf.drawString(2 * cm, y, f"Client : {facture.client.nom}")
+        pdf.drawString(2 * cm, y, f"{tr('Client :', 'Customer:')} {facture.client.nom}")
         y -= 0.6 * cm
     if facture.fournisseur:
-        pdf.drawString(2 * cm, y, f"Fournisseur : {facture.fournisseur.nom}")
+        pdf.drawString(2 * cm, y, f"{tr('Fournisseur :', 'Supplier:')} {facture.fournisseur.nom}")
         y -= 0.6 * cm
 
     y -= 1 * cm
     pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(2 * cm, y, "Produit")
-    pdf.drawString(9 * cm, y, "Qté")
+    pdf.drawString(2 * cm, y, tr("Produit", "Product"))
+    pdf.drawString(9 * cm, y, tr("Qté", "Qty"))
     pdf.drawString(11 * cm, y, "PU")
     pdf.drawString(14 * cm, y, "Total")
     y -= 0.4 * cm
@@ -394,9 +400,9 @@ async def send_facture_to_client_memory(
         # Paragraphe avec retour à la ligne (7.2 cm max)
         text = f"<b>{nom_produit}</b><br/>"
         if caract_display:
-            text += f"<i>Caractéristiques :</i> {caract_display}<br/>"
+            text += f"<i>{tr('Caractéristiques :', 'Details:')}</i> {caract_display}<br/>"
         if codes_display:
-            text += f"<i>Codes :</i> {codes_display}"
+            text += f"<i>{tr('Codes :', 'Codes:')}</i> {codes_display}"
 
         para = Paragraph(text, styleN)
         max_para_width = 7.2 * cm
@@ -449,17 +455,17 @@ async def send_facture_to_client_memory(
 
     y -= 1 * cm
     pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawRightString(15 * cm, y, "Total HT :")
+    pdf.drawRightString(15 * cm, y, tr("Total HT :", "Subtotal:"))
     pdf.drawRightString(19 * cm, y, f"{facture.total_ht:.2f} {devise}")
     y -= 0.5 * cm
-    pdf.drawRightString(15 * cm, y, f"TVA ({facture.tva:.0f}%) :")
+    pdf.drawRightString(15 * cm, y, f"{tr('TVA', 'VAT')} ({facture.tva:.0f}%) :")
     pdf.drawRightString(19 * cm, y, f"{facture.total_ttc - facture.total_ht:.2f} {devise}")
     y -= 0.5 * cm
-    pdf.drawRightString(15 * cm, y, "Total TTC :")
+    pdf.drawRightString(15 * cm, y, tr("Total TTC :", "Total incl. tax:"))
     pdf.drawRightString(19 * cm, y, f"{facture.total_ttc:.2f} {devise}")
 
     # Horodatage actuel
-    now_str = datetime.now().strftime("le %d/%m/%Y à %H:%M")
+    now_str = datetime.now().strftime(tr("le %d/%m/%Y à %H:%M", "on %d/%m/%Y at %H:%M"))
 
     if total_paye >= facture.total_ttc:
         pdf.saveState()
@@ -467,7 +473,7 @@ async def send_facture_to_client_memory(
         pdf.setFillColorRGB(0.6, 0.1, 0.1)
         pdf.translate(13 * cm, 5 * cm)
         pdf.rotate(25)
-        pdf.drawString(0, 0, "PAYÉ")
+        pdf.drawString(0, 0, tr("PAYÉ", "PAID"))
         pdf.setFont("Helvetica-Oblique", 10)  # Italique et plus petit
         pdf.drawString(0, -20, now_str)
         pdf.restoreState()
@@ -478,13 +484,16 @@ async def send_facture_to_client_memory(
     heure = now.hour
 
     if heure < 12:
-        moment = "Bonne matinée"
+        moment = tr("Bonne matinée", "Have a good morning")
     elif 12 <= heure < 18:
-        moment = "Bon après-midi"
+        moment = tr("Bon après-midi", "Have a good afternoon")
     else:
-        moment = "Bonne soirée"
+        moment = tr("Bonne soirée", "Have a good evening")
 
-    message = f"Merci pour votre fidélité. – {moment}."
+    message = tr(
+        f"Merci pour votre fidélité. – {moment}.",
+        f"Thank you for your loyalty. – {moment}.",
+    )
 
     # Définir la police et la couleur
     pdf.setFont("Helvetica-Oblique", 10)
@@ -508,9 +517,12 @@ async def send_facture_to_client_memory(
 
     try:
         message = MessageSchema(
-            subject=f"Votre facture #{facture.id}",
+            subject=tr(f"Votre facture #{facture.id}", f"Your invoice #{facture.id}"),
             recipients=[facture.client.email],
-            body=f"Bonjour, veuillez trouver en pièce jointe votre facture #{facture.id}.",
+            body=tr(
+                f"Bonjour, veuillez trouver en pièce jointe votre facture #{facture.id}.",
+                f"Hello, please find your invoice #{facture.id} attached.",
+            ),
             subtype=MessageType.plain,
             attachments=[pdf_path]
         )

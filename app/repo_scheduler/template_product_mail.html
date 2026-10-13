@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="{{ lang }}">
 <head>
   <meta charset="UTF-8">
   <title>{{ produit.nom }}</title>
@@ -177,7 +177,7 @@
       </tr>
     </table>
 
-    <div class="eyebrow">Sélection produit</div>
+    <div class="eyebrow">{{ 'Product selection' if lang == 'en' else 'Sélection produit' }}</div>
     <div class="product-name">{{ produit.nom }}</div>
 
     <div class="product-card">
@@ -185,8 +185,8 @@
     </div>
 
     <div class="details">
-      <div class="details-title">Fiche technique</div>
-      <p class="details-text">{{ produit.caracteristiques or "Aucune description disponible" }}</p>
+      <div class="details-title">{{ 'Specifications' if lang == 'en' else 'Fiche technique' }}</div>
+      <p class="details-text">{{ produit.caracteristiques or ('No description available' if lang == 'en' else 'Aucune description disponible') }}</p>
     </div>
 
     <div class="contact-wrap">

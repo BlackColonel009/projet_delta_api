@@ -30,6 +30,7 @@ class ProfessionalInvoicePdfTests(unittest.TestCase):
             tva=0.18,
             telephone="+228 90000000",
             facture_color="#5C6BC0",
+            interface_language="fr",
         )
         client = SimpleNamespace(
             nom="Client Test",

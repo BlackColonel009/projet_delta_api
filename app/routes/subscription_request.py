@@ -167,17 +167,22 @@ def create_request(
     )
     db.commit()
     db.refresh(request)
-    email_body = subscription_request_admin_email(
-        requester=current_user,
-        plan=plan,
-        request=request,
-    )
     for admin in admins:
         if admin.email:
+            email_body = subscription_request_admin_email(
+                requester=current_user,
+                plan=plan,
+                request=request,
+                recipient=admin,
+            )
             background_tasks.add_task(
                 send_email_message,
                 to_email=admin.email,
-                subject=f"Nouvelle demande d’abonnement — {current_user.societe_ou_entreprise or current_user.email}",
+                subject=(
+                    f"New subscription request — {current_user.societe_ou_entreprise or current_user.email}"
+                    if admin.interface_language == "en"
+                    else f"Nouvelle demande d’abonnement — {current_user.societe_ou_entreprise or current_user.email}"
+                ),
                 body=email_body,
                 is_html=True,
                 reply_to=current_user.email,
@@ -272,7 +277,11 @@ def approve_request(
         background_tasks.add_task(
             send_email_message,
             to_email=company.email,
-            subject=f"Votre demande pour l’offre {plan.name} a été approuvée",
+            subject=(
+                f"Your request for the {plan.name} plan was approved"
+                if company.interface_language == "en"
+                else f"Votre demande pour l’offre {plan.name} a été approuvée"
+            ),
             body=subscription_request_decision_email(
                 company=company,
                 plan=plan,
@@ -318,7 +327,11 @@ def reject_request(
         background_tasks.add_task(
             send_email_message,
             to_email=company.email,
-            subject=f"Réponse à votre demande pour l’offre {plan.name}",
+            subject=(
+                f"Response to your request for the {plan.name} plan"
+                if company.interface_language == "en"
+                else f"Réponse à votre demande pour l’offre {plan.name}"
+            ),
             body=subscription_request_decision_email(
                 company=company,
                 plan=plan,

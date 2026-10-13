@@ -16,6 +16,7 @@ from app.utils.security import get_current_user, hash_password
 from fastapi_mail import FastMail, MessageSchema, MessageType
 from app.config import conf
 import random
+from app.utils.i18n import language_of, translated
 
 router = APIRouter(prefix="/reset", tags=["Réinitialisation"])
 
@@ -32,10 +33,11 @@ async def request_reset_account(
     db.add(ResetToken(user_id=current_user.id, code=code))
     db.commit()
 
+    language = language_of(current_user)
     message = MessageSchema(
-        subject="Code de réinitialisation de votre compte",
+        subject=translated(language, "Code de réinitialisation de votre compte", "Your account reset code"),
         recipients=[current_user.email],
-        body=f"Bonjour {current_user.email},\n\nVoici votre code de réinitialisation : {code}",
+        body=translated(language, f"Bonjour {current_user.email},\n\nVoici votre code de réinitialisation : {code}", f"Hello {current_user.email},\n\nHere is your reset code: {code}"),
         subtype=MessageType.plain,
     )
     fm = FastMail(conf)
@@ -204,7 +206,7 @@ def forgot_password(
 
     code = generate_code()
     save_code(db, user.id, code)
-    send_reset_email(user.email, code)
+    send_reset_email(user.email, code, user.interface_language)
 
     return {"message": "Code envoyé à votre email"}
 

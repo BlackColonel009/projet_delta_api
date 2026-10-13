@@ -13,10 +13,10 @@ from app.models.model_historique_intervention import HistoriqueIntervention
 from app.models.model_intervention import Intervention
 from app.models.model_produit import Produit
 from app.models.model_rapport import Rapport
-from app.schemas.user_schema import CompanyThemeUpdate, SessionLockUpdate, SessionUnlockRequest, SubUserOut, UserCreate, SubUserCreate, UserLogin, GroupUserLogin
+from app.schemas.user_schema import CompanyThemeUpdate, InterfaceLanguageUpdate, SessionLockUpdate, SessionUnlockRequest, SubUserOut, UserCreate, SubUserCreate, UserLogin, GroupUserLogin
 from app.models.model_user import User, SubUser
 from app.models.model_role import Role
-from app.services.subscription_service import create_trial_subscription
+from app.services.subscription_service import create_free_subscription
 from app.utils.security import (
     hash_password, verify_password, create_access_token,
     get_current_user, get_current_sub_user, get_active_user, require_role, 
@@ -31,6 +31,18 @@ from app.utils.subscription_guard import (
 )
 
 router = APIRouter()
+
+
+@router.put("/interface-language", tags=["Users"])
+def update_interface_language(
+    data: InterfaceLanguageUpdate,
+    current_user=Depends(get_active_user),
+    db: Session = Depends(get_db),
+):
+    current_user.interface_language = data.language
+    db.commit()
+    db.refresh(current_user)
+    return {"interface_language": current_user.interface_language}
 
 
 @router.put("/session-lock", tags=["Users"])
@@ -86,11 +98,14 @@ def register_user(data: UserCreate, db: Session = Depends(get_db)):
     new_user = User(
         email=data.email,
         password_hash=hash_password(data.password),
-        is_main_user=data.is_main_user,
+        # Cette route crée toujours le propriétaire de l'entreprise.
+        # Les collaborateurs passent exclusivement par /register_sub.
+        is_main_user=True,
         is_superuser=False,
-        account_type=data.account_type,
+        account_type="bronze_free",
         societe_ou_entreprise=data.societe_ou_entreprise,
         devise=data.devise or "€", 
+        interface_language=data.interface_language,
     )
     db.add(new_user)
     
@@ -105,8 +120,8 @@ def register_user(data: UserCreate, db: Session = Depends(get_db)):
     
     db.refresh(new_user)
     
-    # 2️⃣ Créer automatiquement l'abonnement trial
-    create_trial_subscription(db, user_id=new_user.id)
+    # 2️⃣ Activer automatiquement Bronze gratuit, sans expiration.
+    create_free_subscription(db, user_id=new_user.id)
     
     # ✅ On génère le token directement
     access_token = create_access_token({
@@ -351,33 +366,41 @@ def update_my_user(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if email:
-        current_user.email = email
+    if email is not None:
+        normalized_email = email.strip()
+        if not normalized_email:
+            raise HTTPException(status_code=400, detail="L’adresse email est requise.")
+        duplicate = db.query(User).filter(
+            User.email == normalized_email,
+            User.id != current_user.id,
+        ).first()
+        if duplicate:
+            raise HTTPException(status_code=409, detail="Cette adresse email est déjà utilisée.")
+        current_user.email = normalized_email
     if password:
         current_user.password_hash = hash_password(password)
-    if avatar_url:
+    if avatar_url is not None:
         current_user.avatar_url = avatar_url
-    if bio:
+    if bio is not None:
         current_user.bio = bio
-    if societe_ou_entreprise:
+    if societe_ou_entreprise is not None:
         current_user.societe_ou_entreprise = societe_ou_entreprise
-    if addresse:
+    if addresse is not None:
         current_user.addresse = addresse
-    if nif:
+    if nif is not None:
         current_user.nif = nif
     if tva is not None:
         current_user.tva = tva
-    if username:
+    if username is not None:
         current_user.username = username
-    if devise:
+    if devise is not None:
         current_user.devise = devise
-    if telephone:
+    if telephone is not None:
         current_user.telephone = telephone
-    if logo_entreprise:
+    if logo_entreprise is not None:
         current_user.logo_entreprise = logo_entreprise
-    if facture_color:
+    if facture_color is not None:
         current_user.facture_color = facture_color
-        print(f"[DEBUG] Mise à jour facture_color: {facture_color}")
 
     # Propagation aux subusers des champs modifiés (TVA, NIF, adresse)
     subusers = db.query(SubUser).filter(SubUser.parent_user_id == current_user.id).all()
@@ -390,8 +413,6 @@ def update_my_user(
             subuser.addresse = addresse
 
     db.commit()
-    print("[DEBUG] Commit effectué")
-
     log_action(
         db=db,
         current_user=current_user,
@@ -619,6 +640,7 @@ def get_my_profile(current_user: User = Depends(get_current_user)):
         "telephone" : current_user.telephone,
         "app_theme": current_user.app_theme or "tradecare",
         "theme_mode": current_user.theme_mode or "system",
+        "interface_language": current_user.interface_language or "fr",
         "session_lock_minutes": current_user.session_lock_minutes or 0,
         "session_lock_configured": current_user.session_lock_configured or False,
     }
@@ -637,6 +659,7 @@ def get_my_subuser_profile(current_sub: SubUser = Depends(get_current_sub_user),
         "telephone" : current_sub.telephone,
         "session_lock_minutes": current_sub.session_lock_minutes or 0,
         "session_lock_configured": current_sub.session_lock_configured or False,
+        "interface_language": current_sub.interface_language or "fr",
         "main_user_data": {
                 "societe_ou_entreprise": parent.societe_ou_entreprise,
                 "logo_entreprise": parent.logo_entreprise,
@@ -647,6 +670,7 @@ def get_my_subuser_profile(current_sub: SubUser = Depends(get_current_sub_user),
                 "facture_color": parent.facture_color,
                 "app_theme": parent.app_theme or "tradecare",
                 "theme_mode": parent.theme_mode or "system",
+                "interface_language": parent.interface_language or "fr",
             }
     }
 

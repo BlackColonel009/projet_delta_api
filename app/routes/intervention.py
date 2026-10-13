@@ -2,6 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from app.core.mail import send_email_message
+from app.utils.i18n import language_of, translated
 from app.database import get_db
 from app.models.model_client import Client
 from app.models.model_intervention import Intervention, intervention_produits
@@ -141,15 +142,23 @@ def update_intervention(
             nom_produits = "votre équipement"
 
         if client and client.email:
-            subject = f" Intervention terminée - {user.societe_ou_entreprise}"
-            body = (
+            language = language_of(user)
+            subject = translated(language, f"Intervention terminée - {user.societe_ou_entreprise}", f"Service completed - {user.societe_ou_entreprise}")
+            body = translated(language, (
                 f"Bonjour {client.nom},\n\n"
                 f"L’intervention sur << {nom_produits} >> est maintenant terminée.\n"
                 f"Vous pouvez passer à notre entreprise pour le récupérer.\n\n"
                 f"L'intervention est Facturé à << {facturation} >>.\n\n"
                 f"Merci de votre confiance.\n"
                 f"L’équipe {user.societe_ou_entreprise}."
-            )
+            ), (
+                f"Hello {client.nom},\n\n"
+                f"The service on << {nom_produits} >> is now complete.\n"
+                f"You can visit our company to collect it.\n\n"
+                f"The service charge is << {facturation} >>.\n\n"
+                f"Thank you for your trust.\n"
+                f"The {user.societe_ou_entreprise} team."
+            ))
 
             # Envoi en tâche de fond
             background_tasks.add_task(send_email_message, to_email=client.email, subject=subject, body=body)

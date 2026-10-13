@@ -28,6 +28,7 @@ class User(Base):
     facture_color = Column(String, default="#5C6BC0")  # Par exemple un bleu doux
     app_theme = Column(String(32), default="tradecare", nullable=False)
     theme_mode = Column(String(16), default="system", nullable=False)
+    interface_language = Column(String(5), default="fr", nullable=False)
     daily_report_reminder_enabled = Column(Boolean, default=False, nullable=False)
     daily_report_reminder_hour = Column(Integer, default=18, nullable=False)
     daily_report_reminder_minute = Column(Integer, default=0, nullable=False)
@@ -75,6 +76,7 @@ class SubUser(Base):
     session_lock_minutes = Column(Integer, default=0, nullable=False)
     session_lock_configured = Column(Boolean, default=False, nullable=False)
     session_lock_password_hash = Column(String, nullable=True)
+    interface_language = Column(String(5), default="fr", nullable=False)
 
 
     parent_user_id = Column(Integer, ForeignKey("users.id"))

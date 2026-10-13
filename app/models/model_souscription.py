@@ -5,6 +5,7 @@ from app.database import Base
 from enum import Enum
 
 class SubscriptionType(str, Enum):
+    free = "free"
     trial = "trial"
     monthly = "monthly"
     yearly = "yearly"

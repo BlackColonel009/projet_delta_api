@@ -2,6 +2,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.mail import send_email_message
+from app.utils.i18n import language_of, translated
 from app.database import get_db
 from app.models.model_commande import CommandeVente
 from app.models.model_paiement import Paiement
@@ -117,11 +118,13 @@ async def create_paiement(
     return {"message": f"Paiement enregistré sur la facture #{facture.id}"}
 
 async def envoyer_mail_confirmation_paiement(client, facture, paiement, total_paye):
-    sujet = f"Confirmation de paiement - Facture #{facture.id}"
+    language = language_of(facture.user)
+    tr = lambda fr, en: translated(language, fr, en)
+    sujet = tr(f"Confirmation de paiement - Facture #{facture.id}", f"Payment confirmation - Invoice #{facture.id}")
     devise = facture.user.devise if hasattr(facture, "user") else ""
     
 
-    contenu = f"""
+    contenu = tr(f"""
     Bonjour {client.nom},
 
     Nous vous confirmons la réception d’un paiement de {paiement.montant:.2f} {devise}
@@ -135,7 +138,21 @@ async def envoyer_mail_confirmation_paiement(client, facture, paiement, total_pa
     Merci pour votre confiance.
 
     — L’équipe {facture.user.societe_ou_entreprise if facture.user else "Trade Care"}
-    """
+    """, f"""
+    Hello {client.nom},
+
+    We confirm receipt of a payment of {paiement.montant:.2f} {devise}
+    for invoice No. {facture.id}, dated {facture.date_creation.strftime('%d/%m/%Y')}.
+
+    Current invoice status: {facture.statut.upper()}.
+    Total amount due: {facture.total_ttc:.2f} {devise}
+    Total paid to date: {facture.total_ttc if facture.statut == "payée" else total_paye:.2f} {devise}
+    Payment method: {paiement.moyen_paiement}
+
+    Thank you for your trust.
+
+    — The {facture.user.societe_ou_entreprise if facture.user else "Trade Care"} team
+    """)
 
     await send_email_message(
         to_email=client.email,

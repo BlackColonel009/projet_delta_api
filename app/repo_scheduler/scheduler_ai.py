@@ -8,6 +8,7 @@ from app.email.branded_templates import (
     payment_reminder_email,
     product_recommendation_email,
 )
+from app.utils.i18n import language_of, translated
 from app.utils.public_url import public_url
 from app.utils.color_theme import build_document_palette
 from app.models.model_client_produit import ClientProduit
@@ -149,6 +150,7 @@ def generate_product_pdf(product, user):
     )
     template = env.get_template("template_product_mail.html")
     palette = build_document_palette(getattr(user, "facture_color", None))
+    language = language_of(user)
 
     # Logo (si hébergé publiquement)
     logo_url = public_url(user.logo_entreprise)
@@ -156,11 +158,12 @@ def generate_product_pdf(product, user):
     # Produit précis
     Produit_precis = {
         "nom": product.nom,
-        "caracteristiques": product.caracteristiques or "Aucune description disponible",
+        "caracteristiques": product.caracteristiques or translated(language, "Aucune description disponible", "No description available"),
         "image": public_url(product.image_url),
     }
 
     html_content = template.render(
+        lang=language,
         produit=Produit_precis,
         societe={
             "nom": user.societe_ou_entreprise,
@@ -284,9 +287,10 @@ async def run_followup_scheduler(db: Session):
             )
 
 
+            language = language_of(user)
             await send_email_message(
                 f.client.email,
-                f"{user.societe_ou_entreprise} Relance - Commande en attente",
+                translated(language, f"{user.societe_ou_entreprise} Relance - Commande en attente", f"{user.societe_ou_entreprise} Reminder - Pending order"),
                 msg,
                 reply_to=user.email if user else None,
                 is_html=True,
@@ -300,9 +304,10 @@ async def run_followup_scheduler(db: Session):
                     client_name=f.client.nom,
                     product_names=noms_produits_list,
                 )
+                language = language_of(user)
                 await send_email_message(
                     f.client.email,
-                    f"Merci pour votre confiance — {user.societe_ou_entreprise}",
+                    translated(language, f"Merci pour votre confiance — {user.societe_ou_entreprise}", f"Thank you for your trust — {user.societe_ou_entreprise}"),
                     msg,
                     reply_to=user.email if user else None,
                     is_html=True,
@@ -335,9 +340,10 @@ async def run_followup_scheduler(db: Session):
 
                     pdf_path = generate_product_pdf(p, user)
 
+                    language = language_of(user)
                     await send_email_message(
                         f.client.email,
-                        f"Notre sélection pour vous : {p.nom}",
+                        translated(language, f"Notre sélection pour vous : {p.nom}", f"Our selection for you: {p.nom}"),
                         msg,
                         reply_to=user.email if user else None,
                         attachments=[pdf_path],  # chemin absolu ou relatif du fichier

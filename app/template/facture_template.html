@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="{{ lang }}">
 <head>
   <meta charset="UTF-8">
-  <title>Facture #{{ facture.id }}</title>
+  <title>{{ 'Invoice' if lang == 'en' else 'Facture' }} #{{ facture.id }}</title>
   <style>
     @page {
       size: A4;
@@ -222,18 +222,18 @@
     <table class="header">
       <tr>
         <td class="document-cell">
-          <div class="document-label">Document commercial</div>
+          <div class="document-label">{{ 'Business document' if lang == 'en' else 'Document commercial' }}</div>
           <div class="document-title">
             {% if facture.type.value == "proforma" %}
-              Facture proforma
+              {{ 'Proforma invoice' if lang == 'en' else 'Facture proforma' }}
             {% elif facture.type.value == "devis" %}
-              Devis
+              {{ 'Quote' if lang == 'en' else 'Devis' }}
             {% else %}
-              Facture
+              {{ 'Invoice' if lang == 'en' else 'Facture' }}
             {% endif %}
           </div>
           <div class="document-meta">
-            <strong>Date :</strong> {{ facture.date_creation.strftime('%d/%m/%Y') }}<br>
+            <strong>{{ 'Date:' if lang == 'en' else 'Date :' }}</strong> {{ facture.date_creation.strftime('%d/%m/%Y') }}<br>
             <strong>N° :</strong> {{ facture.id }}
           </div>
         </td>
@@ -243,7 +243,7 @@
           <div class="company-details">
             {{ societe.adresse }}<br>
             NIF : {{ societe.nif }}<br>
-            Tél : {{ societe.telephone }}<br>
+            {{ 'Phone:' if lang == 'en' else 'Tél :' }} {{ societe.telephone }}<br>
             Email : {{ societe.email }}
           </div>
         </td>
@@ -254,16 +254,16 @@
       <tr>
         <td>
           {% if facture.client %}
-            <div class="section-label">Facturé à</div>
+            <div class="section-label">{{ 'Bill to' if lang == 'en' else 'Facturé à' }}</div>
             <div class="client-name">{{ facture.client.nom }}</div>
             {{ facture.client.adresse or '' }}<br>
-            Tél : {{ facture.client.telephone or '' }}<br>
+            {{ 'Phone:' if lang == 'en' else 'Tél :' }} {{ facture.client.telephone or '' }}<br>
             Email : {{ facture.client.email or '' }}
           {% elif facture.fournisseur %}
-            <div class="section-label">Fournisseur</div>
+            <div class="section-label">{{ 'Supplier' if lang == 'en' else 'Fournisseur' }}</div>
             <div class="client-name">{{ facture.fournisseur.nom }}</div>
             {{ facture.fournisseur.adresse or '' }}<br>
-            Tél : {{ facture.fournisseur.telephone or '' }}<br>
+            {{ 'Phone:' if lang == 'en' else 'Tél :' }} {{ facture.fournisseur.telephone or '' }}<br>
             Email : {{ facture.fournisseur.email or '' }}
           {% endif %}
         </td>
@@ -273,9 +273,9 @@
     <table class="items">
       <thead>
         <tr>
-          <th class="description-column">Description</th>
-          <th class="quantity-column right">Qté</th>
-          <th class="price-column right">PU</th>
+          <th class="description-column">{{ 'Description' if lang == 'en' else 'Description' }}</th>
+          <th class="quantity-column right">{{ 'Qty' if lang == 'en' else 'Qté' }}</th>
+          <th class="price-column right">{{ 'Unit price' if lang == 'en' else 'PU' }}</th>
           <th class="total-column right">Total</th>
         </tr>
       </thead>
@@ -297,7 +297,7 @@
                   {% endif %}
                 {% endif %}
                 {% if ligne.unites %}
-                  <br>Code(s/n) :
+                  <br>{{ 'Serial code(s):' if lang == 'en' else 'Code(s/n) :' }}
                   {% for unite in ligne.unites %}
                     {{ unite.tracabilite }}{% if not loop.last %}, {% endif %}
                   {% endfor %}
@@ -319,17 +319,17 @@
         <td class="totals-cell">
           <table class="totals">
             <tr>
-              <td class="label">Total HT</td>
+              <td class="label">{{ 'Subtotal' if lang == 'en' else 'Total HT' }}</td>
               <td class="right">{{ '%.2f'|format(facture.total_ht) }} {{ devise }}</td>
             </tr>
             {% if facture.tva > 0 %}
             <tr>
-              <td class="label">TVA ({{ societe.tva }}%)</td>
+              <td class="label">{{ 'VAT' if lang == 'en' else 'TVA' }} ({{ societe.tva }}%)</td>
               <td class="right">{{ '%.2f'|format(facture.total_ttc - facture.total_ht) }} {{ devise }}</td>
             </tr>
             {% endif %}
             <tr class="grand-total">
-              <td>Total TTC</td>
+              <td>{{ 'Total incl. tax' if lang == 'en' else 'Total TTC' }}</td>
               <td class="right">{{ '%.2f'|format(facture.total_ttc) }} {{ devise }}</td>
             </tr>
           </table>
@@ -338,7 +338,7 @@
     </table>
 
     <div class="amount-words">
-      Montant en lettres : <strong>{{ montant_en_lettres }}</strong>
+      {{ 'Amount in words:' if lang == 'en' else 'Montant en lettres :' }} <strong>{{ montant_en_lettres }}</strong>
     </div>
   </div>
 </body>
