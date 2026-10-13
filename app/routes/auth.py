@@ -13,20 +13,70 @@ from app.models.model_historique_intervention import HistoriqueIntervention
 from app.models.model_intervention import Intervention
 from app.models.model_produit import Produit
 from app.models.model_rapport import Rapport
-from app.schemas.user_schema import CompanyThemeUpdate, SubUserOut, UserCreate, SubUserCreate, UserLogin, GroupUserLogin
+from app.schemas.user_schema import CompanyThemeUpdate, SessionLockUpdate, SessionUnlockRequest, SubUserOut, UserCreate, SubUserCreate, UserLogin, GroupUserLogin
 from app.models.model_user import User, SubUser
 from app.models.model_role import Role
 from app.services.subscription_service import create_trial_subscription
 from app.utils.security import (
     hash_password, verify_password, create_access_token,
-    get_current_user, get_current_sub_user, require_role, 
+    get_current_user, get_current_sub_user, get_active_user, require_role, 
     require_super_user, require_any_role, require_main_user
 )
 from app.database import get_db
 from app.utils.logger import log_action
 from app.utils.permissions import All_required
+from app.utils.subscription_guard import (
+    enforce_subscription_quota,
+    require_subscription_feature,
+)
 
 router = APIRouter()
+
+
+@router.put("/session-lock", tags=["Users"])
+def update_session_lock(
+    data: SessionLockUpdate,
+    current_user=Depends(get_active_user),
+    db: Session = Depends(get_db),
+):
+    """Configure le verrouillage d'inactivité du compte connecté."""
+    if data.session_lock_minutes > 0 and not data.password:
+        raise HTTPException(
+            status_code=400,
+            detail="Définissez un mot de passe de verrouillage d’au moins 5 caractères",
+        )
+    current_user.session_lock_minutes = data.session_lock_minutes
+    current_user.session_lock_configured = True
+    current_user.session_lock_password_hash = (
+        hash_password(data.password)
+        if data.session_lock_minutes > 0 and data.password
+        else None
+    )
+    db.commit()
+    db.refresh(current_user)
+    return {
+        "session_lock_minutes": current_user.session_lock_minutes,
+        "session_lock_configured": current_user.session_lock_configured,
+        "message": (
+            "Verrouillage automatique désactivé"
+            if current_user.session_lock_minutes == 0
+            else f"Session verrouillée après {current_user.session_lock_minutes} minutes d’inactivité"
+        ),
+    }
+
+
+@router.post("/session-lock/unlock", tags=["Users"])
+def unlock_session(
+    data: SessionUnlockRequest,
+    current_user=Depends(get_active_user),
+):
+    password_hash = current_user.session_lock_password_hash
+    if not password_hash or not verify_password(data.password, password_hash):
+        raise HTTPException(
+            status_code=400,
+            detail="Mot de passe de verrouillage incorrect",
+        )
+    return {"unlocked": True}
 
 # 🔒 Créer un utilisateur principal (Single user)
 @router.post("/register", tags=["Authentification"])
@@ -88,6 +138,19 @@ def register_sub_user(
     parent = db.query(User).filter(User.email == data.parent_email).first()
     if not parent:
         raise HTTPException(status_code=404, detail="Parent user not found")
+    if parent.id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Vous ne pouvez créer un sous-utilisateur que pour votre entreprise.",
+        )
+
+    enforce_subscription_quota(
+        db,
+        current_user,
+        "max_sub_users",
+        db.query(SubUser).filter(SubUser.parent_user_id == parent.id).count(),
+        "sous-utilisateurs",
+    )
 
     if not db.query(Role).filter(Role.name == data.role).first():
         raise HTTPException(status_code=400, detail="Rôle non autorisé")
@@ -201,6 +264,7 @@ def update_company_theme(
     data: CompanyThemeUpdate,
     db: Session = Depends(get_db),
     current_user = Depends(All_required()),
+    _=Depends(require_subscription_feature("custom_theme")),
 ):
     """Enregistre le thème commun à toute l'entreprise."""
     if not current_user.is_main_user and str(current_user.role).lower() != "admin":
@@ -228,6 +292,7 @@ def update_company_invoice_theme(
     facture_color: str = Body(..., embed=True),
     db: Session = Depends(get_db),
     current_user=Depends(All_required()),
+    _=Depends(require_subscription_feature("theme_colors")),
 ):
     if not current_user.is_main_user and str(current_user.role).lower() != "admin":
         raise HTTPException(
@@ -554,6 +619,8 @@ def get_my_profile(current_user: User = Depends(get_current_user)):
         "telephone" : current_user.telephone,
         "app_theme": current_user.app_theme or "tradecare",
         "theme_mode": current_user.theme_mode or "system",
+        "session_lock_minutes": current_user.session_lock_minutes or 0,
+        "session_lock_configured": current_user.session_lock_configured or False,
     }
 
 # 👁 Voir son profil subuser
@@ -568,6 +635,8 @@ def get_my_subuser_profile(current_sub: SubUser = Depends(get_current_sub_user),
         "avatar_url": current_sub.avatar_url,
         "devise": parent.devise,  # ✅ ici
         "telephone" : current_sub.telephone,
+        "session_lock_minutes": current_sub.session_lock_minutes or 0,
+        "session_lock_configured": current_sub.session_lock_configured or False,
         "main_user_data": {
                 "societe_ou_entreprise": parent.societe_ou_entreprise,
                 "logo_entreprise": parent.logo_entreprise,

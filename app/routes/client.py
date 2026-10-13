@@ -9,6 +9,7 @@ from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
 from app.utils.logger import log_action
+from app.utils.subscription_guard import enforce_subscription_quota
 
 
 router = APIRouter(prefix="/clients", tags=["Clients"])
@@ -21,6 +22,13 @@ def create_client(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial, RoleEnum.secretaire, RoleEnum.technicien]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    enforce_subscription_quota(
+        db,
+        current_user,
+        "max_clients",
+        db.query(Client).filter(Client.user_id == parent_user_id).count(),
+        "clients",
+    )
     # 🔐 Liaison automatique avec l'utilisateur connecté
     client = Client(**data.dict(), user_id=parent_user_id)
     db.add(client)

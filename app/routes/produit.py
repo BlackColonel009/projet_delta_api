@@ -14,6 +14,10 @@ from app.models.model_user import User
 from app.schemas.user_schema import RoleEnum
 from app.models.model_unite_produit import UniteProduit
 from app.services.traceability_service import create_generated_unit
+from app.utils.subscription_guard import (
+    enforce_subscription_quota,
+    require_subscription_feature,
+)
 from sqlalchemy import or_
 import shutil
 import os
@@ -44,6 +48,17 @@ def create_produit(
     current_user = Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+
+    enforce_subscription_quota(
+        db,
+        current_user,
+        "max_products",
+        db.query(Produit).filter(
+            Produit.user_id == parent_user_id,
+            Produit.date_suppression.is_(None),
+        ).count(),
+        "produits",
+    )
 
     try:
         # 📷 Enregistrement de l'image
@@ -352,7 +367,10 @@ def list_deleted_produits(
     return db.query(Produit).filter(Produit.date_suppression.isnot(None)).all()
 
 # 🛆 Scan QR code (vente ou ajout rapide)
-@router.post("/scan_qr")
+@router.post(
+    "/scan_qr",
+    dependencies=[Depends(require_subscription_feature("basic_qr"))],
+)
 def scan_qr_code(
     data: dict,
     db: Session = Depends(get_db),

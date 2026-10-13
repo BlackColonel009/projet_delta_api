@@ -24,6 +24,7 @@ import os
 import tempfile
 
 from app.services.generate_facture_from_commande import generate_facture_pdf
+from app.utils.subscription_guard import enforce_feature_access
 
 router = APIRouter(prefix="/factures", tags=["Facturation"])
 
@@ -56,6 +57,7 @@ def preview_facture_pdf(
         raise HTTPException(status_code=404, detail="Facture non trouvée")
 
     if invoice_format == "professional":
+        enforce_feature_access(db, current_user, "professional_invoice")
         pdf_path = generate_facture_pdf(facture, db)
         return FileResponse(
             pdf_path,
@@ -300,6 +302,7 @@ async def send_facture_to_client_memory(
         raise HTTPException(status_code=400, detail="Le client n'a pas d'adresse email")
 
     if invoice_format == "professional":
+        enforce_feature_access(db, current_user, "professional_invoice")
         pdf_path = generate_facture_pdf(facture, db)
         try:
             message = MessageSchema(

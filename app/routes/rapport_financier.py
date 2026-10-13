@@ -27,14 +27,15 @@ router = APIRouter(prefix="/rapports", tags=["Rapports Annuels"])
 # ➡ Années disponibles
 @router.get("/annees-disponibles")
 def annees_disponibles(db: Session = Depends(get_db), current_user=Depends(check_role([RoleEnum.admin]))):
+    owner_id = current_user.id if current_user.is_main_user else current_user.parent_user_id
     ventes_years = db.query(func.distinct(func.extract('year', CommandeVente.date_commande))).filter(
-        CommandeVente.user_id == current_user.id
+        CommandeVente.user_id == owner_id
     ).all()
     achats_years = db.query(func.distinct(func.extract('year', CommandeAchat.date_commande))).filter(
-        CommandeAchat.user_id == current_user.id
+        CommandeAchat.user_id == owner_id
     ).all()
     depenses_years = db.query(func.distinct(func.extract('year', Depense.date_depense))).filter(
-        Depense.user_id == current_user.id
+        Depense.user_id == owner_id
     ).all()
     years = set([int(y[0]) for y in ventes_years + achats_years + depenses_years if y[0]])
     return sorted(list(years))
@@ -42,11 +43,17 @@ def annees_disponibles(db: Session = Depends(get_db), current_user=Depends(check
 # ➡ JSON rapport annuel
 @router.get("/annuel/{annee}", response_model=RapportAnnuel)
 def rapport_annuel(annee: int, db: Session = Depends(get_db), current_user=Depends(check_role([RoleEnum.admin]))):
-    user_id = current_user.id
+    user_id = current_user.id if current_user.is_main_user else current_user.parent_user_id
     ventes = bilan_annuel.calcul_ventes(db, annee, user_id)
     achats = bilan_annuel.calcul_achats(db, annee, user_id)
     depenses = bilan_annuel.calcul_depenses(db, annee, user_id)
-    benefice_brut, benefice_net = bilan_annuel.calcul_benefices(ventes, achats, depenses)
+    ventes_ht = bilan_annuel.calcul_total_ventes_ht(db, annee, user_id)
+    cout_produits_vendus = bilan_annuel.calcul_cout_produits_vendus(
+        db, annee, user_id
+    )
+    benefice_brut, benefice_net = bilan_annuel.calcul_benefices(
+        ventes_ht, cout_produits_vendus, depenses
+    )
     clients = bilan_annuel.calcul_clients(db, annee, user_id)
     stock = bilan_annuel.calcul_stock_fin_annee(db, annee, user_id)
     
@@ -55,6 +62,7 @@ def rapport_annuel(annee: int, db: Session = Depends(get_db), current_user=Depen
         "ventes": ventes,
         "achats": achats,
         "depenses": depenses,
+        "cout_produits_vendus": cout_produits_vendus,
         "benefice_brut": benefice_brut,
         "benefice_net": benefice_net,
         "clients": clients,
@@ -169,82 +177,16 @@ def rapport_annuel_pdf(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    devise = current_user.devise or "FCFA"
-
-    # Collecte des données
-    totaux_mensuels = get_mensuel_totaux(db, parent_user_id, annee)
-    stock_fin_annee = calcul_stock_fin_annee(db, parent_user_id)
-    factures_non_reglees = get_factures_non_reglees(db, parent_user_id, annee)
-
-    total_ventes = sum(totaux_mensuels["ventes"].values())
-    total_achats = sum(totaux_mensuels["achats"].values())
-    total_depenses = sum(totaux_mensuels["depenses"].values())
-    benefice_net = total_ventes - total_achats - total_depenses
-
-    # Création PDF
+    from app.services.report_design import company_owner, build_annual_report
+    company = company_owner(db, current_user)
+    monthly = {}
+    for key, calculate in (("ventes", bilan_annuel.calcul_ventes), ("achats", bilan_annuel.calcul_achats), ("depenses", bilan_annuel.calcul_depenses)):
+        values = calculate(db, annee, parent_user_id)
+        monthly[key] = {int(row["mois"].split("-")[1]): row["total"] for row in values["par_mois"]}
     buffer = BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=A4)
-    width, height = A4
-    y = height - 2*cm
-
-    # Page 1 : résumé annuel
-    pdf.setFont("Helvetica-Bold", 18)
-    pdf.drawString(2*cm, y, f"Rapport Annuel {annee}")
-    y -= 2*cm
-    pdf.setFont("Helvetica", 12)
-    pdf.drawString(2*cm, y, f"Total Ventes : {total_ventes:.2f} {devise}")
-    y -= 0.6*cm
-    pdf.drawString(2*cm, y, f"Total Achats : {total_achats:.2f} {devise}")
-    y -= 0.6*cm
-    pdf.drawString(2*cm, y, f"Total Dépenses : {total_depenses:.2f} {devise}")
-    y -= 0.6*cm
-    pdf.drawString(2*cm, y, f"Bénéfice Net : {benefice_net:.2f} {devise}")
-    pdf.showPage()
-
-    # Page 2 : graphique mensuel
-    buffer_graph = creer_graphique_mensuel(totaux_mensuels, annee)
-    pdf.drawImage(ImageReader(buffer_graph), x=2*cm, y=8*cm, width=16*cm, height=12*cm)
-    pdf.showPage()
-
-    # Page 3 : stock final
-    pdf.setFont("Helvetica-Bold", 14)
-    pdf.drawString(2*cm, height-2*cm, "Stock final par produit")
-    y = height - 3*cm
-    pdf.setFont("Helvetica", 11)
-    for nom, data in stock_fin_annee.items():
-        pdf.drawString(2*cm, y, f"{nom} | Total: {data['stock_total']:.2f} | Disponible: {data['stock_disponible']:.2f}")
-        y -= 0.6*cm
-        if y < 3*cm:
-            pdf.showPage()
-            y = height - 2*cm
-    pdf.showPage()
-
-    # Page 4 : factures non réglées
-    pdf.setFont("Helvetica-Bold", 14)
-    pdf.drawString(2*cm, height-2*cm, "Factures Ventes non réglées")
-    y = height - 3*cm
-    pdf.setFont("Helvetica", 11)
-    for v in factures_non_reglees["ventes_non_reglees"]:
-        client_nom = v.client.nom if v.client else "Inconnu"
-        pdf.drawString(2*cm, y, f"Vente ID: {v.id} | Client: {client_nom} | Total: {v.total_ttc:.2f} {devise} | Date: {v.date_creation.strftime('%d/%m/%Y')}")
-        y -= 0.6*cm
-        if y < 3*cm:
-            pdf.showPage()
-            y = height - 2*cm
-
-    pdf.setFont("Helvetica-Bold", 14)
-    pdf.drawString(2*cm, y, "Factures Achats non réglées")
-    y -= 1*cm
-    pdf.setFont("Helvetica", 11)
-    for a in factures_non_reglees["achats_non_reglees"]:
-        fournisseur_nom = a.fournisseur.nom if a.fournisseur else "Inconnu"
-        pdf.drawString(2*cm, y, f"Achat ID: {a.id} | Fournisseur: {fournisseur_nom} | Total: {a.total_ttc:.2f} {devise} | Date: {a.date_creation.strftime('%d/%m/%Y')}")
-        y -= 0.6*cm
-        if y < 3*cm:
-            pdf.showPage()
-            y = height - 2*cm
-
-    pdf.save()
-    buffer.seek(0)
+    build_annual_report(buffer, company, annee, monthly,
+                        calcul_stock_fin_annee(db, parent_user_id),
+                        get_factures_non_reglees(db, parent_user_id, annee),
+                        bilan_annuel.calcul_clients(db, annee, parent_user_id)["nouveaux"])
     filename = f"rapport_annuel_{annee}.pdf"
     return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f"inline; filename={filename}"})

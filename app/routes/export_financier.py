@@ -7,7 +7,7 @@ from textwrap import wrap
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
@@ -24,6 +24,7 @@ from reportlab.platypus import (
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.services.report_design import ReportDesign, company_owner, money
 from app.database import get_db
 from app.models.model_commande import CommandeAchat, CommandeVente
 from app.models.model_depense import Depense
@@ -45,7 +46,37 @@ DANGER_SOFT = colors.HexColor("#FFE4E6")
 DANGER = colors.HexColor("#A72836")
 
 
-def _styles():
+class BrandedReportDocument(SimpleDocTemplate):
+    def build(self, story, **kwargs):
+        title = getattr(story[0], 'getPlainText', lambda: 'Rapport financier')()
+        if 'Global' in title or not title:
+            title = 'Rapport financier global'
+        # Replace the legacy global cover and fixed page references.
+        if isinstance(story[0], Spacer):
+            title = 'Rapport financier global'
+            first_break = next((i for i, item in enumerate(story) if isinstance(item, PageBreak)), -1)
+            if first_break >= 0:
+                story = story[first_break + 1:]
+        story = self.design.cover(title, 'Situation à la date de génération') + story
+        for item in story:
+            if isinstance(item, Table):
+                item.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, 0), self.design.dark)]))
+                # Retain explicit stock warning rows while replacing neutral stripes.
+                for command in tuple(item._bkgrndcmds):
+                    if command[0] == 'BACKGROUND' and command[3] == ROW_ALT:
+                        item.setStyle(TableStyle([('BACKGROUND', command[1], command[2], self.design.soft)]))
+                for column, header in enumerate(item._cellvalues[0]):
+                    if 'Montant' in str(header) or 'Total' in str(header) or 'Prix' in str(header):
+                        for row in item._cellvalues[1:]:
+                            cell = row[column]
+                            if isinstance(cell, Paragraph):
+                                cell.style = ParagraphStyle('Amount', parent=cell.style, alignment=2)
+        self.title = title + ' - ' + self.design.name
+        self.author = self.design.name
+        return super().build(story, **kwargs)
+
+
+def _styles(company=None):
     styles = getSampleStyleSheet()
     styles.add(
         ParagraphStyle(
@@ -79,7 +110,7 @@ def _styles():
             fontSize=8.5,
             leading=11,
             textColor=INK,
-            alignment=TA_LEFT,
+            alignment=TA_JUSTIFY,
         )
     )
     styles.add(
@@ -124,31 +155,29 @@ def _styles():
             alignment=TA_CENTER,
         )
     )
+    design = ReportDesign(company)
+    for name in ("TradeCareReportTitle", "TradeCareCoverTitle", "TradeCareSummaryValue"):
+        styles[name].textColor = design.dark
     return styles
 
 
-def _document(buffer, *, landscape_mode=False):
-    return SimpleDocTemplate(
+def _document(buffer, *, landscape_mode=False, company=None):
+    doc = BrandedReportDocument(
         buffer,
         pagesize=landscape(A4) if landscape_mode else A4,
         leftMargin=1.5 * cm,
         rightMargin=1.5 * cm,
         topMargin=1.65 * cm,
-        bottomMargin=1.35 * cm,
+        bottomMargin=1.8 * cm,
         title="Trade Care",
         author="Trade Care",
     )
+    doc.design = ReportDesign(company)
+    return doc
 
 
 def _decorate_page(pdf, doc):
-    width, height = doc.pagesize
-    pdf.saveState()
-    pdf.setFillColor(PRIMARY)
-    pdf.rect(0, height - 8, width, 8, stroke=0, fill=1)
-    pdf.setStrokeColor(BORDER)
-    pdf.setLineWidth(0.5)
-    pdf.line(doc.leftMargin, 0.85 * cm, width - doc.rightMargin, 0.85 * cm)
-    pdf.restoreState()
+    doc.design.decorate(pdf, doc)
 
 
 def _title_block(title, styles):
@@ -160,6 +189,37 @@ def _title_block(title, styles):
 
 def _p(value, style):
     return Paragraph(escape(str(value if value is not None else "")), style)
+
+
+def _activity_analysis(company, records, devise, *, expenses=False):
+    design = ReportDesign(company)
+    monthly = defaultdict(float)
+    groups = defaultdict(float)
+    for record in records:
+        date = record.date_depense if expenses else record.date_commande
+        amount = float((record.montant if expenses else record.total_ttc) or 0)
+        monthly[date.strftime('%Y-%m')] += amount
+        if expenses:
+            label = record.categorie or 'Non classée'
+        else:
+            party = getattr(record, 'client', None) or getattr(record, 'fournisseur', None)
+            label = getattr(party, 'nom', 'Inconnu')
+        groups[label] += amount
+    total = sum(monthly.values())
+    story = [design.p('Analyse de la période', 'Heading2'),
+             design.p(f'{len(records)} opérations enregistrées, pour un total de {money(total, devise)}. '
+                      'Le périmètre correspond aux opérations détaillées dans ce rapport.')]
+    # Limit charts to legible windows; tables retain all records.
+    months = sorted(monthly)[-12:]
+    story += design.section('Activité mensuelle (12 derniers mois actifs)',
+                            design.chart('Montants par mois', months, [[monthly[m] for m in months]], ['Montant'], devise),
+                            'Les mois affichés correspondent aux mois comportant des opérations. Le détail conserve toutes les opérations du périmètre.')
+    ranked = sorted(groups.items(), key=lambda item: item[1], reverse=True)[:6]
+    story += design.section('Répartition (6 premiers postes)',
+                            design.chart('Principaux postes', [f'P{i+1}' for i in range(len(ranked))],
+                                         [[v for _, v in ranked]], ['Montant'], devise),
+                            '; '.join(f'P{i+1} : {name} ({money(value, devise)})' for i, (name, value) in enumerate(ranked)) or 'Aucune opération enregistrée.')
+    return story + [PageBreak(), design.p('Détail des opérations', 'Heading1')]
 
 
 def _content_chunks(values, *, max_lines=10, line_width=28):
@@ -242,8 +302,9 @@ def _build_complete_report(
     achats,
     depenses,
     generated_at,
+    company=None,
 ):
-    styles = _styles()
+    styles = _styles(company)
     body = styles["TradeCareBody"]
     center = styles["TradeCareCenter"]
     story = [
@@ -273,9 +334,13 @@ def _build_complete_report(
         [_p("Total Ventes", styles["TradeCareSummaryLabel"]), _p(f"{total_ventes:.2f} {devise}", styles["TradeCareSummaryValue"])],
         [_p("Total Achats", styles["TradeCareSummaryLabel"]), _p(f"{total_achats:.2f} {devise}", styles["TradeCareSummaryValue"])],
         [_p("Total Dépenses", styles["TradeCareSummaryLabel"]), _p(f"{total_depenses:.2f} {devise}", styles["TradeCareSummaryValue"])],
-        [_p("Bénéfice Net", styles["TradeCareSummaryLabel"]), _p(f"{benefice_net:.2f} {devise}", styles["TradeCareSummaryValue"])],
+        [_p("Résultat simplifié", styles["TradeCareSummaryLabel"]), _p(f"{benefice_net:.2f} {devise}", styles["TradeCareSummaryValue"])],
     ]
     story.append(_styled_table(summary_data, [8.3 * cm, 8.3 * cm], alignments={1: "RIGHT"}))
+    design = ReportDesign(company)
+    story.extend([Spacer(1, 14), design.p('Le résultat présenté est le solde TTC ventes - achats - dépenses. Il ne constitue pas un bénéfice comptable ni une trésorerie disponible.'),
+                  design.chart('Comparaison des montants enregistrés', ['Ventes', 'Achats', 'Dépenses'],
+                               [[float(total_ventes), float(total_achats), float(total_depenses)]], ['Montant'], devise)])
 
     sales_data = [["Vente ID", "Client", f"Total ({devise})", "Date"]]
     for sale in ventes:
@@ -289,6 +354,7 @@ def _build_complete_report(
             ]
         )
     story.extend([PageBreak(), *_title_block("Détail des Ventes", styles)])
+    story.extend(_activity_analysis(company, ventes, devise))
     story.append(_styled_table(sales_data, [2.2 * cm, 7.0 * cm, 4.0 * cm, 3.4 * cm], alignments={0: "CENTER", 2: "RIGHT", 3: "CENTER"}))
 
     purchase_data = [["Achat ID", "Fournisseur", f"Total ({devise})", "Date"]]
@@ -303,6 +369,7 @@ def _build_complete_report(
             ]
         )
     story.extend([PageBreak(), *_title_block("Détail des Achats", styles)])
+    story.extend(_activity_analysis(company, achats, devise))
     story.append(_styled_table(purchase_data, [2.2 * cm, 7.0 * cm, 4.0 * cm, 3.4 * cm], alignments={0: "CENTER", 2: "RIGHT", 3: "CENTER"}))
 
     expense_data = [["Dépense ID", "Libellé", f"Montant ({devise})", "Catégorie", "Date"]]
@@ -317,17 +384,18 @@ def _build_complete_report(
             ]
         )
     story.extend([PageBreak(), *_title_block("Détail des Dépenses", styles)])
+    story.extend(_activity_analysis(company, depenses, devise, expenses=True))
     story.append(_styled_table(expense_data, [2.1 * cm, 5.0 * cm, 3.2 * cm, 3.5 * cm, 2.8 * cm], alignments={0: "CENTER", 2: "RIGHT", 4: "CENTER"}))
 
-    _document(buffer).build(
+    _document(buffer, company=company).build(
         story,
         onFirstPage=_decorate_page,
         onLaterPages=_decorate_page,
     )
 
 
-def _build_expense_report(buffer, devise, depenses):
-    styles = _styles()
+def _build_expense_report(buffer, devise, depenses, company=None):
+    styles = _styles(company)
     body = styles["TradeCareBody"]
     center = styles["TradeCareCenter"]
     data = [["Dépense ID", "Libellé", f"Montant ({devise})", "Catégorie", "Date"]]
@@ -342,12 +410,13 @@ def _build_expense_report(buffer, devise, depenses):
             ]
         )
     story = [*_title_block("Rapport des Dépenses", styles)]
+    story.extend(_activity_analysis(company, depenses, devise, expenses=True))
     story.append(_styled_table(data, [2.1 * cm, 5.0 * cm, 3.2 * cm, 3.5 * cm, 2.8 * cm], alignments={0: "CENTER", 2: "RIGHT", 4: "CENTER"}))
-    _document(buffer).build(story, onFirstPage=_decorate_page, onLaterPages=_decorate_page)
+    _document(buffer, company=company).build(story, onFirstPage=_decorate_page, onLaterPages=_decorate_page)
 
 
-def _build_sales_report(buffer, devise, ventes):
-    styles = _styles()
+def _build_sales_report(buffer, devise, ventes, company=None):
+    styles = _styles(company)
     body = styles["TradeCareBody"]
     center = styles["TradeCareCenter"]
     data = [["Vente ID", "Client", "Produits", f"Total ({devise})", "Date", "Statut"]]
@@ -368,12 +437,13 @@ def _build_sales_report(buffer, devise, ventes):
             ]
         )
     story = [*_title_block("Rapport des Ventes", styles)]
+    story.extend(_activity_analysis(company, ventes, devise))
     story.append(_styled_table(data, [1.7 * cm, 2.8 * cm, 5.1 * cm, 2.5 * cm, 2.6 * cm, 2.2 * cm], alignments={0: "CENTER", 3: "RIGHT", 4: "CENTER", 5: "CENTER"}))
-    _document(buffer).build(story, onFirstPage=_decorate_page, onLaterPages=_decorate_page)
+    _document(buffer, company=company).build(story, onFirstPage=_decorate_page, onLaterPages=_decorate_page)
 
 
-def _build_purchase_report(buffer, devise, achats):
-    styles = _styles()
+def _build_purchase_report(buffer, devise, achats, company=None):
+    styles = _styles(company)
     body = styles["TradeCareBody"]
     center = styles["TradeCareCenter"]
     data = [["Achat ID", "Fournisseur", f"Total ({devise})", "Date"]]
@@ -388,12 +458,13 @@ def _build_purchase_report(buffer, devise, achats):
             ]
         )
     story = [*_title_block("Rapport des Achats", styles)]
+    story.extend(_activity_analysis(company, achats, devise))
     story.append(_styled_table(data, [2.2 * cm, 7.0 * cm, 4.0 * cm, 3.4 * cm], alignments={0: "CENTER", 2: "RIGHT", 3: "CENTER"}))
-    _document(buffer).build(story, onFirstPage=_decorate_page, onLaterPages=_decorate_page)
+    _document(buffer, company=company).build(story, onFirstPage=_decorate_page, onLaterPages=_decorate_page)
 
 
-def _build_stock_report(buffer, devise, rows):
-    styles = _styles()
+def _build_stock_report(buffer, devise, rows, company=None):
+    styles = _styles(company)
     body = styles["TradeCareBody"]
     center = styles["TradeCareCenter"]
     data = [["ID", "Nom du produit", "Caractéristiques", "Codes / Traçabilités", "Stock initial", "Disponible", f"Prix ({devise})"]]
@@ -450,6 +521,15 @@ def _build_stock_report(buffer, devise, rows):
             if row["available"] == 0:
                 danger_rows.append(len(data) - 1)
     story = [*_title_block("État du Stock", styles)]
+    design = ReportDesign(company)
+    ranked = sorted(rows, key=lambda row: row['available'], reverse=True)[:8]
+    story.extend(design.section('Disponibilité actuelle',
+                 design.chart('Produits les plus disponibles', [f'P{i+1}' for i in range(len(ranked))],
+                              [[float(row['available']) for row in ranked]], ['Unités']),
+                 f"{sum(row['available'] == 0 for row in rows)} produits sans disponibilité. " +
+                 '; '.join(f"P{i+1} : {row['name']}" for i, row in enumerate(ranked))))
+    story.append(PageBreak())
+    story.append(design.p('Inventaire détaillé', 'Heading1'))
     story.append(
         _styled_table(
             data,
@@ -459,7 +539,7 @@ def _build_stock_report(buffer, devise, rows):
             use_long_table=True,
         )
     )
-    _document(buffer, landscape_mode=True).build(
+    _document(buffer, landscape_mode=True, company=company).build(
         story,
         onFirstPage=_decorate_page,
         onLaterPages=_decorate_page,
@@ -487,7 +567,8 @@ def export_rapport_complet(
         if not current_user.is_main_user
         else current_user.id
     )
-    devise = current_user.devise or "FCFA"
+    company = company_owner(db, current_user)
+    devise = company.devise or "FCFA"
     total_ventes = (
         db.query(func.sum(CommandeVente.total_ttc))
         .filter(CommandeVente.user_id == parent_user_id)
@@ -536,6 +617,7 @@ def export_rapport_complet(
         achats,
         depenses,
         datetime.datetime.now(),
+        company=company,
     )
     filename = f"rapport-financier-{datetime.datetime.now().strftime('%d-%m-%Y')}.pdf"
     return _response(buffer, filename)
@@ -547,10 +629,11 @@ def export_rapport_depenses(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier])),
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    devise = current_user.devise or "FCFA"
+    company = company_owner(db, current_user)
+    devise = company.devise or "FCFA"
     depenses = db.query(Depense).filter(Depense.user_id == parent_user_id).order_by(Depense.date_depense.desc()).all()
     buffer = BytesIO()
-    _build_expense_report(buffer, devise, depenses)
+    _build_expense_report(buffer, devise, depenses, company=company)
     return _response(buffer, "rapport_depenses.pdf")
 
 
@@ -560,7 +643,8 @@ def export_rapport_ventes(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier])),
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    devise = current_user.devise or "FCFA"
+    company = company_owner(db, current_user)
+    devise = company.devise or "FCFA"
     ventes = (
         db.query(CommandeVente)
         .filter(CommandeVente.user_id == parent_user_id)
@@ -569,7 +653,7 @@ def export_rapport_ventes(
         .all()
     )
     buffer = BytesIO()
-    _build_sales_report(buffer, devise, ventes)
+    _build_sales_report(buffer, devise, ventes, company=company)
     return _response(buffer, "rapport_ventes.pdf")
 
 
@@ -579,10 +663,11 @@ def export_rapport_achats(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier])),
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    devise = current_user.devise or "FCFA"
+    company = company_owner(db, current_user)
+    devise = company.devise or "FCFA"
     achats = db.query(CommandeAchat).filter(CommandeAchat.user_id == parent_user_id).order_by(CommandeAchat.date_commande.desc()).all()
     buffer = BytesIO()
-    _build_purchase_report(buffer, devise, achats)
+    _build_purchase_report(buffer, devise, achats, company=company)
     return _response(buffer, "rapport_achats.pdf")
 
 
@@ -593,7 +678,8 @@ def export_etat_stock(
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     parent_user = getattr(current_user, "parent_user", None)
-    devise = current_user.devise or getattr(parent_user, "devise", None) or "FCFA"
+    company = company_owner(db, current_user)
+    devise = company.devise or "FCFA"
     produits = (
         db.query(Produit)
         .filter(Produit.user_id == parent_user_id, Produit.date_suppression.is_(None))
@@ -645,5 +731,5 @@ def export_etat_stock(
         )
 
     buffer = BytesIO()
-    _build_stock_report(buffer, devise, rows)
+    _build_stock_report(buffer, devise, rows, company=company)
     return _response(buffer, "etat_stock.pdf")

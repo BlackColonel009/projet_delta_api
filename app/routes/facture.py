@@ -24,6 +24,7 @@ from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
 from sqlalchemy.orm import joinedload
+from app.utils.subscription_guard import enforce_invoice_quota
 import os
 
 router = APIRouter(prefix="/factures", tags=["Facturation"])
@@ -40,6 +41,7 @@ def create_facture(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock, RoleEnum.commercial]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    enforce_invoice_quota(db, current_user)
     if data.client_id is not None and not db.query(Client).filter(
         Client.id == data.client_id,
         Client.user_id == parent_user_id,
@@ -52,15 +54,15 @@ def create_facture(
         raise HTTPException(status_code=404, detail="Fournisseur introuvable")
 
     product_ids = {line.produit_id for line in data.lignes}
-    company_product_ids = {
-        product_id
-        for (product_id,) in db.query(Produit.id).filter(
+    company_products = {
+        product.id: product
+        for product in db.query(Produit).filter(
             Produit.id.in_(product_ids),
             Produit.user_id == parent_user_id,
             Produit.date_suppression.is_(None),
         ).all()
     }
-    if company_product_ids != product_ids:
+    if set(company_products) != product_ids:
         raise HTTPException(
             status_code=404,
             detail="Un ou plusieurs produits sont introuvables dans cette entreprise.",
@@ -91,6 +93,9 @@ def create_facture(
             description=ligne.description,
             quantite=ligne.quantite,
             prix_unitaire=ligne.prix_unitaire,
+            cout_achat_unitaire=float(
+                company_products[ligne.produit_id].prix_achat or 0
+            ),
             total_ligne=ligne.quantite * ligne.prix_unitaire
         )
         db.add(ligne_facture)

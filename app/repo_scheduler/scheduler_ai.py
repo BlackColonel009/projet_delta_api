@@ -3,10 +3,16 @@ from io import BytesIO
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy import func
 from app.core.mail import send_email_message
+from app.email.branded_templates import (
+    loyalty_email,
+    payment_reminder_email,
+    product_recommendation_email,
+)
 from app.utils.public_url import public_url
 from app.utils.color_theme import build_document_palette
 from app.models.model_client_produit import ClientProduit
 from app.models.model_clientfollowup import ClientFollowup, FollowupStatus
+from app.utils.subscription_guard import company_has_feature
 from app.core.whatsapp import send_whatsapp_message
 from sqlalchemy.orm import Session
 from app.models.model_commande import CommandeVente
@@ -200,6 +206,16 @@ async def run_followup_scheduler(db: Session):
     
     
     for f in followups:
+        user = db.query(User).filter(User.id == f.user_id).first()
+        if not user or not company_has_feature(
+            db,
+            f.user_id,
+            "client_followup",
+        ):
+            continue
+        if not f.client or not f.client.email:
+            continue
+
         commande = db.query(CommandeVente).filter(CommandeVente.id == f.commande_id).first()
         if not commande:
             continue
@@ -229,8 +245,6 @@ async def run_followup_scheduler(db: Session):
 
         # Extraire les noms des produits (backup_nom supposé exister)
         noms_produits_list = [p.nom_produit for p in produits_client]
-        noms_produits_str = ", ".join(noms_produits_list) if noms_produits_list else "Aucun produit trouvé"
-
         # Récupérer la facture liée à la commande (si tu as la facture)
         facture = db.query(Facture).filter(Facture.commande_id == commande.id).first()
         if not facture:
@@ -248,8 +262,6 @@ async def run_followup_scheduler(db: Session):
         # Exemple de message
         
 
-        user = db.query(User).filter(User.id == f.user_id).first()  # pour le reply_to
-
         # 🔁 Vérification paiement si relance
         if f.type_followup == "relance_paiement":
             if commande.statut == "validée":
@@ -258,24 +270,17 @@ async def run_followup_scheduler(db: Session):
                 db.commit()
                 continue
 
-            msg = (
-                f"🔔 Bonjour Mr/Mme {f.client.nom},\n\n"
-                f"Le délai de paiement de {f.delai_avant_relance} jours accordé pour votre commande "
-                f"Identifier par N°{commande.id} est désormais expiré.\n\n"
-                f"À ce jour, votre facture n’a toujours pas été soldée.\n\n"
-                f"🧾 Détails de la commande :\n"
-                f"- Produits : {noms_produits_str}\n"
-                f"- Montant total : {facture.total_ttc} {devise}\n"
-                f"- Montant payé : {total_paye} {devise}\n"
-                f"- Reste à payer : {reste} {devise}\n"
-                f"- Date d'achat: {commande.date_commande}\n\n"
-                
-                f"Nous vous remercions de bien vouloir régulariser votre situation dans les plus brefs délais.\n\n"
-                f"Si vous avez déjà effectué le paiement, veuillez ignorer ce message ou contacter notre service client sur {user.email}.\n\n"
-                f"Cordialement,\n"
-                f"{user.societe_ou_entreprise}"
-                
-                
+            msg = payment_reminder_email(
+                user=user,
+                client_name=f.client.nom,
+                order_id=commande.id,
+                product_names=noms_produits_list,
+                total=facture.total_ttc,
+                paid=total_paye,
+                balance=reste,
+                currency=devise,
+                order_date=commande.date_commande,
+                delay_days=f.delai_avant_relance,
             )
 
 
@@ -283,41 +288,48 @@ async def run_followup_scheduler(db: Session):
                 f.client.email,
                 f"{user.societe_ou_entreprise} Relance - Commande en attente",
                 msg,
-                reply_to=user.email if user else None
+                reply_to=user.email if user else None,
+                is_html=True,
             )
             f.date_prochain_envoi = now + timedelta(days=1)
 
         elif f.type_followup == "fidélisation":
             if f.statut == FollowupStatus.en_attente:
-                msg = (
-                        f"👋 Bonjour {f.client.nom}, merci pour votre Achat de : {noms_produits_str}.  !"
-                        f"\n {user.societe_ou_entreprise} vous remercie pour votre confiance et votre fidélité !"
-                    )
+                msg = loyalty_email(
+                    user=user,
+                    client_name=f.client.nom,
+                    product_names=noms_produits_list,
+                )
                 await send_email_message(
                     f.client.email,
-                    f" {user.societe_ou_entreprise} !\n",
+                    f"Merci pour votre confiance — {user.societe_ou_entreprise}",
                     msg,
-                    reply_to=user.email if user else None
+                    reply_to=user.email if user else None,
+                    is_html=True,
                 )
                 f.statut = FollowupStatus.message_1_envoye
                 f.date_prochain_envoi = now + timedelta(days=10)
 
             elif f.statut == FollowupStatus.message_1_envoye and f.type_followup == "fidélisation":
+                if not company_has_feature(
+                    db,
+                    f.user_id,
+                    "product_recommendation",
+                ):
+                    f.statut = FollowupStatus.message_2_envoye
+                    f.date_prochain_envoi = now + timedelta(days=14)
+                    db.commit()
+                    continue
                 produits = get_2_random_produits(db, f.user_id)
                 for p in produits:
                     # Génére le PDF en mémoire
                     # pdf_buffer = generate_product_pdf(p, user)
                     filename = f"{p.nom}.pdf"
 
-                    heure_actuelle = datetime.now().hour
-
-                    salutation = "Bonjour" if 5 <= heure_actuelle < 18 else "Bonsoir"
-
-                    msg = (
-                        f"👋 {salutation} chèr(e) {f.client.nom},\n"
-                        f"🔥 Découvrez notre coup de cœur du moment !\n"
-                        f"🔥 Produit recommandé rien que pour vous : {p.nom}\n"
-                        f" Ouvrez le PDF joint pour plus de détails:\n"
+                    msg = product_recommendation_email(
+                        user=user,
+                        client_name=f.client.nom,
+                        product=p,
                     )
                   
 
@@ -325,10 +337,11 @@ async def run_followup_scheduler(db: Session):
 
                     await send_email_message(
                         f.client.email,
-                        f" {user.societe_ou_entreprise} !\n",
+                        f"Notre sélection pour vous : {p.nom}",
                         msg,
                         reply_to=user.email if user else None,
-                        attachments=[pdf_path]  # chemin absolu ou relatif du fichier
+                        attachments=[pdf_path],  # chemin absolu ou relatif du fichier
+                        is_html=True,
                     )
                     os.remove(pdf_path)
 

@@ -26,6 +26,7 @@ class RapportAnnuel(BaseModel):
     ventes: RapportVentes
     achats: RapportAchats
     depenses: RapportDepenses
+    cout_produits_vendus: float = 0
     benefice_brut: float
     benefice_net: float
     clients: RapportClients

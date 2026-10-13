@@ -8,7 +8,9 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Projet DELTA"
     PROJECT_VERSION: str = "1.0.0"
-    DATABASE_URL: str = "postgresql://postgres.yblmaotzdmyvynmveffd:Arnold2001DJAGBA@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
+    # Obligatoire et chargé depuis .env : aucune URL de base de données ni
+    # aucun mot de passe ne doit être conservé dans le code source.
+    DATABASE_URL: str
 
     SUPABASE_URL: str
     SUPABASE_KEY: str
@@ -16,7 +18,9 @@ class Settings(BaseSettings):
 
     SECRET_KEY: str = "super-secret-key"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    # Une session active est renouvelée par le middleware. Sans activité, le
+    # jeton expire au bout de 24 heures et l'application exige une reconnexion.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 24 * 60
 
     MAIL_USERNAME: str = ""
     MAIL_PASSWORD: str = ""

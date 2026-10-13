@@ -16,6 +16,12 @@ class Subscription(Base):
 
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
 
+    plan_code = Column(
+        String(32),
+        ForeignKey("subscription_plans.code"),
+        nullable=True,
+    )
+
     type = Column(String, nullable=False)  
     # trial | monthly | yearly
 
@@ -30,3 +36,4 @@ class Subscription(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="subscriptions")
+    plan = relationship("SubscriptionPlan")

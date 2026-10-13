@@ -14,6 +14,10 @@ from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
 from app.utils.logger import log_action
+from app.utils.subscription_guard import (
+    enforce_feature_access,
+    resolve_subscription_access,
+)
 
 router = APIRouter(prefix="/depots", tags=["Dépôt - Dépôts"])
 
@@ -25,6 +29,12 @@ def create_depot(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    access = resolve_subscription_access(db, current_user)
+    existing_depots = db.query(Depot).filter(
+        Depot.user_id == parent_user_id
+    ).count()
+    if existing_depots >= 1 and not access.has_feature("multi_depot"):
+        enforce_feature_access(db, current_user, "multi_depot")
     service = db.query(DepotService).filter(
         DepotService.id == data.service_id,
         DepotService.user_id == parent_user_id
@@ -38,7 +48,7 @@ def create_depot(
         description_bien=data.description_bien,
         statut="en_attente",
         prix_total=0,
-        user_id=current_user.id  # <-- liaison user_id ici
+        user_id=parent_user_id
     )
     db.add(depot)
     db.commit()

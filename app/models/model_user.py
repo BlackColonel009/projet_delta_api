@@ -33,6 +33,9 @@ class User(Base):
     daily_report_reminder_minute = Column(Integer, default=0, nullable=False)
     daily_report_reminder_revision = Column(Integer, default=0, nullable=False)
     daily_report_reminder_updated_at = Column(DateTime, nullable=True)
+    session_lock_minutes = Column(Integer, default=0, nullable=False)
+    session_lock_configured = Column(Boolean, default=False, nullable=False)
+    session_lock_password_hash = Column(String, nullable=True)
 
 
     sub_users = relationship("SubUser", back_populates="parent_user", cascade="all, delete")
@@ -69,6 +72,9 @@ class SubUser(Base):
     tva = Column(Float, default=0.18, nullable=False)  # par exemple 18%
     nif = Column(String, unique=True, nullable=True)
     addresse = Column(String, nullable=True)
+    session_lock_minutes = Column(Integer, default=0, nullable=False)
+    session_lock_configured = Column(Boolean, default=False, nullable=False)
+    session_lock_password_hash = Column(String, nullable=True)
 
 
     parent_user_id = Column(Integer, ForeignKey("users.id"))

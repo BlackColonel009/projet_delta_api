@@ -1,6 +1,7 @@
 
 from sqlalchemy.orm import Session
 from app.models.model_unite_produit import UniteProduit
+from app.utils.subscription_guard import company_has_feature
 from app.models.model_user import User
 from sqlalchemy import func
 from app.repo_scheduler.low_stock_pdf import generate_stock_pdf  # à créer
@@ -28,6 +29,8 @@ async def run_stock_alert_scheduler(db: Session):
     users = db.query(User).all()
 
     for user in users:
+        if not company_has_feature(db, user.id, "stock_alerts"):
+            continue
         # Récupérer uniquement les produits du user avec stock faible
         produits_stock_faible = (
             db.query(Produit)

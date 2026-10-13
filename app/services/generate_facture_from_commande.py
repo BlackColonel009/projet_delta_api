@@ -40,7 +40,8 @@ def generate_facture_from_commande(
     db: Session,
     commande,
     commande_type: str,
-    current_sub: Optional[SubUser] = None
+    current_sub: Optional[SubUser] = None,
+    professional_invoice: bool = True,
 ):
     sub_user_id = current_sub.id if current_sub else None
 
@@ -73,14 +74,24 @@ def generate_facture_from_commande(
             description=ligne.description,
             quantite=ligne.quantite,
             prix_unitaire=ligne.prix_unitaire,
+            cout_achat_unitaire=(
+                float(ligne.cout_achat_unitaire or 0)
+                if commande_type == "vente"
+                else float(ligne.prix_unitaire or 0)
+            ),
             total_ligne=ligne.total_ligne
         ))
 
     db.commit()
 
-    tmp_path = generate_facture_pdf(facture, db)
+    tmp_path = generate_facture_pdf(facture, db) if professional_invoice else None
 
-    if type_enum in [TypeFacture.vente, TypeFacture.proforma] and facture.client and facture.client.email:
+    if (
+        tmp_path
+        and type_enum in [TypeFacture.vente, TypeFacture.proforma]
+        and facture.client
+        and facture.client.email
+    ):
         fm = FastMail(conf)
         message = MessageSchema(
             subject=f"Votre {type_enum.value.upper()} #{facture.id}",
@@ -95,7 +106,8 @@ def generate_facture_from_commande(
         except Exception as e:
             print(f"Erreur lors de l'envoi de l'email : {e}")
 
-    os.remove(tmp_path)
+    if tmp_path and os.path.exists(tmp_path):
+        os.remove(tmp_path)
     return facture
 
 from num2words import num2words

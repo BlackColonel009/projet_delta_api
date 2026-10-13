@@ -9,7 +9,7 @@ from jose import JWTError
 import jwt
 from app.repo_scheduler.scheduler import start_scheduler
 from app.utils.policy import afficher_banner
-from app.routes import admin_subscription, auth, client_produit, depot, depot_service, depot_tarif, facture_depot, followup, galerie, rapport_financier, tutoriel  # Tu ajouteras d'autres routes ici
+from app.routes import admin_subscription, auth, client_produit, depot, depot_service, depot_tarif, facture_depot, followup, galerie, rapport_financier, subscription_plan, subscription_request, tutoriel  # Tu ajouteras d'autres routes ici
 from app.config import settings
 from app.routes import client
 from app.routes import produit
@@ -39,6 +39,7 @@ from app.utils.security import (
     get_current_user, get_current_sub_user,
     require_role, require_any_role, require_super_user
 )
+from app.utils.subscription_guard import require_subscription_feature
 
 
 app = FastAPI(
@@ -64,16 +65,27 @@ app.include_router(auth.router, prefix="/auth", tags=["Authentification"])
 app.mount("/static", StaticFiles(directory="upload"), name="static")
 
 app.include_router(admin_subscription.router)
+app.include_router(subscription_plan.router)
+app.include_router(subscription_request.router)
 
 app.include_router(client.router)
 
 app.include_router(produit.router)
 
-app.include_router(depot_service.router)
+app.include_router(
+    depot_service.router,
+    dependencies=[Depends(require_subscription_feature("depots"))],
+)
 
-app.include_router(depot.router)
+app.include_router(
+    depot.router,
+    dependencies=[Depends(require_subscription_feature("depots"))],
+)
 
-app.include_router(depot_tarif.router)
+app.include_router(
+    depot_tarif.router,
+    dependencies=[Depends(require_subscription_feature("depots"))],
+)
 
 app.include_router(galerie.router)
 
@@ -81,9 +93,15 @@ app.include_router(categorie.router)
 
 app.include_router(fournisseur.router)
 
-app.include_router(intervention.router)
+app.include_router(
+    intervention.router,
+    dependencies=[Depends(require_subscription_feature("interventions"))],
+)
 
-app.include_router(historique_intervention.router)
+app.include_router(
+    historique_intervention.router,
+    dependencies=[Depends(require_subscription_feature("interventions"))],
+)
 
 app.include_router(historique_general.router)
 
@@ -91,7 +109,10 @@ app.include_router(facture.router)
 
 app.include_router(facture_pdf.router)
 
-app.include_router(facture_depot.router)
+app.include_router(
+    facture_depot.router,
+    dependencies=[Depends(require_subscription_feature("depots"))],
+)
 
 app.include_router(commande.router_ventes)
 
@@ -99,25 +120,43 @@ app.include_router(commande.router_achats)
 
 app.include_router(paiement.router)
 
-app.include_router(dashboard_financier.router)
+app.include_router(
+    dashboard_financier.router,
+    dependencies=[Depends(require_subscription_feature("financial_dashboard"))],
+)
 
 app.include_router(depense.router)
 
-app.include_router(export_financier.router)
+app.include_router(
+    export_financier.router,
+    dependencies=[Depends(require_subscription_feature("advanced_exports"))],
+)
 
 app.include_router(entreprise.router)
 
-app.include_router(scanqr.router)
+app.include_router(
+    scanqr.router,
+    dependencies=[Depends(require_subscription_feature("basic_qr"))],
+)
 
 app.include_router(upload.router)
 
-app.include_router(unite_produit.router)
+app.include_router(
+    unite_produit.router,
+    dependencies=[Depends(require_subscription_feature("basic_qr"))],
+)
 
 app.include_router(client_produit.router)
 
-app.include_router(rapport.router)
+app.include_router(
+    rapport.router,
+    dependencies=[Depends(require_subscription_feature("reports"))],
+)
 
-app.include_router(rapport_financier.router)
+app.include_router(
+    rapport_financier.router,
+    dependencies=[Depends(require_subscription_feature("reports"))],
+)
 
 app.include_router(notification.router)
 
@@ -128,7 +167,10 @@ app.include_router(tutoriel.router)
 
 app.include_router(reset.router)
 
-app.include_router(followup.router_followup)
+app.include_router(
+    followup.router_followup,
+    dependencies=[Depends(require_subscription_feature("client_followup"))],
+)
 
 
 # Route de test

@@ -26,6 +26,10 @@ from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
 from app.utils.logger import log_action
+from app.utils.subscription_guard import (
+    enforce_invoice_quota,
+    resolve_subscription_access,
+)
 import os
 
 router_ventes = APIRouter(prefix="/commandes-ventes", tags=["Commandes Ventes"])
@@ -83,6 +87,8 @@ def create_commande_vente(
 ):
     # Détermine l'utilisateur principal (parent) s'il s'agit d'un sous-utilisateur
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    enforce_invoice_quota(db, current_user)
+    subscription_access = resolve_subscription_access(db, current_user)
 
     # Vérifie que le client existe et appartient à l'utilisateur
     client = db.query(Client).filter(Client.id == data.client_id, Client.user_id == parent_user_id).first()
@@ -136,7 +142,8 @@ def create_commande_vente(
             produit_id=produit.id,
             description=produit.nom,
             quantite=ligne_data.quantite,
-            prix_unitaire = prix_utilise, 
+            prix_unitaire=prix_utilise,
+            cout_achat_unitaire=float(produit.prix_achat or 0),
             total_ligne=total_ligne
         )
         db.add(ligne_commande)
@@ -236,7 +243,7 @@ def create_commande_vente(
     else:
         type_followup = None  # proforma, devis, etc. => pas de suivi
 
-    if type_followup:
+    if type_followup and subscription_access.has_feature("client_followup"):
         followup = ClientFollowup(
             user_id=parent_user_id,
             client_id=commande.client_id,
@@ -274,11 +281,26 @@ def create_commande_vente(
     )
 
     # Génération et exportation de la facture en PDF
-    facture = generate_facture_from_commande(db, commande, "vente")
-    tmp_path = generate_facture_pdf(facture, db)
-    filename = os.path.basename(tmp_path)
+    can_use_professional_invoice = subscription_access.has_feature(
+        "professional_invoice"
+    )
+    facture = generate_facture_from_commande(
+        db,
+        commande,
+        "vente",
+        professional_invoice=can_use_professional_invoice,
+    )
+    filename = None
+    if can_use_professional_invoice:
+        tmp_path = generate_facture_pdf(facture, db)
+        filename = os.path.basename(tmp_path)
 
-    return {"message": "Commande vente creee", "commande_id": commande.id, "facture": filename}
+    return {
+        "message": "Commande vente creee",
+        "commande_id": commande.id,
+        "facture_id": facture.id,
+        "facture": filename,
+    }
 
 # ➕ Créer une commande achat
 @router_achats.post("/")
@@ -288,6 +310,7 @@ def create_commande_achat(
     current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    enforce_invoice_quota(db, current_user)
     fournisseur = db.query(Fournisseur).filter(
         Fournisseur.id == data.fournisseur_id,
         Fournisseur.user_id == parent_user_id
@@ -392,7 +415,13 @@ def create_commande_achat(
     )
 
 
-    generate_facture_from_commande(db, commande, "achat")
+    access = resolve_subscription_access(db, current_user)
+    generate_facture_from_commande(
+        db,
+        commande,
+        "achat",
+        professional_invoice=access.has_feature("professional_invoice"),
+    )
 
     return {"message": "Commande achat creee", "commande_id": commande.id}
 

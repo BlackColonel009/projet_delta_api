@@ -1,41 +1,51 @@
-from fastapi import APIRouter, HTTPException, Depends
-from sqlalchemy.orm import Session
+from datetime import datetime
+from io import BytesIO
+
+from fastapi import APIRouter, Depends, HTTPException
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import HRFlowable, Spacer
+from sqlalchemy.orm import Session, joinedload
+from starlette.responses import StreamingResponse
+
 from app.database import get_db
+from app.models.model_depot import Depot
 from app.models.model_facture_depot import FactureDepot
 from app.schemas import facture_depot_schema as schemas
-from app.models.model_depot import Depot
+from app.services.report_design import ReportDesign, money
 from app.utils.permissions import All_required
-from datetime import datetime
+from app.utils.subscription_guard import enforce_invoice_quota
 
 router = APIRouter(prefix="/factures-depot", tags=["Factures Dépôt"])
 
 
-@router.post("/", response_model=schemas.FactureDepotOut)
-def create_facture_depot(
-    payload: schemas.FactureDepotCreate,
-    db: Session = Depends(get_db),
-    current_user=Depends(All_required()),
-):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    depot = db.query(Depot).filter(
-        Depot.id == payload.depot_id,
-        Depot.user_id == parent_user_id,
-    ).first()
-    if not depot:
-        raise HTTPException(status_code=404, detail="Dépôt introuvable")
-    existing = db.query(FactureDepot).filter(
-        FactureDepot.depot_id == payload.depot_id,
-        FactureDepot.user_id == parent_user_id,
-    ).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Une facture existe déjà pour ce dépôt.")
+def _owner_id(user):
+    return user.id if user.is_main_user else user.parent_user_id
 
-    facture = FactureDepot(
-        **payload.model_dump(exclude={"client_id"}),
-        client_id=depot.client_id,
-        user_id=parent_user_id,
-        date_facture=datetime.utcnow()
+
+def _query(db, facture_id, owner_id):
+    return db.query(FactureDepot).options(
+        joinedload(FactureDepot.user),
+        joinedload(FactureDepot.depot).joinedload(Depot.client),
+        joinedload(FactureDepot.depot).joinedload(Depot.service),
+        joinedload(FactureDepot.depot).joinedload(Depot.tarif_items),
+    ).filter(
+        FactureDepot.id == facture_id,
+        FactureDepot.user_id == owner_id,
     )
+
+
+@router.post("/", response_model=schemas.FactureDepotOut)
+def create_facture_depot(payload: schemas.FactureDepotCreate, db: Session = Depends(get_db), current_user=Depends(All_required())):
+    owner_id = _owner_id(current_user)
+    enforce_invoice_quota(db, current_user)
+    depot = db.query(Depot).filter(Depot.id == payload.depot_id, Depot.user_id == owner_id).first()
+    if not depot:
+        raise HTTPException(404, "Dépôt introuvable")
+    existing = db.query(FactureDepot).filter(FactureDepot.depot_id == payload.depot_id, FactureDepot.user_id == owner_id).first()
+    if existing:
+        raise HTTPException(400, "Une facture existe déjà pour ce dépôt.")
+    facture = FactureDepot(**payload.model_dump(exclude={"client_id"}), client_id=depot.client_id,
+                           user_id=owner_id, date_facture=datetime.utcnow())
     db.add(facture)
     db.commit()
     db.refresh(facture)
@@ -43,273 +53,91 @@ def create_facture_depot(
 
 
 @router.get("/{id}", response_model=schemas.FactureDepotOut)
-def get_facture_depot(id: int, db: Session = Depends(get_db)):
-    facture = db.query(FactureDepot).get(id)
+def get_facture_depot(id: int, db: Session = Depends(get_db), current_user=Depends(All_required())):
+    facture = _query(db, id, _owner_id(current_user)).first()
     if not facture:
-        raise HTTPException(status_code=404, detail="Facture non trouvée")
+        raise HTTPException(404, "Facture non trouvée")
     return facture
 
 
 @router.put("/{id}", response_model=schemas.FactureDepotOut)
-def update_facture_depot(id: int, payload: schemas.FactureDepotUpdate, db: Session = Depends(get_db)):
-    facture = db.query(FactureDepot).get(id)
+def update_facture_depot(id: int, payload: schemas.FactureDepotUpdate, db: Session = Depends(get_db), current_user=Depends(All_required())):
+    facture = _query(db, id, _owner_id(current_user)).first()
     if not facture:
-        raise HTTPException(status_code=404, detail="Facture non trouvée")
-    
-    for attr, value in payload.dict(exclude_unset=True).items():
+        raise HTTPException(404, "Facture non trouvée")
+    for attr, value in payload.model_dump(exclude_unset=True).items():
         setattr(facture, attr, value)
-
     db.commit()
     db.refresh(facture)
     return facture
 
 
 @router.delete("/{id}")
-def delete_facture_depot(id: int, db: Session = Depends(get_db)):
-    facture = db.query(FactureDepot).get(id)
+def delete_facture_depot(id: int, db: Session = Depends(get_db), current_user=Depends(All_required())):
+    facture = _query(db, id, _owner_id(current_user)).first()
     if not facture:
-        raise HTTPException(status_code=404, detail="Facture non trouvée")
-    
+        raise HTTPException(404, "Facture non trouvée")
     db.delete(facture)
     db.commit()
     return {"detail": "Facture supprimée"}
 
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session, joinedload
-from io import BytesIO
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import cm
-from reportlab.lib.utils import ImageReader
-from datetime import datetime
-from starlette.responses import StreamingResponse
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import Paragraph
+def _document(facture, receipt):
+    depot, company = facture.depot, facture.user
+    design = ReportDesign(company)
+    currency = getattr(company, "devise", None) or "FCFA"
+    service = getattr(getattr(depot, "service", None), "nom", None) or "Service de dépôt"
+    client = getattr(getattr(depot, "client", None), "nom", None) or "Client non renseigné"
+    issued = facture.created_at or facture.date_facture or datetime.utcnow()
+    rows, calculated_total = [], 0.0
+    for item in depot.tarif_items:
+        tariff = getattr(item, "tarif", None)
+        label = getattr(tariff, "nom_tarif", None) or "Service"
+        description = (getattr(item, "description", None) or "").strip()
+        quantity = int(getattr(item, "quantite", 0) or 0)
+        unit_price = float(getattr(item, "prix_personnalise", None) or getattr(tariff, "tarif_unitaire", None) or 0)
+        line_total = unit_price * quantity
+        calculated_total += line_total
+        rows.append([f"{label} — {description}" if description else label, quantity,
+                     money(unit_price, currency), money(line_total, currency)])
+    title = "ACCUSÉ DE DÉPÔT" if receipt else "FACTURE DE RETRAIT"
+    status = "À régler au retrait" if receipt else "Facture finale"
+    story = [Spacer(1, 18), *design.logo(), design.p(design.name, "Heading1"),
+             design.p(title, "Title"), HRFlowable(width="100%", thickness=3, color=design.primary, spaceAfter=16),
+             design.table(["Référence", "Date d’émission", "Statut"],
+                          [[f"DEP-{issued.year}-{facture.id:05d}", issued.strftime("%d/%m/%Y"), status]]),
+             Spacer(1, 18), design.p("Informations du dépôt", "Heading2"),
+             design.table(["Client", "Service", "Bien confié", "Date de dépôt"],
+                          [[client, service, depot.description_bien, depot.date_depot.strftime("%d/%m/%Y à %H:%M")]]),
+             Spacer(1, 18), design.p("Détail des prestations", "Heading2"),
+             design.table(["Désignation", "Qté", "Prix unitaire", "Total"], rows, widths=[230, 48, 100, 105]),
+             Spacer(1, 18), design.table(["Montant HT", "TVA", "Total TTC"],
+                          [[money(facture.montant_ht, currency), money(facture.tva, currency),
+                            money(facture.montant_ttc or calculated_total, currency)]]),
+             Spacer(1, 24), design.p("Ce document confirme la prise en charge du bien. Conservez sa référence pour tout suivi."
+                                     if receipt else "Merci pour votre confiance. Cette facture clôture les prestations du dépôt.")]
+    buffer = BytesIO()
+    design.build(buffer, story, pagesize=A4)
+    return buffer
 
-from app.database import get_db
-from app.models.model_facture_depot import FactureDepot
-from app.models.model_depot import Depot
+
+def _response(facture, receipt):
+    prefix = "accuse_depot" if receipt else "facture_retrait"
+    return StreamingResponse(_document(facture, receipt), media_type="application/pdf",
+                             headers={"Content-Disposition": f"inline; filename={prefix}_{facture.id}.pdf"})
 
 
 @router.get("/{facture_id}/preview")
-def preview_facture_depot_pdf(facture_id: int, db: Session = Depends(get_db)):
-    facture = db.query(FactureDepot).options(
-        joinedload(FactureDepot.depot).joinedload(Depot.client),
-    ).filter(FactureDepot.id == facture_id).first()
-
+def preview_final_invoice(facture_id: int, db: Session = Depends(get_db), current_user=Depends(All_required())):
+    facture = _query(db, facture_id, _owner_id(current_user)).first()
     if not facture:
-        raise HTTPException(status_code=404, detail="Facture de dépôt non trouvée")
-
-    depot = facture.depot
-    if not depot:
-        raise HTTPException(status_code=404, detail="Dépôt introuvable")
-
-    pdf_buffer = BytesIO()
-    pdf = canvas.Canvas(pdf_buffer, pagesize=A4)
-    width, height = A4
-    y = height - 2 * cm
-
-    devise = facture.user.devise if hasattr(facture, "user") else "FCFA"
-
-    # Logo entreprise si présent
-    if hasattr(facture, "user") and getattr(facture.user, "logo_entreprise", None):
-        try:
-            logo = ImageReader(facture.user.logo_entreprise)
-            pdf.drawImage(logo, 2 * cm, y - 1.5 * cm, width=4 * cm, preserveAspectRatio=True, mask='auto')
-        except:
-            pass  # Continue sans planter si logo invalide
-    
-    service_nom = facture.depot.service.nom if facture.depot and facture.depot.service else "Service inconnu"
-    tarif_nom = facture.depot.tarif.nom_tarif if facture.depot and facture.depot.tarif else "Tarif inconnu"
-   
+        raise HTTPException(404, "Facture de dépôt non trouvée")
+    return _response(facture, False)
 
 
-    pdf.setFont("Helvetica-Bold", 16)
-    pdf.drawString(8 * cm, y, f"Facture retrait: {service_nom} #{facture.id}")
-    y -= 1.5 * cm
-
-    pdf.setFont("Helvetica", 11)
-    pdf.drawString(2 * cm, y, f"Date : {facture.created_at.strftime('%d/%m/%Y')}")
-    y -= 0.8 * cm
-
-    if depot.client:
-        pdf.drawString(2 * cm, y, f"Client : {depot.client.nom}")
-        y -= 0.6 * cm
-
-    y -= 1 * cm
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(2 * cm, y, "Désignation")
-    pdf.drawCentredString(10.25 * cm, y, "Qté")
-    pdf.drawRightString(15.1 * cm, y, "PU")
-    pdf.drawRightString(18.8 * cm, y, "Total")
-
-    y -= 0.4 * cm
-    pdf.line(2 * cm, y, 19 * cm, y)
-    y -= 0.5 * cm
-
-    styles = getSampleStyleSheet()
-    styleN = styles["Normal"]
-    styleN.fontName = "Helvetica"
-    styleN.fontSize = 9
-    styleN.leading = 11
-
-    y, total = draw_tarif_items(pdf, depot, y, devise, styleN)
-
-
-    # y déjà décrémenté dans draw_tarif_items
-    y -= 0.5 * cm  # petit espace avant le total
-
-
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawRightString(15 * cm, y, "Total TTC :")
-    pdf.drawRightString(19 * cm, y, f"{total:.2f} {devise}")
-
-    y -= 1 * cm
-    # if facture.montant_ttc >= total:
-    #     status_label = "PAYÉ"
-    # else:
-    #     status_label = "NON PAYÉ"
-
-    # pdf.saveState()
-    # pdf.setFont("Helvetica-Bold", 36)
-    # pdf.setFillColorRGB(0.6, 0.1, 0.1)
-    # pdf.translate(13 * cm, 5 * cm)
-    # pdf.rotate(25)
-    # pdf.drawString(0, 0, status_label)
-    # pdf.restoreState()
-
-    pdf.setFont("Helvetica-Oblique", 10)
-    pdf.setFillColorRGB(0.3, 0.3, 0.3)
-    pdf.drawCentredString(10.5 * cm, 1.5 * cm, "Merci pour votre confiance.")
-
-    pdf.showPage()
-    pdf.save()
-    pdf_buffer.seek(0)
-
-    return StreamingResponse(pdf_buffer, media_type="application/pdf", headers={
-        "Content-Disposition": f"inline; filename=facture_depot_{facture.id}.pdf"
-    })
-
-#facture_depot non payé au dépot souche.
 @router.get("/{facture_id}/depot-preview")
-def preview_facture_depot_pdf(facture_id: int, db: Session = Depends(get_db)):
-    facture = db.query(FactureDepot).options(
-        joinedload(FactureDepot.depot).joinedload(Depot.client),
-    ).filter(FactureDepot.id == facture_id).first()
-
+def preview_deposit_receipt(facture_id: int, db: Session = Depends(get_db), current_user=Depends(All_required())):
+    facture = _query(db, facture_id, _owner_id(current_user)).first()
     if not facture:
-        raise HTTPException(status_code=404, detail="Facture de dépôt non trouvée")
-
-    depot = facture.depot
-    if not depot:
-        raise HTTPException(status_code=404, detail="Dépôt introuvable")
-
-    pdf_buffer = BytesIO()
-    pdf = canvas.Canvas(pdf_buffer, pagesize=A4)
-    width, height = A4
-    y = height - 2 * cm
-
-    devise = facture.user.devise if hasattr(facture, "user") else "FCFA"
-
-    # Logo entreprise si présent
-    if hasattr(facture, "user") and getattr(facture.user, "logo_entreprise", None):
-        try:
-            logo = ImageReader(facture.user.logo_entreprise)
-            pdf.drawImage(logo, 2 * cm, y - 1.5 * cm, width=4 * cm, preserveAspectRatio=True, mask='auto')
-        except:
-            pass  # Continue sans planter si logo invalide
-    
-    service_nom = facture.depot.service.nom if facture.depot and facture.depot.service else "Service inconnu"
-    tarif_nom = facture.depot.tarif.nom_tarif if facture.depot and facture.depot.tarif else "Tarif inconnu"
-   
-
-
-    pdf.setFont("Helvetica-Bold", 16)
-    pdf.drawString(8 * cm, y, f"Preuve de dépôt: {service_nom} #{facture.id}")
-    y -= 1.5 * cm
-
-    pdf.setFont("Helvetica", 11)
-    pdf.drawString(2 * cm, y, f"Date : {facture.created_at.strftime('%d/%m/%Y')}")
-    y -= 0.8 * cm
-
-    if depot.client:
-        pdf.drawString(2 * cm, y, f"Client : {depot.client.nom}")
-        y -= 0.6 * cm
-
-    y -= 1 * cm
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(2 * cm, y, "Désignation")
-    pdf.drawCentredString(10.25 * cm, y, "Qté")
-    pdf.drawRightString(15.1 * cm, y, "PU")
-    pdf.drawRightString(18.8 * cm, y, "Total")
-
-    y -= 0.4 * cm
-    pdf.line(2 * cm, y, 19 * cm, y)
-    y -= 0.5 * cm
-
-    styles = getSampleStyleSheet()
-    styleN = styles["Normal"]
-    styleN.fontName = "Helvetica"
-    styleN.fontSize = 9
-    styleN.leading = 11
-
-    y, total = draw_tarif_items(pdf, depot, y, devise, styleN)
-
-
-    # y déjà décrémenté dans draw_tarif_items
-    y -= 0.5 * cm  # petit espace avant le total
-
-
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawRightString(15 * cm, y, "Total TTC :")
-    pdf.drawRightString(19 * cm, y, f"{total:.2f} {devise}")
-
-
-    y -= 1 * cm
-
-    status_label = "NON PAYÉ"
-
-    pdf.saveState()
-    pdf.setFont("Helvetica-Bold", 36)
-    pdf.setFillColorRGB(0.6, 0.1, 0.1)
-    pdf.translate(13 * cm, 5 * cm)
-    pdf.rotate(25)
-    pdf.drawString(0, 0, status_label)
-    pdf.restoreState()
-
-    pdf.setFont("Helvetica-Oblique", 10)
-    pdf.setFillColorRGB(0.3, 0.3, 0.3)
-    pdf.drawCentredString(10.5 * cm, 1.5 * cm, "Merci pour votre confiance.")
-
-    pdf.showPage()
-    pdf.save()
-    pdf_buffer.seek(0)
-
-    return StreamingResponse(pdf_buffer, media_type="application/pdf", headers={
-        "Content-Disposition": f"inline; filename=facture_depot_{facture.id}.pdf"
-    })
-
-def draw_tarif_items(pdf, depot, y, devise, styleN):
-    total_general = 0.0
-    for item in depot.tarif_items:
-        nom_tarif = item.tarif.nom_tarif
-        quantite = item.quantite
-        pu = item.prix_personnalise or (
-            item.tarif.tarif_unitaire or 0.0
-        )  # fallback
-        total = pu * quantite
-        total_general += total
-        description = item.description or ""
-
-        para = Paragraph(f"<b>{nom_tarif} : {description}</b>", styleN)
-        w, h = para.wrapOn(pdf, 7.2 * cm, y)
-        para.drawOn(pdf, 2.3 * cm, y - h)
-
-        pdf.setFont("Helvetica", 10)
-        pdf.drawCentredString(10.25 * cm, y, str(quantite))
-        pdf.drawRightString(15.1 * cm, y, f"{pu:.2f} {devise}")
-        pdf.drawRightString(18.8 * cm, y, f"{total:.2f} {devise}")
-
-        y -= h + 0.8 * cm
-    return y, total_general
+        raise HTTPException(404, "Facture de dépôt non trouvée")
+    return _response(facture, True)

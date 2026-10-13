@@ -11,7 +11,8 @@ async def send_email_message(
     subject: str,
     body: str,
     reply_to: str = None,
-    attachments: list = None  # liste de chemins de fichiers
+    attachments: list = None,  # liste de chemins de fichiers
+    is_html: bool = False,
 ) -> bool:
     if not settings.MAIL_ENABLED:
         logger.info("Envoi d'e-mail ignoré : MAIL_ENABLED=false")
@@ -21,7 +22,7 @@ async def send_email_message(
         subject=subject,
         recipients=[to_email],
         body=body,
-        subtype=MessageType.plain,
+        subtype=MessageType.html if is_html else MessageType.plain,
         headers={"Reply-To": reply_to} if reply_to else None,
         attachments = attachments or []  # directement une liste de chemins (str)
     )

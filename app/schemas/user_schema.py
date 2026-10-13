@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 from typing import Literal, Optional
 from enum import Enum
 
@@ -49,6 +49,40 @@ class CompanyThemeUpdate(BaseModel):
     ]
     theme_mode: Literal["system", "light", "dark"]
 
+
+class SessionLockUpdate(BaseModel):
+    session_lock_minutes: int
+    password: Optional[str] = None
+
+    @field_validator("session_lock_minutes")
+    @classmethod
+    def validate_delay(cls, value: int) -> int:
+        if value not in {0, 5, 15, 30, 60}:
+            raise ValueError("Délai de verrouillage invalide")
+        return value
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if len(value) < 5:
+            raise ValueError(
+                "Le mot de passe de verrouillage doit contenir au moins 5 caractères"
+            )
+        return value
+
+
+class SessionUnlockRequest(BaseModel):
+    password: str
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        if len(value) < 5:
+            raise ValueError("Mot de passe de verrouillage invalide")
+        return value
+
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
@@ -66,4 +100,6 @@ class SubUserOut(BaseModel):
     avatar_url: Optional[str]
     role: Optional[str]
     main_user_data: Optional[MainUserData]
+    session_lock_minutes: int = 0
+    session_lock_configured: bool = False
 

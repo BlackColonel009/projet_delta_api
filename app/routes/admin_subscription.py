@@ -1,15 +1,71 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
 
 from app.database import get_db
-from app.models.model_souscription import Subscription, SubscriptionType
+from app.models.model_subscription_plan import SubscriptionPlan
+from app.models.model_souscription import Subscription
 from app.models.model_user import User
 from app.schemas.subscription_schema import GrantSubscriptionRequest
+from app.services.subscription_service import (
+    activate_subscription,
+)
 from app.utils.security import get_active_user, require_super_user
-from app.utils.token_user import resolve_subscription_owner
 
 router = APIRouter(prefix="/admin/subscriptions", tags=["Admin Subscriptions"])
+
+
+def _latest_subscription(db: Session, user_id: int):
+    return (
+        db.query(Subscription)
+        .filter(Subscription.user_id == user_id)
+        .order_by(Subscription.created_at.desc(), Subscription.id.desc())
+        .first()
+    )
+
+
+def _plan_payload(plan: SubscriptionPlan | None):
+    if plan is None:
+        return None
+    return {
+        "code": plan.code,
+        "name": plan.name,
+        "description": plan.description,
+        "currency": plan.currency,
+        "monthly_price": plan.monthly_price,
+        "annual_price": plan.annual_price,
+        "max_sub_users": plan.max_sub_users,
+        "max_products": plan.max_products,
+        "max_clients": plan.max_clients,
+        "max_invoices_per_month": plan.max_invoices_per_month,
+        "features": plan.features or [],
+    }
+
+
+def _subscription_payload(db: Session, subscription: Subscription):
+    plan = None
+    if subscription.plan_code:
+        plan = db.query(SubscriptionPlan).filter(
+            SubscriptionPlan.code == subscription.plan_code
+        ).first()
+    return {
+        "id": subscription.id,
+        "type": subscription.type,
+        "billing_cycle": (
+            "free"
+            if subscription.plan_code == "bronze_free"
+            else "annual" if subscription.type == "yearly" else subscription.type
+        ),
+        "plan_code": subscription.plan_code,
+        "plan": _plan_payload(plan),
+        "status": subscription.status,
+        "start_date": subscription.start_date,
+        "end_date": (
+            None if subscription.plan_code == "bronze_free"
+            else subscription.end_date
+        ),
+        "granted_by_admin": subscription.granted_by_admin,
+    }
+
 
 @router.post("/grant/{user_id}")
 def grant_subscription(
@@ -22,15 +78,20 @@ def grant_subscription(
     if not user:
         raise HTTPException(404, "User not found")
 
-    duration_map = {
-        SubscriptionType.trial: 30,
-        SubscriptionType.monthly: 30,
-        SubscriptionType.yearly: 365,
-    }
+    cycle = payload.resolved_cycle.value
+    plan_code = payload.plan_code
+    if plan_code is None:
+        # Repli pour les anciennes applications mobiles.
+        plan_code = "bronze_free" if cycle == "trial" else "bronze_classic"
 
-    duration = duration_map[payload.type]
+    plan = db.query(SubscriptionPlan).filter(
+        SubscriptionPlan.code == plan_code,
+        SubscriptionPlan.is_active.is_(True),
+    ).first()
+    if not plan:
+        raise HTTPException(400, "Offre introuvable ou inactive")
 
-    if payload.type == SubscriptionType.trial:
+    if cycle == "trial":
         existing_trial = db.query(Subscription).filter(
             Subscription.user_id == user.id,
             Subscription.type == "trial"
@@ -38,26 +99,20 @@ def grant_subscription(
         if existing_trial:
             raise HTTPException(400, "Essai gratuit déjà utilisé")
 
-    # Remplacer l'abonnement existant
-    db.query(Subscription).filter(
-        Subscription.user_id == user.id
-    ).delete()
-
-    subscription = Subscription(
+    subscription = activate_subscription(
+        db,
         user_id=user.id,
-        type=payload.type.value,
-        status="active",
-        start_date=datetime.utcnow(),
-        end_date=datetime.utcnow() + timedelta(days=duration),
-        granted_by_admin=True
+        plan=plan,
+        billing_cycle=cycle,
+        granted_by_admin=True,
     )
-
-    db.add(subscription)
     db.commit()
 
+    db.refresh(subscription)
+
     return {
-        "message": "Subscription granted",
-        "type": payload.type
+        "message": "Abonnement mis à jour",
+        "subscription": _subscription_payload(db, subscription),
     }
 
 @router.get("/subscription/me")
@@ -70,6 +125,9 @@ def get_my_subscription(
     if current_user.is_superuser:
         return {
             "type": "superadmin",
+            "billing_cycle": "unlimited",
+            "plan_code": "superadmin",
+            "plan": None,
             "status": "active",
             "start_date": None,
             "end_date": None,
@@ -77,12 +135,7 @@ def get_my_subscription(
             "message": "Super admin has unlimited access"
         }
 
-    subscription = (
-        db.query(Subscription)
-        .filter(Subscription.user_id == current_user.id)
-        .order_by(Subscription.end_date.desc())
-        .first()
-    )
+    subscription = _latest_subscription(db, current_user.id)
 
     if not subscription:
         return {
@@ -91,13 +144,7 @@ def get_my_subscription(
             "message": "No subscription found"
         }
 
-    return {
-        "type": subscription.type,
-        "status": subscription.status,
-        "start_date": subscription.start_date,
-        "end_date": subscription.end_date,
-        "granted_by_admin": subscription.granted_by_admin,
-    }
+    return _subscription_payload(db, subscription)
 
 @router.get("/subscription/me-sub")
 def get_parent_subscription(
@@ -119,12 +166,7 @@ def get_parent_subscription(
             "type": "none"
         }
 
-    subscription = (
-        db.query(Subscription)
-        .filter(Subscription.user_id == parent_user_id)
-        .order_by(Subscription.end_date.desc())
-        .first()
-    )
+    subscription = _latest_subscription(db, parent_user_id)
 
     if not subscription:
         return {
@@ -132,13 +174,7 @@ def get_parent_subscription(
             "type": "none"
         }
 
-    return {
-        "type": subscription.type,
-        "status": subscription.status,
-        "start_date": subscription.start_date,
-        "end_date": subscription.end_date,
-        "granted_by_admin": subscription.granted_by_admin,
-    }
+    return _subscription_payload(db, subscription)
 
 
 
@@ -155,6 +191,7 @@ def get_all_subscriptions(
             User.email,
             User.username,
             Subscription.type,
+            Subscription.plan_code,
             Subscription.status,
             Subscription.start_date,
             Subscription.end_date,
@@ -170,6 +207,7 @@ def get_all_subscriptions(
             "email": s.email,
             "username": s.username,
             "type": s.type,
+            "plan_code": s.plan_code,
             "status": s.status,
             "start_date": s.start_date,
             "end_date": s.end_date,
@@ -191,12 +229,7 @@ def get_users_with_subscriptions(
 
     for user in users:
         # Dernier abonnement de l'utilisateur principal
-        last_subscription = (
-            db.query(Subscription)
-            .filter(Subscription.user_id == user.id)
-            .order_by(Subscription.end_date.desc())
-            .first()
-        )
+        last_subscription = _latest_subscription(db, user.id)
 
         result.append({
             "id": user.id,
@@ -205,13 +238,10 @@ def get_users_with_subscriptions(
             "societe": user.societe_ou_entreprise,
             "avatar_url": user.avatar_url,
             "is_superuser": user.is_superuser,
-            "subscription": {
-                "type": last_subscription.type if last_subscription else "none",
-                "status": last_subscription.status if last_subscription else "none",
-                "start_date": last_subscription.start_date.isoformat() if last_subscription else None,
-                "end_date": last_subscription.end_date.isoformat() if last_subscription else None,
-                "granted_by_admin": last_subscription.granted_by_admin if last_subscription else False
-            } if last_subscription else None,
+            "subscription": (
+                _subscription_payload(db, last_subscription)
+                if last_subscription else None
+            ),
             "sub_users": [
                 {
                     "id": sub.id,

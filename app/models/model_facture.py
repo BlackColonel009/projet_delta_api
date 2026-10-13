@@ -58,6 +58,8 @@ class LigneFacture(Base):
     description = Column(String, nullable=False)
     quantite = Column(Integer, nullable=False)
     prix_unitaire = Column(Float, nullable=False)
+    # Coût figé au moment de la facturation pour les indicateurs de marge.
+    cout_achat_unitaire = Column(Float, nullable=False, default=0)
     total_ligne = Column(Float, nullable=False)
     
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)

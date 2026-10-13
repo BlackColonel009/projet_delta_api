@@ -18,11 +18,15 @@ from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
 from app.utils.logger import log_action
 from app.models.model_unite_produit import UniteProduit
+from app.utils.subscription_guard import require_subscription_feature
 
 
 router = APIRouter(prefix="/scanqr", tags=["QR-Code"])
 
-@router.post("/generate_qr")
+@router.post(
+    "/generate_qr",
+    dependencies=[Depends(require_subscription_feature("full_qr"))],
+)
 def generate_qr_codes(
     nombre: int = Query(..., description="Nombre de QR Codes à générer"),
     prefixe: str = Query("TRAC-", description="Préfixe pour la tracabilité"),
@@ -197,6 +201,10 @@ def creer_vente_par_tracabilite(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
+    parent_user_id = (
+        current_user.id if current_user.is_main_user
+        else current_user.parent_user_id
+    )
     unite = db.query(UniteProduit).filter(UniteProduit.tracabilite == data.tracabilite).first()
     if not unite:
         raise HTTPException(status_code=404, detail="Unité non trouvée.")
@@ -205,6 +213,8 @@ def creer_vente_par_tracabilite(
         raise HTTPException(status_code=400, detail=f"Unité déjà utilisée : statut = {unite.statut}")
 
     produit = unite.produit
+    if not produit or produit.user_id != parent_user_id:
+        raise HTTPException(status_code=404, detail="Unité non trouvée.")
 
     if produit.quantite < data.quantite:
         raise HTTPException(status_code=400, detail="Stock insuffisant pour cette vente.")
@@ -221,7 +231,8 @@ def creer_vente_par_tracabilite(
         total_ttc=total_ttc,
         tva=tva,
         tva_appliquee=data.tva_appliquee,
-        statut="payée"
+        statut="validée",
+        user_id=parent_user_id,
     )
     db.add(commande)
     db.commit()
@@ -233,7 +244,9 @@ def creer_vente_par_tracabilite(
         description=produit.nom,
         quantite=data.quantite,
         prix_unitaire=prix_unitaire,
-        total_ligne=total_ht
+        cout_achat_unitaire=float(produit.prix_achat or 0),
+        total_ligne=total_ht,
+        user_id=parent_user_id,
     )
     db.add(ligne)
 

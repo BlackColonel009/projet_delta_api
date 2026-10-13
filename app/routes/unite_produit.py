@@ -10,11 +10,12 @@ from app.schemas.unite_produit_schema import (
     StockCleanupRequest,
     UniteProduitOut,
 )
-from app.utils.security import get_current_user, require_main_user
+from app.utils.security import get_current_user, require_main_user, require_super_user
 from app.utils.permissions import All_required, check_role
 from app.schemas.user_schema import RoleEnum
 from app.utils.logger import log_action
 from app.services.traceability_service import create_generated_unit
+from app.utils.subscription_guard import require_subscription_feature
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 from datetime import datetime
@@ -29,7 +30,10 @@ STOCK_CLEANUP_STATUSES = ("disponible", "indisponible")
 def _normalized_status(status: Optional[str]) -> str:
     return (status or "").strip().lower()
 
-@router.post("/add/{produit_id}")
+@router.post(
+    "/add/{produit_id}",
+    dependencies=[Depends(require_subscription_feature("full_qr"))],
+)
 def add_unites_to_produit(
     produit_id: int,
     data: AddUnitesRequest,
@@ -179,11 +183,11 @@ def list_unites_visibles(
 @router.delete("/purge-temp")
 def purge_temp_units(
     db: Session = Depends(get_db),
-    current_user = Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
+    current_user=Depends(require_super_user),
 ):
     deleted = db.query(UniteProduit).filter(
         UniteProduit.statut == "temp",
-        UniteProduit.produit_id == None
+        UniteProduit.produit_id.is_(None),
     ).delete(synchronize_session=False)
     db.commit()
 
@@ -407,7 +411,10 @@ def delete_unite_produit(
 # **************************CODE BARRE STEP**************************************
 
 # 🧪 Enregistrer une série de codes-barres en statut temporaire (avant liaison produit)
-@router.post("/temp")
+@router.post(
+    "/temp",
+    dependencies=[Depends(require_subscription_feature("full_qr"))],
+)
 def store_temp_barcodes(
     barcodes: List[str],
     db: Session = Depends(get_db),
@@ -435,7 +442,10 @@ def store_temp_barcodes(
 
 # 🔗 Lier une série de codes-barres (déjà scannés) à un produit
 # 🔁 Mise à jour : lier des codes-barres à un produit
-@router.post("/lier/{produit_id}")
+@router.post(
+    "/lier/{produit_id}",
+    dependencies=[Depends(require_subscription_feature("full_qr"))],
+)
 def lier_barcodes_a_produit(
     produit_id: int,
     barcodes: List[str],

@@ -152,7 +152,20 @@ def list_paiements_for_facture(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable]))
 ):
-    paiements = db.query(Paiement).filter(Paiement.facture_id == facture_id).all()
+    parent_user_id = (
+        current_user.id if current_user.is_main_user
+        else current_user.parent_user_id
+    )
+    facture = db.query(Facture).filter(
+        Facture.id == facture_id,
+        Facture.user_id == parent_user_id,
+    ).first()
+    if not facture:
+        raise HTTPException(status_code=404, detail="Facture non trouvée")
+    paiements = db.query(Paiement).filter(
+        Paiement.facture_id == facture.id,
+        Paiement.user_id == parent_user_id,
+    ).all()
     return [
         {
             "id": p.id,
@@ -169,14 +182,22 @@ def delete_paiement(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
-    paiement = db.query(Paiement).filter(Paiement.id == paiement_id).first()
+    parent_user_id = (
+        current_user.id if current_user.is_main_user
+        else current_user.parent_user_id
+    )
+    paiement = db.query(Paiement).join(Facture).filter(
+        Paiement.id == paiement_id,
+        Paiement.user_id == parent_user_id,
+        Facture.user_id == parent_user_id,
+    ).with_for_update().first()
     if not paiement:
         raise HTTPException(status_code=404, detail="Paiement non trouvé")
 
     facture = paiement.facture
 
     db.delete(paiement)
-    db.commit()
+    db.flush()
 
     # 🔁 Recalcul du statut de la facture après suppression
     total_paye = db.query(func.sum(Paiement.montant)).filter(
@@ -192,7 +213,10 @@ def delete_paiement(
 
         # ✅ Si c'était une vente, remettre les unités en "disponible"
         if facture.type.value == "vente":
-            commande = db.query(CommandeVente).filter(CommandeVente.id == facture.commande_id).first()
+            commande = db.query(CommandeVente).filter(
+                CommandeVente.id == facture.commande_id,
+                CommandeVente.user_id == parent_user_id,
+            ).first()
             if commande:
                 unites = db.query(UniteProduit).filter(
                     UniteProduit.commande_vente_id == commande.id,
