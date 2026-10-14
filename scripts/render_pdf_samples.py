@@ -17,6 +17,7 @@ from app.routes.export_financier import (
     _build_stock_report,
 )
 from app.utils.color_theme import build_document_palette
+from app.services.generate_facture_from_commande import safe_parse_caracteristiques
 
 
 OUTPUT = ROOT / "output" / "pdf"
@@ -32,6 +33,7 @@ def write_html_pdf(template_dir, template_name, context, filename):
         loader=FileSystemLoader(template_dir),
         autoescape=select_autoescape(["html", "xml"]),
     )
+    env.filters["parse_characteristics"] = safe_parse_caracteristiques
     html = env.get_template(template_name).render(**context)
     target = OUTPUT / filename
     with target.open("wb") as stream:

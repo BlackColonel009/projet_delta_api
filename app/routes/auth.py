@@ -638,6 +638,7 @@ def get_my_profile(current_user: User = Depends(get_current_user)):
         "account_type": current_user.account_type,
         "devise": current_user.devise,
         "telephone" : current_user.telephone,
+        "facture_color": current_user.facture_color or "#5C6BC0",
         "app_theme": current_user.app_theme or "tradecare",
         "theme_mode": current_user.theme_mode or "system",
         "interface_language": current_user.interface_language or "fr",

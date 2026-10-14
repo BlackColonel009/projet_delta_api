@@ -46,8 +46,13 @@
     .company-cell {
       width: 240px;
       padding: 8px 11px;
+      background-color: #ffffff;
+    }
+
+    .header td.company-accent {
+      width: 4px;
+      padding: 0;
       background-color: {{ color_text or '#5c6bc0' }};
-      border-radius: 10px;
     }
 
     .document-label {
@@ -85,14 +90,14 @@
 
     .company-name {
       margin-bottom: 5px;
-      color: {{ color_on_primary or '#ffffff' }};
+      color: #241a29;
       font-size: 14px;
       line-height: 1.2;
       font-weight: bold;
     }
 
     .company-details {
-      color: {{ color_on_primary or '#ffffff' }};
+      color: #6c6072;
       font-size: 9px;
       line-height: 1.45;
     }
@@ -237,6 +242,7 @@
             <strong>N° :</strong> {{ facture.id }}
           </div>
         </td>
+        <td class="company-accent"></td>
         <td class="company-cell">
           {% if logo_url %}<img src="{{ logo_url }}" alt="Logo" class="logo" width="48" height="40"><br>{% endif %}
           <div class="company-name">{{ societe.nom }}</div>
