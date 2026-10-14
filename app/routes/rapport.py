@@ -5,7 +5,13 @@ from app.database import get_db
 from app.models.model_rapport import Rapport
 from app.models.model_user import User, SubUser
 from app.utils.security import get_current_user, get_current_sub_user
-from app.schemas.rapport_schema import RapportCreate, RapportOut
+from app.schemas.rapport_schema import (
+    RapportCreate,
+    RapportOut,
+    RapportSharingOut,
+    RapportSharingUpdate,
+    RapportUpdate,
+)
 from app.utils.permissions import All_required
 from app.utils.logger import log_action
 from fastapi.responses import StreamingResponse
@@ -16,6 +22,22 @@ from datetime import datetime, date
 
 
 router = APIRouter(prefix="/rapports", tags=["Rapports"])
+
+
+def _company_owner(db: Session, current_user) -> User:
+    if getattr(current_user, "is_main_user", False):
+        return current_user
+    owner = db.query(User).filter(User.id == current_user.parent_user_id).first()
+    if not owner:
+        raise HTTPException(status_code=404, detail="Entreprise introuvable")
+    return owner
+
+
+def _can_manage_sharing(current_user) -> bool:
+    return bool(
+        getattr(current_user, "is_main_user", False)
+        or getattr(current_user, "is_superuser", False)
+    )
 
 @router.post("/", response_model=RapportOut)
 def create_rapport(
@@ -47,12 +69,14 @@ def create_rapport(
         "id": rapport.id,
         "contenu": rapport.contenu,
         "date_creation": rapport.date_creation,
+        "date_modification": rapport.date_modification,
         "user_id": rapport.user_id,
         "sub_user_id": None,
         "auteur": current_user.username or current_user.email,
         "avatar_url": current_user.avatar_url,
         "role": "Administrateur",
         "is_mine": True,
+        "is_edited": False,
     }
 
 
@@ -86,12 +110,14 @@ def create_rapport_sub(
         "id": rapport.id,
         "contenu": rapport.contenu,
         "date_creation": rapport.date_creation,
+        "date_modification": rapport.date_modification,
         "user_id": rapport.user_id,
         "sub_user_id": rapport.sub_user_id,
         "auteur": current_sub.username,
         "avatar_url": current_sub.avatar_url,
         "role": current_sub.role,
         "is_mine": True,
+        "is_edited": False,
     }
 
 
@@ -134,6 +160,7 @@ def list_rapports(
             "id": r.id,
             "contenu": r.contenu,
             "date_creation": r.date_creation,
+            "date_modification": r.date_modification,
             "user_id": r.user_id,
             "sub_user_id": r.sub_user_id,
             "auteur": auteur,
@@ -144,9 +171,109 @@ def list_rapports(
                 if not current_user.is_main_user
                 else r.sub_user_id is None and r.user_id == current_user.id
             ),
+            "is_edited": r.date_modification is not None,
         })
 
     return result
+
+
+@router.get("/settings/sharing", response_model=RapportSharingOut)
+def get_report_sharing_settings(
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    owner = _company_owner(db, current_user)
+    return {
+        "enabled": bool(owner.report_sharing_enabled),
+        "can_manage": _can_manage_sharing(current_user),
+    }
+
+
+@router.put("/settings/sharing", response_model=RapportSharingOut)
+def update_report_sharing_settings(
+    data: RapportSharingUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    if not _can_manage_sharing(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Seul le compte principal peut gérer le partage des rapports",
+        )
+    owner = _company_owner(db, current_user)
+    owner.report_sharing_enabled = data.enabled
+    db.commit()
+    db.refresh(owner)
+    return {"enabled": bool(owner.report_sharing_enabled), "can_manage": True}
+
+
+@router.put("/{rapport_id}", response_model=RapportOut)
+def update_rapport(
+    rapport_id: int,
+    data: RapportUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    owner = _company_owner(db, current_user)
+    rapport = db.query(Rapport).filter(
+        Rapport.id == rapport_id,
+        Rapport.user_id == owner.id,
+    ).first()
+    if not rapport:
+        raise HTTPException(status_code=404, detail="Rapport introuvable")
+
+    is_owner = (
+        rapport.sub_user_id == current_user.id
+        if not getattr(current_user, "is_main_user", False)
+        else rapport.sub_user_id is None and rapport.user_id == current_user.id
+    )
+    if not is_owner:
+        raise HTTPException(
+            status_code=403,
+            detail="Vous ne pouvez modifier que vos propres rapports",
+        )
+
+    if rapport.date_creation.date() != datetime.utcnow().date():
+        raise HTTPException(
+            status_code=403,
+            detail="Un rapport ne peut être modifié que le jour de sa publication",
+        )
+
+    previous_content = rapport.contenu
+    rapport.contenu = data.contenu
+    rapport.date_modification = datetime.utcnow()
+    db.commit()
+    db.refresh(rapport)
+
+    log_action(
+        db=db,
+        current_user=current_user,
+        action="Modification Rapport",
+        type_entite="rapport",
+        entite_id=rapport.id,
+        details=(
+            f"Rapport {rapport.id} modifié le jour de sa publication. "
+            f"Ancien contenu : {previous_content} | Nouveau contenu : {rapport.contenu}"
+        ),
+    )
+
+    author = rapport.sub_user if rapport.sub_user_id else rapport.user
+    return {
+        "id": rapport.id,
+        "contenu": rapport.contenu,
+        "date_creation": rapport.date_creation,
+        "date_modification": rapport.date_modification,
+        "user_id": rapport.user_id,
+        "sub_user_id": rapport.sub_user_id,
+        "auteur": getattr(author, "username", None)
+        or getattr(author, "email", None)
+        or "Utilisateur",
+        "avatar_url": getattr(author, "avatar_url", None),
+        "role": getattr(author, "role", None)
+        or ("Administrateur" if rapport.sub_user_id is None else "Utilisateur"),
+        "is_mine": True,
+        "is_edited": True,
+    }
 
 
 

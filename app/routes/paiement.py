@@ -179,10 +179,13 @@ def list_paiements_for_facture(
     ).first()
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
+    # La facture vient d'être cloisonnée par entreprise ci-dessus. Filtrer une
+    # seconde fois sur Paiement.user_id masquait les paiements historiques
+    # créés avant l'ajout de cette colonne (user_id NULL), bien qu'ils soient
+    # correctement rattachés à cette facture.
     paiements = db.query(Paiement).filter(
         Paiement.facture_id == facture.id,
-        Paiement.user_id == parent_user_id,
-    ).all()
+    ).order_by(Paiement.date_paiement.desc(), Paiement.id.desc()).all()
     return [
         {
             "id": p.id,
@@ -205,7 +208,6 @@ def delete_paiement(
     )
     paiement = db.query(Paiement).join(Facture).filter(
         Paiement.id == paiement_id,
-        Paiement.user_id == parent_user_id,
         Facture.user_id == parent_user_id,
     ).with_for_update().first()
     if not paiement:

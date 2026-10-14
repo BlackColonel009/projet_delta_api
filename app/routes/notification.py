@@ -16,6 +16,10 @@ from app.database import get_db
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
 
+_COMPANY_ALARM_TEST_TITLE = "__trade_care_company_alarm_test__"
+_COMPANY_ALARM_DELAY_SECONDS = 5
+_COMPANY_ALARM_VALIDITY_MINUTES = 2
+
 
 def _company_owner(db: Session, current_user) -> User:
     if current_user.is_main_user:
@@ -41,6 +45,23 @@ def _reminder_payload(owner: User) -> dict:
         "updated_at": owner.daily_report_reminder_updated_at,
     }
 
+
+def _alarm_test_payload(event: Notification) -> dict:
+    requested_at = event.created_at or datetime.utcnow()
+    trigger_at = requested_at + timedelta(seconds=_COMPANY_ALARM_DELAY_SECONDS)
+    expires_at = requested_at + timedelta(minutes=_COMPANY_ALARM_VALIDITY_MINUTES)
+
+    def utc_iso(value: datetime) -> str:
+        return f"{value.isoformat()}Z"
+
+    return {
+        "event_id": event.id,
+        "requested_at": utc_iso(requested_at),
+        "trigger_at": utc_iso(trigger_at),
+        "expires_at": utc_iso(expires_at),
+        "requested_by": event.sub_user_name,
+    }
+
 @router.get("/", response_model=List[NotificationOut])
 def get_notifications(
     unread_only: bool = True,
@@ -63,7 +84,8 @@ def get_notifications(
         else current_user.parent_user_id
     )
     query = db.query(Notification).filter(
-        Notification.parent_user_id == parent_id
+        Notification.parent_user_id == parent_id,
+        Notification.titre != _COMPANY_ALARM_TEST_TITLE,
     )
     if unread_only:
         query = query.filter(Notification.is_read.is_(False))
@@ -142,6 +164,61 @@ def update_company_daily_reminder(
     db.commit()
     db.refresh(owner)
     return _reminder_payload(owner)
+
+
+@router.post("/daily-reminder/test", response_model=dict)
+def trigger_company_alarm_test(
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    """Diffuse un test aux appareils actifs de la même entreprise."""
+    if not _can_manage_company_settings(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Seuls les administrateurs peuvent tester l’alarme.",
+        )
+
+    owner = _company_owner(db, current_user)
+    actor_name = (
+        getattr(current_user, "username", None)
+        or getattr(current_user, "email", None)
+        or "Administrateur"
+    )
+    event = Notification(
+        titre=_COMPANY_ALARM_TEST_TITLE,
+        message="Test de l’alarme d’entreprise",
+        parent_user_id=owner.id,
+        user_id=None if current_user.is_main_user else current_user.id,
+        sub_user_id=None if current_user.is_main_user else current_user.id,
+        sub_user_name=actor_name,
+        sub_user_role=getattr(current_user, "role", None),
+        # Événement technique : il ne doit pas créer de badge ni apparaître
+        # dans le centre de notifications.
+        is_read=True,
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return _alarm_test_payload(event)
+
+
+@router.get("/daily-reminder/test/latest", response_model=dict)
+def get_latest_company_alarm_test(
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    """Retourne le dernier test afin que chaque session active le consomme."""
+    owner = _company_owner(db, current_user)
+    event = (
+        db.query(Notification)
+        .filter(
+            Notification.parent_user_id == owner.id,
+            Notification.titre == _COMPANY_ALARM_TEST_TITLE,
+        )
+        .order_by(Notification.created_at.desc(), Notification.id.desc())
+        .first()
+    )
+    return {"event": _alarm_test_payload(event) if event else None}
 
 # 🔄 Marquer une notification comme lue
 @router.put("/{notif_id}/mark-as-read")

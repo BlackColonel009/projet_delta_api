@@ -13,6 +13,7 @@ class Rapport(Base):
     contenu = Column(Text, nullable=False)
     date_rapport = Column(Date, default=datetime.utcnow)
     date_creation = Column(DateTime, default=datetime.utcnow)
+    date_modification = Column(DateTime, nullable=True)
 
     user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     sub_user_id = Column(Integer, ForeignKey("sub_users.id", ondelete="SET NULL"), nullable=True)

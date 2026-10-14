@@ -34,6 +34,7 @@ class User(Base):
     daily_report_reminder_minute = Column(Integer, default=0, nullable=False)
     daily_report_reminder_revision = Column(Integer, default=0, nullable=False)
     daily_report_reminder_updated_at = Column(DateTime, nullable=True)
+    report_sharing_enabled = Column(Boolean, default=True, nullable=False)
     session_lock_minutes = Column(Integer, default=0, nullable=False)
     session_lock_configured = Column(Boolean, default=False, nullable=False)
     session_lock_password_hash = Column(String, nullable=True)

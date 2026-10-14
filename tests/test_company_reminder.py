@@ -1,10 +1,12 @@
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 
 from fastapi import HTTPException
 
 from app.routes.notification import (
     get_company_daily_reminder,
+    trigger_company_alarm_test,
     update_company_daily_reminder,
 )
 from app.schemas.notification_schema import CompanyReminderUpdate
@@ -26,6 +28,7 @@ class _FakeDb:
         self.owner = owner
         self.commits = 0
         self.refreshed = None
+        self.added = None
 
     def query(self, *_args):
         return _FakeQuery(self.owner)
@@ -35,6 +38,11 @@ class _FakeDb:
 
     def refresh(self, value):
         self.refreshed = value
+
+    def add(self, value):
+        self.added = value
+        value.id = 91
+        value.created_at = datetime(2026, 10, 14, 12, 0, 0)
 
 
 def _owner():
@@ -108,6 +116,38 @@ class CompanyReminderTests(unittest.TestCase):
         self.assertEqual(result["revision"], 1)
         self.assertEqual(db.commits, 1)
         self.assertIs(db.refreshed, owner)
+
+    def test_main_user_can_send_alarm_test_to_company(self):
+        owner = _owner()
+        owner.username = "Direction"
+        owner.email = "direction@example.com"
+        db = _FakeDb(owner)
+
+        result = trigger_company_alarm_test(db=db, current_user=owner)
+
+        self.assertEqual(result["event_id"], 91)
+        self.assertEqual(result["requested_by"], "Direction")
+        self.assertEqual(result["trigger_at"], "2026-10-14T12:00:05Z")
+        self.assertEqual(result["expires_at"], "2026-10-14T12:02:00Z")
+        self.assertEqual(db.added.parent_user_id, owner.id)
+        self.assertTrue(db.added.is_read)
+        self.assertEqual(db.commits, 1)
+
+    def test_non_admin_subuser_cannot_send_alarm_test(self):
+        owner = _owner()
+        db = _FakeDb(owner)
+        subuser = SimpleNamespace(
+            id=7,
+            is_main_user=False,
+            parent_user_id=42,
+            role="Caissier(e)",
+        )
+
+        with self.assertRaises(HTTPException) as caught:
+            trigger_company_alarm_test(db=db, current_user=subuser)
+
+        self.assertEqual(caught.exception.status_code, 403)
+        self.assertIsNone(db.added)
 
 
 if __name__ == "__main__":

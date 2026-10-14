@@ -13,16 +13,27 @@ class RapportCreate(BaseModel):
             raise ValueError("Le rapport ne peut pas être vide")
         return value
 
+class RapportUpdate(RapportCreate):
+    pass
+
+class RapportSharingUpdate(BaseModel):
+    enabled: bool
+
+class RapportSharingOut(RapportSharingUpdate):
+    can_manage: bool = False
+
 class RapportOut(BaseModel):
     id: int
     contenu: str
     date_creation: datetime
+    date_modification: Optional[datetime] = None
     user_id: Optional[int] = None
     sub_user_id: Optional[int] = None
     auteur: Optional[str] = None
     avatar_url: Optional[str] = None
     role: Optional[str] = "Main user"
     is_mine: bool = False
+    is_edited: bool = False
 
     class Config:
         from_attributes = True
