@@ -1,5 +1,5 @@
 import json
-from fastapi import APIRouter, Depends, HTTPException, Body, File, Form, UploadFile 
+from fastapi import APIRouter, Depends, HTTPException, Body, File, Form, UploadFile
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.database import get_db
@@ -48,6 +48,7 @@ def create_produit(
     current_user = Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    image_path = None
 
     enforce_subscription_quota(
         db,
@@ -62,7 +63,10 @@ def create_produit(
 
     try:
         # 📷 Enregistrement de l'image
-        ext = image.filename.split(".")[-1]
+        original_filename = image.filename or "produit.jpg"
+        ext = original_filename.rsplit(".", 1)[-1].lower() if "." in original_filename else "jpg"
+        if ext not in {"jpg", "jpeg", "png", "webp"}:
+            raise HTTPException(status_code=400, detail="Format d'image non pris en charge")
         image_filename = f"{datetime.utcnow().timestamp()}.{ext}"
         upload_dir = os.path.join(os.getcwd(), "upload", "produits")
         os.makedirs(upload_dir, exist_ok=True)
@@ -98,14 +102,23 @@ def create_produit(
         scanned_barcodes = []
         if scanned_barcodes_raw:
             try:
-                scanned_barcodes = json.loads(scanned_barcodes_raw)
-            except:
+                raw_barcodes = json.loads(scanned_barcodes_raw)
+                if not isinstance(raw_barcodes, list):
+                    raise ValueError("Une liste est requise")
+                scanned_barcodes = list(dict.fromkeys(
+                    code.strip()
+                    for code in raw_barcodes
+                    if isinstance(code, str) and code.strip()
+                ))
+            except (TypeError, ValueError, json.JSONDecodeError):
                 raise HTTPException(status_code=400, detail="Format JSON invalide pour scanned_barcodes")
 
 
         # 🔍 Gestion des unités : SCAN manuel
         if scanned_barcodes and len(scanned_barcodes) > 0:
             unites = []
+            conflicts = []
+            now = datetime.utcnow()
             for code in scanned_barcodes:
                 exists = db.query(UniteProduit).filter(
                     or_(
@@ -114,15 +127,35 @@ def create_produit(
                     )
                 ).first()
                 if exists:
-                    print(f"⚠️ Doublon ignoré : {code}")
+                    # Les codes validés par le scanner sont d'abord placés en
+                    # attente. La création de la fiche doit les rattacher ici,
+                    # dans la même transaction, au lieu d'imposer un 2e appel.
+                    if exists.produit_id is None:
+                        exists.produit_id = produit.id
+                        exists.statut = "disponible"
+                        exists.date_creation = now
+                        exists.date_modification = now
+                        unites.append(exists)
+                        continue
+                    conflicts.append(code)
                     continue
 
                 unites.append(UniteProduit(
                     produit_id=produit.id,
                     tracabilite=code,
                     code_barre=code,
-                    statut="disponible"
+                    statut="disponible",
+                    date_creation=now,
                 ))
+
+            if conflicts:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Certains codes-barres appartiennent déjà à une autre fiche : "
+                        + ", ".join(conflicts[:5])
+                    ),
+                )
 
             if unites:
                 db.add_all(unites)
@@ -162,9 +195,15 @@ def create_produit(
         db.commit()
         return {"message": "Produit créé avec succès", "produit_id": produit.id}
 
+    except HTTPException:
+        db.rollback()
+        if image_path and os.path.exists(image_path):
+            os.remove(image_path)
+        raise
     except Exception as e:
         db.rollback()
-        db.expunge_all()
+        if image_path and os.path.exists(image_path):
+            os.remove(image_path)
         print("❌ ERREUR lors de la création du produit :", str(e))
         raise HTTPException(status_code=500, detail="Erreur lors de l'enregistrement du produit")
 

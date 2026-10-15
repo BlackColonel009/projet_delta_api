@@ -88,6 +88,11 @@ class SessionUnlockRequest(BaseModel):
             raise ValueError("Mot de passe de verrouillage invalide")
         return value
 
+
+class DeleteAccountRequest(BaseModel):
+    password: str
+    confirmation: Literal["SUPPRIMER MON COMPTE"]
+
 class UserLogin(BaseModel):
     email: EmailStr
     password: str

@@ -13,7 +13,7 @@ from app.models.model_historique_intervention import HistoriqueIntervention
 from app.models.model_intervention import Intervention
 from app.models.model_produit import Produit
 from app.models.model_rapport import Rapport
-from app.schemas.user_schema import CompanyThemeUpdate, InterfaceLanguageUpdate, SessionLockUpdate, SessionUnlockRequest, SubUserOut, UserCreate, SubUserCreate, UserLogin, GroupUserLogin
+from app.schemas.user_schema import CompanyThemeUpdate, DeleteAccountRequest, InterfaceLanguageUpdate, SessionLockUpdate, SessionUnlockRequest, SubUserOut, UserCreate, SubUserCreate, UserLogin, GroupUserLogin
 from app.models.model_user import User, SubUser
 from app.models.model_role import Role
 from app.services.subscription_service import create_free_subscription
@@ -278,27 +278,17 @@ def list_my_subusers(current_user: User = Depends(get_current_user), db: Session
 def update_company_theme(
     data: CompanyThemeUpdate,
     db: Session = Depends(get_db),
-    current_user = Depends(All_required()),
+    current_user: User = Depends(require_main_user),
     _=Depends(require_subscription_feature("custom_theme")),
 ):
     """Enregistre le thème commun à toute l'entreprise."""
-    if not current_user.is_main_user and str(current_user.role).lower() != "admin":
-        raise HTTPException(
-            status_code=403,
-            detail="Seuls les administrateurs peuvent modifier les paramètres.",
-        )
-    owner = current_user if current_user.is_main_user else db.query(User).filter(
-        User.id == current_user.parent_user_id
-    ).first()
-    if not owner:
-        raise HTTPException(status_code=404, detail="Entreprise introuvable")
-    owner.app_theme = data.app_theme
-    owner.theme_mode = data.theme_mode
+    current_user.app_theme = data.app_theme
+    current_user.theme_mode = data.theme_mode
     db.commit()
-    db.refresh(owner)
+    db.refresh(current_user)
     return {
-        "app_theme": owner.app_theme,
-        "theme_mode": owner.theme_mode,
+        "app_theme": current_user.app_theme,
+        "theme_mode": current_user.theme_mode,
     }
 
 
@@ -306,25 +296,15 @@ def update_company_theme(
 def update_company_invoice_theme(
     facture_color: str = Body(..., embed=True),
     db: Session = Depends(get_db),
-    current_user=Depends(All_required()),
+    current_user: User = Depends(require_main_user),
     _=Depends(require_subscription_feature("theme_colors")),
 ):
-    if not current_user.is_main_user and str(current_user.role).lower() != "admin":
-        raise HTTPException(
-            status_code=403,
-            detail="Seuls les administrateurs peuvent modifier les paramètres.",
-        )
     if not facture_color.startswith("#") or len(facture_color) not in (7, 9):
         raise HTTPException(status_code=422, detail="Couleur de facture invalide")
-    owner = current_user if current_user.is_main_user else db.query(User).filter(
-        User.id == current_user.parent_user_id
-    ).first()
-    if not owner:
-        raise HTTPException(status_code=404, detail="Entreprise introuvable")
-    owner.facture_color = facture_color.upper()
+    current_user.facture_color = facture_color.upper()
     db.commit()
-    db.refresh(owner)
-    return {"facture_color": owner.facture_color}
+    db.refresh(current_user)
+    return {"facture_color": current_user.facture_color}
 
 
 @router.put("/me-sub/password", tags=["SubUsers"])
@@ -569,21 +549,58 @@ def delete_subuser(sub_id: int, current_user: User = Depends(get_current_user), 
 
 # 🗑 Supprimer son propre compte
 @router.delete("/me", tags=["Users"])
-def delete_own_account(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    db.query(SubUser).filter(SubUser.parent_user_id == current_user.id).delete()
-    db.delete(current_user)
-    db.commit()
+def delete_own_account(
+    data: DeleteAccountRequest,
+    current_user: User = Depends(require_main_user),
+    db: Session = Depends(get_db),
+):
+    """Permanently delete an owner account after password + phrase confirmation."""
+    if not verify_password(data.password, current_user.password_hash):
+        # Le jeton est valide : ce n'est pas une expiration de session.
+        raise HTTPException(status_code=400, detail="Mot de passe incorrect")
 
-    log_action(
-        db=db,
-        current_user=current_user,
-        action="Suppression de compte",
-        type_entite="utilisateur",
-        entite_id=current_user.id,
-        details="L'utilisateur a supprimé son compte"
-    )
+    # Imports locaux pour éviter d'alourdir le chargement des routes d'auth.
+    from app.models.model_notification import Notification
+    from app.models.model_reset_token import ResetToken
+    from app.models.model_souscription import Subscription
+    from app.models.model_subscription_request import SubscriptionChangeRequest
+    from app.services.account_cleanup_service import clear_company_operational_data
 
-    return {"message": "Your account and all sub-users have been deleted."}
+    owner_id = current_user.id
+    try:
+        clear_company_operational_data(db, owner_id)
+        db.query(Notification).filter(
+            Notification.parent_user_id == owner_id
+        ).delete(synchronize_session=False)
+        db.query(ResetToken).filter(ResetToken.user_id == owner_id).delete(
+            synchronize_session=False
+        )
+        db.query(SubscriptionChangeRequest).filter(
+            SubscriptionChangeRequest.reviewed_by_user_id == owner_id
+        ).update(
+            {SubscriptionChangeRequest.reviewed_by_user_id: None},
+            synchronize_session=False,
+        )
+        db.query(SubscriptionChangeRequest).filter(
+            SubscriptionChangeRequest.user_id == owner_id
+        ).delete(synchronize_session=False)
+        db.query(Subscription).filter(Subscription.user_id == owner_id).delete(
+            synchronize_session=False
+        )
+        db.query(SubUser).filter(SubUser.parent_user_id == owner_id).delete(
+            synchronize_session=False
+        )
+        db.delete(current_user)
+        db.commit()
+    except Exception as error:
+        db.rollback()
+        print(f"Erreur de suppression du compte {owner_id}: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="Le compte n’a pas pu être supprimé. Aucune suppression partielle n’a été conservée.",
+        )
+
+    return {"message": "Compte et données d’entreprise supprimés définitivement."}
 
 # 👑 Supprimer un user par le superuser
 @router.delete("/super/delete_user/{user_id}", tags=["Admin"])

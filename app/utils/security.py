@@ -16,7 +16,6 @@ from app.models.model_role import Role, Permission
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 # oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
-
 # 🔒 Hasher un mot de passe
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
