@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -5,15 +6,66 @@ from app.database import get_db
 from app.models.model_client import Client
 from app.models.model_clientfollowup import ClientFollowup, FollowupStatus
 from app.models.model_commande import CommandeVente
+from app.models.model_facture import Facture, TypeFacture
 
 
 from app.repo_scheduler.scheduler_ai import run_followup_scheduler
-from app.schemas.followup_schema import UpdateDelaiRelanceSchema
+from app.schemas.followup_schema import (
+    ClientFollowupSettingsUpdate,
+    PaymentReminderSettingsUpdate,
+    UpdateDelaiRelanceSchema,
+)
 from app.utils.logger import log_action
 from app.utils.permissions import check_role, RoleEnum
 from app.utils.security import get_active_user
 
 router_followup = APIRouter(prefix="/followups", tags=["Suivi client"])
+
+
+def _company_user_id(current_user) -> int:
+    return (
+        current_user.id
+        if current_user.is_main_user
+        else current_user.parent_user_id
+    )
+
+
+def _payment_reminder_payload(followup, facture_id: int) -> dict:
+    if not followup:
+        return {
+            "facture_id": facture_id,
+            "available": False,
+            "enabled": False,
+            "start_after_days": 2,
+            "next_send_at": None,
+        }
+    return {
+        "facture_id": facture_id,
+        "followup_id": followup.id,
+        "available": True,
+        "enabled": getattr(followup, "payment_reminder_enabled", True),
+        "start_after_days": followup.delai_avant_relance or 2,
+        "next_send_at": followup.date_prochain_envoi,
+    }
+
+
+def _client_followup_payload(client) -> dict:
+    return {
+        "client_id": client.id,
+        "enabled": getattr(client, "followup_enabled", True),
+        "thank_you_delay_days": getattr(
+            client, "followup_thank_you_delay_days", 1
+        ),
+        "recommendations_enabled": getattr(
+            client, "followup_recommendations_enabled", True
+        ),
+        "first_recommendation_delay_days": getattr(
+            client, "followup_first_recommendation_delay_days", 10
+        ),
+        "recommendation_interval_days": getattr(
+            client, "followup_recommendation_interval_days", 14
+        ),
+    }
 
 
 # ⚠️ Route de test manuelle pour déclencher l'envoi des messages
@@ -47,6 +99,183 @@ def get_unique_followup_clients_count(
     return {"count": count}
 
 
+@router_followup.get("/invoice/{facture_id}/payment-reminder")
+def get_invoice_payment_reminder(
+    facture_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(
+        check_role([RoleEnum.admin, RoleEnum.commercial, RoleEnum.caissier])
+    ),
+):
+    """Retourne la programmation de relance propre a une facture de vente."""
+    owner_id = _company_user_id(current_user)
+    facture = db.query(Facture).filter(
+        Facture.id == facture_id,
+        Facture.user_id == owner_id,
+    ).first()
+    if not facture:
+        raise HTTPException(status_code=404, detail="Facture introuvable")
+
+    followup = None
+    if facture.commande_id and facture.type == TypeFacture.vente:
+        followup = db.query(ClientFollowup).filter(
+            ClientFollowup.commande_id == facture.commande_id,
+            ClientFollowup.user_id == owner_id,
+            ClientFollowup.type_followup == "relance_paiement",
+        ).first()
+    return _payment_reminder_payload(followup, facture_id)
+
+
+@router_followup.put("/invoice/{facture_id}/payment-reminder")
+def update_invoice_payment_reminder(
+    facture_id: int,
+    payload: PaymentReminderSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial])),
+):
+    """Programme le debut des relances sans affecter les autres factures."""
+    owner_id = _company_user_id(current_user)
+    facture = db.query(Facture).filter(
+        Facture.id == facture_id,
+        Facture.user_id == owner_id,
+        Facture.type == TypeFacture.vente,
+    ).first()
+    if not facture or not facture.commande_id:
+        raise HTTPException(
+            status_code=404,
+            detail="Cette facture ne possede pas de rappel de paiement.",
+        )
+
+    followup = db.query(ClientFollowup).filter(
+        ClientFollowup.commande_id == facture.commande_id,
+        ClientFollowup.user_id == owner_id,
+        ClientFollowup.type_followup == "relance_paiement",
+    ).first()
+    if not followup:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Aucune relance de paiement active : la facture est peut-etre "
+                "deja soldee ou annulee."
+            ),
+        )
+
+    followup.payment_reminder_enabled = payload.enabled
+    followup.delai_avant_relance = payload.start_after_days
+    start = followup.date_achat or facture.date_creation or datetime.utcnow()
+    followup.date_prochain_envoi = start + timedelta(
+        days=payload.start_after_days
+    )
+    followup.dernier_envoi = None
+    db.commit()
+    db.refresh(followup)
+
+    log_action(
+        db=db,
+        current_user=current_user,
+        action="Configuration rappel de paiement",
+        type_entite="client_followup",
+        entite_id=followup.id,
+        details=(
+            f"Facture #{facture_id} : relance "
+            f"{'activee' if payload.enabled else 'desactivee'}, debut apres "
+            f"{payload.start_after_days} jour(s)"
+        ),
+    )
+    return _payment_reminder_payload(followup, facture_id)
+
+
+@router_followup.get("/client/{client_id}/settings")
+def get_client_followup_settings(
+    client_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(
+        check_role(
+            [
+                RoleEnum.admin,
+                RoleEnum.commercial,
+                RoleEnum.caissier,
+                RoleEnum.gestionnaire_stock,
+            ]
+        )
+    ),
+):
+    owner_id = _company_user_id(current_user)
+    client = db.query(Client).filter(
+        Client.id == client_id,
+        Client.user_id == owner_id,
+    ).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client introuvable")
+    return _client_followup_payload(client)
+
+
+@router_followup.put("/client/{client_id}/settings")
+def update_client_followup_settings(
+    client_id: int,
+    payload: ClientFollowupSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial])),
+):
+    """Personnalise le parcours apres paiement pour un seul client."""
+    owner_id = _company_user_id(current_user)
+    client = db.query(Client).filter(
+        Client.id == client_id,
+        Client.user_id == owner_id,
+    ).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client introuvable")
+
+    client.followup_enabled = payload.enabled
+    client.followup_thank_you_delay_days = payload.thank_you_delay_days
+    client.followup_recommendations_enabled = payload.recommendations_enabled
+    client.followup_first_recommendation_delay_days = (
+        payload.first_recommendation_delay_days
+    )
+    client.followup_recommendation_interval_days = (
+        payload.recommendation_interval_days
+    )
+
+    now = datetime.utcnow()
+    loyalty_followups = db.query(ClientFollowup).filter(
+        ClientFollowup.client_id == client_id,
+        ClientFollowup.user_id == owner_id,
+        ClientFollowup.type_followup == "fidélisation",
+        ClientFollowup.statut != FollowupStatus.termine,
+    ).all()
+    for followup in loyalty_followups:
+        if followup.statut == FollowupStatus.en_attente:
+            start = followup.date_achat or now
+            followup.date_prochain_envoi = start + timedelta(
+                days=payload.thank_you_delay_days
+            )
+        elif followup.statut == FollowupStatus.message_1_envoye:
+            followup.date_prochain_envoi = now + timedelta(
+                days=payload.first_recommendation_delay_days
+            )
+        else:
+            followup.date_prochain_envoi = now + timedelta(
+                days=payload.recommendation_interval_days
+            )
+
+    db.commit()
+    db.refresh(client)
+    log_action(
+        db=db,
+        current_user=current_user,
+        action="Configuration suivi apres paiement",
+        type_entite="client_followup",
+        entite_id=client.id,
+        details=(
+            f"Client #{client.id} : suivi "
+            f"{'actif' if payload.enabled else 'inactif'}, remerciement a "
+            f"J+{payload.thank_you_delay_days}, recommandations "
+            f"{'actives' if payload.recommendations_enabled else 'inactives'}"
+        ),
+    )
+    return _client_followup_payload(client)
+
+
 @router_followup.post("/{client_id}/desactiver")
 def desactiver_suivis_client(
     client_id: int,
@@ -56,9 +285,10 @@ def desactiver_suivis_client(
     """
     Désactive tous les suivis liés à un client donné.
     """
+    owner_id = _company_user_id(current_user)
     suivis = db.query(ClientFollowup).filter(
         ClientFollowup.client_id == client_id,
-        ClientFollowup.user_id == current_user.id,
+        ClientFollowup.user_id == owner_id,
         ClientFollowup.type_followup == FollowupStatus.fidelisation.value
     ).all()
 
@@ -91,9 +321,10 @@ def activer_suivis_client(
     """
     Active tous les suivis liés à un client donné.
     """
+    owner_id = _company_user_id(current_user)
     suivis = db.query(ClientFollowup).filter(
         ClientFollowup.client_id == client_id,
-        ClientFollowup.user_id == current_user.id,
+        ClientFollowup.user_id == owner_id,
         ClientFollowup.type_followup == FollowupStatus.desactive.value
     ).all()
 
@@ -139,8 +370,9 @@ def lister_suivis_clients(
     """
     Liste paginée des suivis clients actifs pour l'utilisateur connecté.
     """
+    owner_id = _company_user_id(current_user)
     query = db.query(ClientFollowup).join(Client).join(CommandeVente).filter(
-        ClientFollowup.user_id == current_user.id  # Sécurisation par user_id
+        ClientFollowup.user_id == owner_id
     )
 
     if client_id:
@@ -183,9 +415,10 @@ def get_followup_details(
     """
     Récupère les détails d’un suivi client spécifique pour l’utilisateur connecté.
     """
+    owner_id = _company_user_id(current_user)
     followup = db.query(ClientFollowup).filter(
         ClientFollowup.id == followup_id,
-        ClientFollowup.user_id == current_user.id  # Sécurisation par user_id
+        ClientFollowup.user_id == owner_id
     ).first()
 
     if not followup:
@@ -214,9 +447,10 @@ def get_followups_for_client(
     """
     Récupère la liste des suivis client pour un client donné, pour l'utilisateur connecté.
     """
+    owner_id = _company_user_id(current_user)
     followups = db.query(ClientFollowup).filter(
         ClientFollowup.client_id == client_id,
-        ClientFollowup.user_id == current_user.id
+        ClientFollowup.user_id == owner_id
     ).all()
 
     return [
@@ -239,9 +473,10 @@ def update_delai_relance(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial]))
 ):
+    owner_id = _company_user_id(current_user)
     followup = db.query(ClientFollowup).filter(
         ClientFollowup.id == followup_id,
-        ClientFollowup.user_id == current_user.id
+        ClientFollowup.user_id == owner_id
     ).first()
 
     if not followup:

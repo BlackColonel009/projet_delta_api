@@ -199,6 +199,93 @@ def payment_reminder_email(
     )
 
 
+def payment_confirmation_email(
+    *,
+    user,
+    client_name: str,
+    invoice_id: int,
+    invoice_date: date | datetime | None,
+    payment_amount: float,
+    payment_method: str,
+    total: float,
+    paid: float,
+    balance: float,
+    currency: str,
+    is_settled: bool,
+) -> str:
+    """Recu de paiement HTML, aux couleurs de l'entreprise."""
+    identity = _company_identity(user)
+    status_label = _tr(user, "Soldée", "Paid") if is_settled else _tr(
+        user, "Paiement partiel", "Partially paid"
+    )
+    rows = (
+        (_tr(user, "Facture", "Invoice"), f"N° {_text(invoice_id)}"),
+        (_tr(user, "Date de la facture", "Invoice date"), _date(invoice_date)),
+        (_tr(user, "Mode de paiement", "Payment method"), _text(payment_method, "—")),
+        (_tr(user, "Montant de la facture", "Invoice total"), _money(total, currency)),
+        (_tr(user, "Total payé à ce jour", "Total paid to date"), _money(paid, currency)),
+    )
+    details = "".join(
+        f'<tr><td style="padding:10px 0;border-bottom:1px solid #edf0f2;color:#6b7280;font-size:13px;width:42%;">{label}</td>'
+        f'<td style="padding:10px 0;border-bottom:1px solid #edf0f2;color:#111827;font-size:14px;font-weight:700;">{value}</td></tr>'
+        for label, value in rows
+    )
+    balance_label = _tr(user, "Facture entièrement réglée", "Invoice paid in full") if is_settled else _tr(
+        user, "Reste à régler", "Balance due"
+    )
+    balance_value = _tr(user, "Merci, aucun solde restant", "Thank you, no balance remains") if is_settled else _money(
+        balance, currency
+    )
+    content = f"""
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;background:#f9fafb;border:1px solid #edf0f2;border-radius:14px;">
+        <tr>
+          <td style="padding:20px;">
+            <div style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:1px;font-weight:800;">{_tr(user, 'Paiement reçu', 'Payment received')}</div>
+            <div style="margin-top:6px;font-size:30px;line-height:1.2;color:{identity['primary_dark']};font-weight:900;">{_money(payment_amount, currency)}</div>
+            <div style="margin-top:7px;font-size:13px;color:#4b5563;">{_text(status_label)}</div>
+          </td>
+        </tr>
+      </table>
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:18px;">{details}</table>
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:18px;background:{identity['primary_pale']};border:1px solid {identity['primary_soft']};border-radius:12px;">
+        <tr><td style="padding:18px;">
+          <div style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:1px;font-weight:800;">{_text(balance_label)}</div>
+          <div style="margin-top:5px;font-size:{'17' if is_settled else '26'}px;color:{identity['primary_dark']};font-weight:900;">{_text(balance_value)}</div>
+        </td></tr>
+      </table>
+      <p style="margin:20px 0 0;font-size:14px;line-height:1.7;color:#4b5563;">{_tr(user, 'Conservez cet email comme confirmation de l’enregistrement de votre paiement.', 'Keep this email as confirmation that your payment was recorded.')}</p>
+    """
+    email = getattr(user, "email", "") or ""
+    return _layout(
+        user=user,
+        preheader=_tr(
+            user,
+            f"Paiement de {_money(payment_amount, currency)} reçu pour la facture N° {invoice_id}.",
+            f"Payment of {_money(payment_amount, currency)} received for invoice No. {invoice_id}.",
+        ),
+        eyebrow=_tr(user, "Facturation", "Billing"),
+        title=_tr(
+            user,
+            f"Paiement confirmé, {client_name}",
+            f"Payment confirmed, {client_name}",
+        ),
+        introduction=_tr(
+            user,
+            "Votre paiement a bien été enregistré. Vous trouverez son récapitulatif ci-dessous.",
+            "Your payment has been recorded. A summary is provided below.",
+        ),
+        content=content,
+        badge=_tr(user, "Paiement confirmé", "Payment confirmed"),
+        cta_label=_tr(user, "Une question sur ce paiement ?", "Question about this payment?"),
+        cta_url=(
+            f"mailto:{quote(email, safe='@')}?subject="
+            f"{quote(_tr(user, 'Paiement facture ', 'Invoice payment ') + str(invoice_id))}"
+            if email
+            else None
+        ),
+    )
+
+
 def loyalty_email(*, user, client_name: str, product_names: Iterable[str]) -> str:
     items = "".join(
         f'<tr><td width="24" valign="top" style="padding:7px 0;color:#16a34a;font-weight:900;">✓</td>'

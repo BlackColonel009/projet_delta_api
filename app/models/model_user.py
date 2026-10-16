@@ -34,6 +34,10 @@ class User(Base):
     daily_report_reminder_minute = Column(Integer, default=0, nullable=False)
     daily_report_reminder_revision = Column(Integer, default=0, nullable=False)
     daily_report_reminder_updated_at = Column(DateTime, nullable=True)
+    daily_report_alarm_sound = Column(
+        String(32), default="signature", nullable=False
+    )
+    daily_report_alarm_sound_revision = Column(Integer, default=0, nullable=False)
     report_sharing_enabled = Column(Boolean, default=True, nullable=False)
     session_lock_minutes = Column(Integer, default=0, nullable=False)
     session_lock_configured = Column(Boolean, default=False, nullable=False)
@@ -45,7 +49,11 @@ class User(Base):
     historiques = relationship("Historique", back_populates="user", overlaps="historiques_user")
     historiques_user = relationship("Historique", foreign_keys="[Historique.user_id]", overlaps="historiques")
 
-    depots = relationship("Depot", back_populates="user")
+    depots = relationship(
+        "Depot",
+        back_populates="user",
+        foreign_keys="[Depot.user_id]",
+    )
     depot_services = relationship("DepotService", back_populates="user")
     depot_tarifs = relationship("DepotTarif", back_populates="user")
     factures_depot = relationship("FactureDepot", back_populates="user")

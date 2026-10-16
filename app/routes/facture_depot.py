@@ -12,7 +12,13 @@ from app.models.model_depot import Depot
 from app.models.model_facture_depot import FactureDepot
 from app.schemas import facture_depot_schema as schemas
 from app.services.report_design import ReportDesign, money
-from app.utils.permissions import All_required
+from app.services.depot_workflow_service import (
+    InvalidDepositTransition,
+    validate_deposit_transition,
+)
+from app.schemas.user_schema import RoleEnum
+from app.utils.logger import log_action
+from app.utils.permissions import All_required, check_role
 from app.utils.subscription_guard import enforce_invoice_quota
 from app.utils.i18n import language_of, translated
 
@@ -45,8 +51,18 @@ def create_facture_depot(payload: schemas.FactureDepotCreate, db: Session = Depe
     existing = db.query(FactureDepot).filter(FactureDepot.depot_id == payload.depot_id, FactureDepot.user_id == owner_id).first()
     if existing:
         raise HTTPException(400, "Une facture existe déjà pour ce dépôt.")
-    facture = FactureDepot(**payload.model_dump(exclude={"client_id"}), client_id=depot.client_id,
-                           user_id=owner_id, date_facture=datetime.utcnow())
+    montant_ht = round(float(depot.prix_total or 0), 2)
+    facture = FactureDepot(
+        depot_id=depot.id,
+        client_id=depot.client_id,
+        montant_ht=montant_ht,
+        tva=0,
+        montant_ttc=montant_ht,
+        statut="en_attente",
+        remarques=payload.remarques,
+        user_id=owner_id,
+        date_facture=datetime.utcnow(),
+    )
     db.add(facture)
     db.commit()
     db.refresh(facture)
@@ -70,6 +86,64 @@ def update_facture_depot(id: int, payload: schemas.FactureDepotUpdate, db: Sessi
         setattr(facture, attr, value)
     db.commit()
     db.refresh(facture)
+    return facture
+
+
+@router.put("/{id}/payer", response_model=schemas.FactureDepotOut)
+def payer_facture_depot(
+    id: int,
+    payload: schemas.FactureDepotPaymentCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(
+        check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable])
+    ),
+):
+    owner_id = _owner_id(current_user)
+    facture = (
+        db.query(FactureDepot)
+        .filter(FactureDepot.id == id, FactureDepot.user_id == owner_id)
+        .with_for_update()
+        .first()
+    )
+    if not facture:
+        raise HTTPException(404, "Facture non trouvée")
+    if facture.statut in {"paye", "payee", "soldee"}:
+        raise HTTPException(409, "Cette facture de dépôt est déjà soldée.")
+    if facture.statut in {"annule", "annulee"}:
+        raise HTTPException(409, "Une facture annulée ne peut pas être payée.")
+    depot = facture.depot
+    try:
+        validate_deposit_transition(depot.statut, "paye")
+    except InvalidDepositTransition as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    now = datetime.utcnow()
+    facture.statut = "payee"
+    facture.mode_paiement = payload.mode_paiement.strip()
+    facture.date_paiement = now
+    if payload.remarques is not None:
+        facture.remarques = payload.remarques.strip() or None
+    depot.statut = "paye"
+    depot.statut_modifie_le = now
+    depot.statut_modifie_par = current_user.id
+    try:
+        log_action(
+            db=db,
+            current_user=current_user,
+            action="Paiement facture de consigne",
+            type_entite="facture_depot",
+            entite_id=facture.id,
+            details=(
+                f"Facture soldée par {facture.mode_paiement}; "
+                f"montant={facture.montant_ttc}"
+            ),
+            commit=False,
+        )
+        db.commit()
+        db.refresh(facture)
+    except Exception:
+        db.rollback()
+        raise
     return facture
 
 

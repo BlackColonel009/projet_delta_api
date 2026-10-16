@@ -236,6 +236,8 @@ async def run_followup_scheduler(db: Session):
         ).all()
 
         if f.type_followup == "relance_paiement":
+            if not getattr(f, "payment_reminder_enabled", True):
+                continue
             if not f.date_achat:
                 continue
 
@@ -267,9 +269,13 @@ async def run_followup_scheduler(db: Session):
 
         # 🔁 Vérification paiement si relance
         if f.type_followup == "relance_paiement":
-            if commande.statut == "validée":
+            if commande.statut == "validée" or reste <= 0.01:
                 f.statut = FollowupStatus.en_attente
                 f.type_followup = "fidélisation"
+                thank_you_delay = getattr(
+                    f.client, "followup_thank_you_delay_days", 1
+                )
+                f.date_prochain_envoi = now + timedelta(days=thank_you_delay)
                 db.commit()
                 continue
 
@@ -298,6 +304,18 @@ async def run_followup_scheduler(db: Session):
             f.date_prochain_envoi = now + timedelta(days=1)
 
         elif f.type_followup == "fidélisation":
+            if not getattr(f.client, "followup_enabled", True):
+                continue
+
+            recommendations_enabled = getattr(
+                f.client, "followup_recommendations_enabled", True
+            )
+            first_recommendation_delay = getattr(
+                f.client, "followup_first_recommendation_delay_days", 10
+            )
+            recommendation_interval = getattr(
+                f.client, "followup_recommendation_interval_days", 14
+            )
             if f.statut == FollowupStatus.en_attente:
                 msg = loyalty_email(
                     user=user,
@@ -313,16 +331,23 @@ async def run_followup_scheduler(db: Session):
                     is_html=True,
                 )
                 f.statut = FollowupStatus.message_1_envoye
-                f.date_prochain_envoi = now + timedelta(days=10)
+                if recommendations_enabled:
+                    f.date_prochain_envoi = now + timedelta(
+                        days=first_recommendation_delay
+                    )
+                else:
+                    f.statut = FollowupStatus.termine
 
-            elif f.statut == FollowupStatus.message_1_envoye and f.type_followup == "fidélisation":
-                if not company_has_feature(
+            elif f.statut in (
+                FollowupStatus.message_1_envoye,
+                FollowupStatus.message_2_envoye,
+            ):
+                if not recommendations_enabled or not company_has_feature(
                     db,
                     f.user_id,
                     "product_recommendation",
                 ):
-                    f.statut = FollowupStatus.message_2_envoye
-                    f.date_prochain_envoi = now + timedelta(days=14)
+                    f.statut = FollowupStatus.termine
                     db.commit()
                     continue
                 produits = get_2_random_produits(db, f.user_id)
@@ -354,10 +379,9 @@ async def run_followup_scheduler(db: Session):
 
 
                 f.statut = FollowupStatus.message_2_envoye
-                f.date_prochain_envoi = now + timedelta(days=14)
-
-            elif f.statut == FollowupStatus.message_2_envoye:
-                f.statut = FollowupStatus.message_1_envoye  # boucle à nouveau
+                f.date_prochain_envoi = now + timedelta(
+                    days=recommendation_interval
+                )
 
         db.commit()
 

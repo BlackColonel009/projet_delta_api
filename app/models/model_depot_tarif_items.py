@@ -13,6 +13,11 @@ class DepotTarifItem(Base):
     quantite = Column(Integer, default=1)
     prix_personnalise = Column(Float, nullable=True)
     description = Column(String, nullable=True)
+    # Instantané financier : une modification ultérieure du catalogue ne doit
+    # jamais changer le montant historique d'un dépôt.
+    mode_tarification_snapshot = Column(String, nullable=False, default="unitaire")
+    prix_unitaire_snapshot = Column(Float, nullable=False, default=0)
+    montant_total = Column(Float, nullable=False, default=0)
 
    
 

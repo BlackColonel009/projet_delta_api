@@ -244,14 +244,22 @@ def create_commande_vente(
         type_followup = None  # proforma, devis, etc. => pas de suivi
 
     if type_followup and subscription_access.has_feature("client_followup"):
+        if type_followup == "fidélisation":
+            first_delay_days = getattr(
+                client, "followup_thank_you_delay_days", 1
+            )
+        else:
+            first_delay_days = 2
         followup = ClientFollowup(
             user_id=parent_user_id,
             client_id=commande.client_id,
             commande_id=commande.id,
             date_achat=date_achat,
             statut=FollowupStatus.en_attente,
-            date_prochain_envoi=datetime.utcnow() + timedelta(days=1),  # 2 minutes
-            type_followup=type_followup
+            date_prochain_envoi=date_achat + timedelta(days=first_delay_days),
+            delai_avant_relance=first_delay_days,
+            payment_reminder_enabled=True,
+            type_followup=type_followup,
         )
 
         db.add(followup)

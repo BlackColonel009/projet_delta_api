@@ -473,14 +473,25 @@ def create_quick_facture_from_depot(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    depot = db.query(Depot).filter(Depot.id == depot_id).first()
+    owner_id = (
+        current_user.id
+        if current_user.is_main_user
+        else current_user.parent_user_id
+    )
+    depot = db.query(Depot).filter(
+        Depot.id == depot_id,
+        Depot.user_id == owner_id,
+    ).first()
     if not depot:
         raise HTTPException(status_code=404, detail="Dépôt introuvable")
 
     if depot.statut != "retire":
         raise HTTPException(status_code=400, detail="Le dépôt n'est pas encore retiré.")
 
-    existing_facture = db.query(FactureDepot).filter_by(depot_id=depot_id).first()
+    existing_facture = db.query(FactureDepot).filter(
+        FactureDepot.depot_id == depot_id,
+        FactureDepot.user_id == owner_id,
+    ).first()
     if existing_facture:
         raise HTTPException(status_code=400, detail="Une facture existe déjà pour ce dépôt.")
 
@@ -495,7 +506,8 @@ def create_quick_facture_from_depot(
         tva=tva,
         montant_ttc=montant_ttc,
         statut="en_attente",
-        date_facture=datetime.utcnow()
+        date_facture=datetime.utcnow(),
+        user_id=owner_id,
     )
 
     db.add(facture)
@@ -506,8 +518,23 @@ def create_quick_facture_from_depot(
     return facture
 
 @router.get("/by-depot/{depot_id}", response_model=FactureDepotOut)
-def get_facture_by_depot(depot_id: int, db: Session = Depends(get_db)):
-    facture = db.query(FactureDepot).filter(FactureDepot.depot_id == depot_id).first()
+def get_facture_by_depot(
+    depot_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(
+        check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])
+    ),
+):
+    owner_id = (
+        current_user.id
+        if current_user.is_main_user
+        else current_user.parent_user_id
+    )
+    facture = db.query(FactureDepot).join(Depot).filter(
+        FactureDepot.depot_id == depot_id,
+        FactureDepot.user_id == owner_id,
+        Depot.user_id == owner_id,
+    ).first()
     if not facture:
         raise HTTPException(status_code=404, detail="Pas de facture pour ce dépôt")
     return facture

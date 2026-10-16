@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, Enum
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from enum import Enum as PyEnum
@@ -25,6 +25,7 @@ class ClientFollowup(Base):
     
     # ⏳ délai avant première relance (configurable depuis le frontend)
     delai_avant_relance = Column(Integer, default=2)
+    payment_reminder_enabled = Column(Boolean, nullable=False, default=True)
 
     # 🧠 anti-harcèlement (trace du dernier envoi)
     dernier_envoi = Column(DateTime, nullable=True)

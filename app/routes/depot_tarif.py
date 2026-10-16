@@ -10,6 +10,7 @@ from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
 from app.utils.logger import log_action
 from sqlalchemy.orm import joinedload
+from app.services.depot_pricing_service import normalize_pricing_mode
 
 router = APIRouter(prefix="/depot-tarifs", tags=["Dépôt - Tarifs"])
 
@@ -27,8 +28,16 @@ def create_tarif(
     ).first()
     if not service:
         raise HTTPException(status_code=404, detail="Service introuvable ou non autorisé.")
+    if normalize_pricing_mode(service.mode_tarification) != data.mode_tarification:
+        raise HTTPException(
+            status_code=400,
+            detail="Le mode du tarif doit correspondre au mode du service.",
+        )
 
-    tarif = DepotTarif(**data.dict(exclude={"service_nom"}), user_id=parent_user_id)
+    tarif = DepotTarif(
+        **data.model_dump(exclude={"service_nom"}),
+        user_id=parent_user_id,
+    )
     db.add(tarif)
     db.commit()
     db.refresh(tarif)
@@ -94,7 +103,25 @@ def update_tarif(
     if not tarif:
         raise HTTPException(status_code=404, detail="Tarif introuvable ou non autorisé.")
 
-    for key, value in data.dict().items():
+    target_service = db.query(DepotService).filter(
+        DepotService.id == data.service_id,
+        DepotService.user_id == parent_user_id,
+    ).first()
+    if not target_service:
+        raise HTTPException(
+            status_code=404,
+            detail="Service introuvable ou non autorisé.",
+        )
+    if (
+        normalize_pricing_mode(target_service.mode_tarification)
+        != data.mode_tarification
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Le mode du tarif doit correspondre au mode du service.",
+        )
+
+    for key, value in data.model_dump().items():
         setattr(tarif, key, value)
 
     db.commit()

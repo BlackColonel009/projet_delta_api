@@ -7,9 +7,13 @@ from fastapi import HTTPException
 from app.routes.notification import (
     get_company_daily_reminder,
     trigger_company_alarm_test,
+    update_company_alarm_sound,
     update_company_daily_reminder,
 )
-from app.schemas.notification_schema import CompanyReminderUpdate
+from app.schemas.notification_schema import (
+    CompanyAlarmSoundUpdate,
+    CompanyReminderUpdate,
+)
 
 
 class _FakeQuery:
@@ -54,6 +58,8 @@ def _owner():
         daily_report_reminder_minute=0,
         daily_report_reminder_revision=0,
         daily_report_reminder_updated_at=None,
+        daily_report_alarm_sound="signature",
+        daily_report_alarm_sound_revision=0,
     )
 
 
@@ -74,6 +80,7 @@ class CompanyReminderTests(unittest.TestCase):
 
         self.assertEqual(result["hour"], 18)
         self.assertFalse(result["enabled"])
+        self.assertEqual(result["sound_id"], "signature")
 
     def test_non_admin_subuser_cannot_change_schedule(self):
         owner = _owner()
@@ -132,6 +139,41 @@ class CompanyReminderTests(unittest.TestCase):
         self.assertEqual(db.added.parent_user_id, owner.id)
         self.assertTrue(db.added.is_read)
         self.assertEqual(db.commits, 1)
+
+    def test_main_user_applies_alarm_sound_to_company(self):
+        owner = _owner()
+        db = _FakeDb(owner)
+
+        result = update_company_alarm_sound(
+            CompanyAlarmSoundUpdate(sound_id="urgent"),
+            db=db,
+            current_user=owner,
+        )
+
+        self.assertEqual(result["sound_id"], "urgent")
+        self.assertEqual(result["sound_revision"], 1)
+        self.assertEqual(result["revision"], 1)
+        self.assertEqual(db.commits, 1)
+
+    def test_subuser_admin_cannot_apply_company_alarm_sound(self):
+        owner = _owner()
+        db = _FakeDb(owner)
+        admin = SimpleNamespace(
+            id=8,
+            is_main_user=False,
+            parent_user_id=42,
+            role="admin",
+        )
+
+        with self.assertRaises(HTTPException) as caught:
+            update_company_alarm_sound(
+                CompanyAlarmSoundUpdate(sound_id="soft"),
+                db=db,
+                current_user=admin,
+            )
+
+        self.assertEqual(caught.exception.status_code, 403)
+        self.assertEqual(db.commits, 0)
 
     def test_non_admin_subuser_cannot_send_alarm_test(self):
         owner = _owner()

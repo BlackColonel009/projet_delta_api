@@ -1,5 +1,6 @@
 # ✅ app/schemas/schemas_notification.py
 import re
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from datetime import datetime
@@ -62,6 +63,15 @@ class CompanyReminderUpdate(BaseModel):
     minute: int = Field(ge=0, le=59)
 
 
+AlarmSoundId = Literal["signature", "soft", "dynamic", "urgent", "digital"]
+
+
+class CompanyAlarmSoundUpdate(BaseModel):
+    sound_id: AlarmSoundId
+
+
 class CompanyReminderOut(CompanyReminderUpdate):
+    sound_id: AlarmSoundId = "signature"
+    sound_revision: int = 0
     revision: int
     updated_at: datetime | None = None

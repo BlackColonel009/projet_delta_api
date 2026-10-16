@@ -8,6 +8,7 @@ from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
 from app.utils.logger import log_action
+from sqlalchemy import func
 
 router = APIRouter(prefix="/depot-services", tags=["Dépôt - Services"])
 
@@ -19,10 +20,18 @@ def create_depot_service(
     current_user=Depends(check_role([RoleEnum.admin]))
 ):
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    if db.query(DepotService).filter(DepotService.nom == data.nom, DepotService.user_id == parent_user_id).first():
+    normalized_name = data.nom.strip()
+    if db.query(DepotService).filter(
+        func.lower(DepotService.nom) == normalized_name.lower(),
+        DepotService.user_id == parent_user_id,
+    ).first():
         raise HTTPException(status_code=400, detail="Ce service existe déjà.")
 
-    service = DepotService(**data.dict(), user_id=parent_user_id)
+    service = DepotService(
+        **data.model_dump(exclude={"nom"}),
+        nom=normalized_name,
+        user_id=parent_user_id,
+    )
     db.add(service)
     db.commit()
     db.refresh(service)

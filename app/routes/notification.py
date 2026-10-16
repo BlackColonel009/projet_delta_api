@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from app.models.model_notification import Notification
 from app.models.model_user import User
 from app.schemas.notification_schema import (
+    CompanyAlarmSoundUpdate,
     CompanyReminderOut,
     CompanyReminderUpdate,
     NotificationCreate,
@@ -41,6 +42,12 @@ def _reminder_payload(owner: User) -> dict:
         "enabled": bool(owner.daily_report_reminder_enabled),
         "hour": owner.daily_report_reminder_hour,
         "minute": owner.daily_report_reminder_minute,
+        "sound_id": getattr(
+            owner, "daily_report_alarm_sound", "signature"
+        ) or "signature",
+        "sound_revision": getattr(
+            owner, "daily_report_alarm_sound_revision", 0
+        ) or 0,
         "revision": owner.daily_report_reminder_revision,
         "updated_at": owner.daily_report_reminder_updated_at,
     }
@@ -157,6 +164,36 @@ def update_company_daily_reminder(
     owner.daily_report_reminder_enabled = data.enabled
     owner.daily_report_reminder_hour = data.hour
     owner.daily_report_reminder_minute = data.minute
+    owner.daily_report_reminder_revision = (
+        owner.daily_report_reminder_revision or 0
+    ) + 1
+    owner.daily_report_reminder_updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(owner)
+    return _reminder_payload(owner)
+
+
+@router.put("/daily-reminder/sound", response_model=CompanyReminderOut)
+def update_company_alarm_sound(
+    data: CompanyAlarmSoundUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    """Applique une sonnerie à tous les appareils de l'entreprise."""
+    if not current_user.is_main_user:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Seul le compte principal peut appliquer une sonnerie "
+                "à toute l’entreprise."
+            ),
+        )
+
+    owner = _company_owner(db, current_user)
+    owner.daily_report_alarm_sound = data.sound_id
+    owner.daily_report_alarm_sound_revision = (
+        getattr(owner, "daily_report_alarm_sound_revision", 0) or 0
+    ) + 1
     owner.daily_report_reminder_revision = (
         owner.daily_report_reminder_revision or 0
     ) + 1

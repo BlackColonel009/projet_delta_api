@@ -9,7 +9,8 @@ def log_action(
     type_entite: str,
     entite_id: Optional[int] = None,
     current_user=None,
-    details: Optional[str] = None
+    details: Optional[str] = None,
+    commit: bool = True,
 ):
     """
     📦 Enregistre une action dans l'historique général.
@@ -44,4 +45,7 @@ def log_action(
         nom_sub_user=nom_sub_user,
     )
     db.add(h)
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()

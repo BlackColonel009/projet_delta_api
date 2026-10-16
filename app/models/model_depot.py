@@ -13,7 +13,13 @@ class Depot(Base):
 
     description_bien = Column(String, nullable=False)
     date_depot = Column(DateTime, default=datetime.utcnow)
+    date_stockage = Column(DateTime, nullable=True)
+    date_pret_retrait = Column(DateTime, nullable=True)
     date_retrait = Column(DateTime, nullable=True)
+    date_annulation = Column(DateTime, nullable=True)
+    motif_annulation = Column(String, nullable=True)
+    statut_modifie_le = Column(DateTime, nullable=True)
+    statut_modifie_par = Column(Integer, ForeignKey("users.id"), nullable=True)
     statut = Column(String, default="en_attente")
 
     quantite = Column(Integer, nullable=False, default=1)
@@ -31,8 +37,11 @@ class Depot(Base):
     facture = relationship("FactureDepot", back_populates="depot", uselist=False)
 
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # <-- nouveau champ
-    user = relationship("User", back_populates="depots")
+    user = relationship("User", back_populates="depots", foreign_keys=[user_id])
 
+    @property
+    def facture_depot_id(self):
+        return self.facture.id if self.facture else None
 
 
     def __repr__(self):

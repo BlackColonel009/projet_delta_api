@@ -1,10 +1,14 @@
 from datetime import datetime
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.mail import send_email_message
+from app.email.branded_templates import payment_confirmation_email
 from app.utils.i18n import language_of, translated
 from app.database import get_db
 from app.models.model_commande import CommandeVente
+from app.models.model_clientfollowup import ClientFollowup, FollowupStatus
 from app.models.model_paiement import Paiement
 from app.models.model_facture import Facture
 from app.models.model_produit import Produit
@@ -70,6 +74,23 @@ async def create_paiement(
             if commande:
                 
                 commande.statut = "validée"
+                followup = db.query(ClientFollowup).filter(
+                    ClientFollowup.commande_id == commande.id,
+                    ClientFollowup.user_id == parent_user_id,
+                    ClientFollowup.type_followup == "relance_paiement",
+                ).first()
+                if followup:
+                    followup.type_followup = "fidélisation"
+                    followup.statut = FollowupStatus.en_attente
+                    followup.payment_reminder_enabled = False
+                    thank_you_delay = getattr(
+                        facture.client,
+                        "followup_thank_you_delay_days",
+                        1,
+                    )
+                    followup.date_prochain_envoi = datetime.utcnow() + timedelta(
+                        days=thank_you_delay
+                    )
                 # ✅ Marquer toutes les unités liées comme vendues
                 unites = db.query(UniteProduit).filter(
                     UniteProduit.commande_vente_id == commande.id,
@@ -122,42 +143,29 @@ async def envoyer_mail_confirmation_paiement(client, facture, paiement, total_pa
     tr = lambda fr, en: translated(language, fr, en)
     sujet = tr(f"Confirmation de paiement - Facture #{facture.id}", f"Payment confirmation - Invoice #{facture.id}")
     devise = facture.user.devise if hasattr(facture, "user") else ""
-    
-
-    contenu = tr(f"""
-    Bonjour {client.nom},
-
-    Nous vous confirmons la réception d’un paiement de {paiement.montant:.2f} {devise}
-    pour la facture n°{facture.id} datée du {facture.date_creation.strftime('%d/%m/%Y')}.
-
-    Statut actuel de la facture : {facture.statut.upper()}.
-    Montant total dû : {facture.total_ttc:.2f} {devise}
-    Total payé à ce jour : {facture.total_ttc if facture.statut == "payée" else total_paye:.2f} {devise}
-    Moyen de paiement utilisé : {paiement.moyen_paiement}
-    
-    Merci pour votre confiance.
-
-    — L’équipe {facture.user.societe_ou_entreprise if facture.user else "Trade Care"}
-    """, f"""
-    Hello {client.nom},
-
-    We confirm receipt of a payment of {paiement.montant:.2f} {devise}
-    for invoice No. {facture.id}, dated {facture.date_creation.strftime('%d/%m/%Y')}.
-
-    Current invoice status: {facture.statut.upper()}.
-    Total amount due: {facture.total_ttc:.2f} {devise}
-    Total paid to date: {facture.total_ttc if facture.statut == "payée" else total_paye:.2f} {devise}
-    Payment method: {paiement.moyen_paiement}
-
-    Thank you for your trust.
-
-    — The {facture.user.societe_ou_entreprise if facture.user else "Trade Care"} team
-    """)
+    paid = min(float(total_paye or 0), float(facture.total_ttc or 0))
+    balance = max(float(facture.total_ttc or 0) - paid, 0.0)
+    is_settled = balance <= 0.01 or facture.statut == "payée"
+    contenu = payment_confirmation_email(
+        user=facture.user,
+        client_name=client.nom,
+        invoice_id=facture.id,
+        invoice_date=facture.date_creation,
+        payment_amount=paiement.montant,
+        payment_method=paiement.moyen_paiement,
+        total=facture.total_ttc,
+        paid=paid,
+        balance=balance,
+        currency=devise,
+        is_settled=is_settled,
+    )
 
     await send_email_message(
         to_email=client.email,
         subject=sujet,
         body=contenu,
+        reply_to=facture.user.email if facture.user else None,
+        is_html=True,
     )
 
 
@@ -230,7 +238,31 @@ def delete_paiement(
     else:
         facture.statut = "non payée"
 
-        # ✅ Si c'était une vente, remettre les unités en "disponible"
+    # Une suppression peut rouvrir une facture auparavant soldee. La relance
+    # de paiement doit alors reprendre, au lieu de laisser le suivi dans le
+    # scenario de fidelisation.
+    if total_paye < facture.total_ttc and facture.type.value == "vente":
+        commande_ouverte = db.query(CommandeVente).filter(
+            CommandeVente.id == facture.commande_id,
+            CommandeVente.user_id == parent_user_id,
+        ).first()
+        if commande_ouverte:
+            commande_ouverte.statut = "en_attente"
+            followup = db.query(ClientFollowup).filter(
+                ClientFollowup.commande_id == commande_ouverte.id,
+                ClientFollowup.user_id == parent_user_id,
+            ).first()
+            if followup:
+                followup.type_followup = "relance_paiement"
+                followup.statut = FollowupStatus.en_attente
+                followup.payment_reminder_enabled = True
+                delay = followup.delai_avant_relance or 2
+                followup.date_prochain_envoi = datetime.utcnow() + timedelta(
+                    days=delay
+                )
+
+    # Sans aucun paiement, les unites redeviennent disponibles pour la vente.
+    if total_paye <= 0:
         if facture.type.value == "vente":
             commande = db.query(CommandeVente).filter(
                 CommandeVente.id == facture.commande_id,
