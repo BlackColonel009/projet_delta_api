@@ -1,6 +1,8 @@
+import asyncio
 import logging
 
 from fastapi_mail import FastMail, MessageSchema, MessageType
+from fastapi_mail.errors import ConnectionErrors
 from app.config import conf, settings
 
 
@@ -27,6 +29,21 @@ async def send_email_message(
         attachments = attachments or []  # directement une liste de chemins (str)
     )
 
-    fm = FastMail(conf)
-    await fm.send_message(message)
-    return True
+    # Une coupure SMTP ponctuelle (fréquente avec certains hébergeurs) ne doit
+    # pas transformer l'action métier déjà validée en erreur HTTP 500.
+    for attempt in range(2):
+        try:
+            await FastMail(conf).send_message(message)
+            return True
+        except (ConnectionErrors, OSError, TimeoutError) as error:
+            logger.warning(
+                "Échec SMTP vers %s (tentative %s/2): %s",
+                to_email,
+                attempt + 1,
+                error,
+            )
+            if attempt == 0:
+                await asyncio.sleep(1)
+
+    logger.error("E-mail non envoyé à %s après deux tentatives.", to_email)
+    return False

@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     MAIL_SERVER: str = ""
     MAIL_FROM_NAME: str = "Trade Care"
     MAIL_ENABLED: bool = True
+    # Port 587 : STARTTLS=true / SSL_TLS=false.
+    # Port 465 : STARTTLS=false / SSL_TLS=true.
+    MAIL_STARTTLS: bool = True
+    MAIL_SSL_TLS: bool = False
 
     # Le scheduler reste actif par défaut pour préserver le comportement en
     # production. Le fichier .env.local le désactive sur cette machine.
@@ -56,7 +60,7 @@ conf = ConnectionConfig(
     MAIL_PORT=settings.MAIL_PORT,
     MAIL_SERVER=settings.MAIL_SERVER,
     MAIL_FROM_NAME=settings.MAIL_FROM_NAME,
-    MAIL_STARTTLS=True,
-    MAIL_SSL_TLS=False,
+    MAIL_STARTTLS=settings.MAIL_STARTTLS,
+    MAIL_SSL_TLS=settings.MAIL_SSL_TLS,
     USE_CREDENTIALS=True,
 )
