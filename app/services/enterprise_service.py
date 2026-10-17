@@ -155,7 +155,11 @@ def attach_subuser_to_enterprise(
         EnterpriseMembership.sub_user_id == sub_user.id,
         EnterpriseMembership.group_id == group.id,
     ).first()
-    is_director = str(sub_user.role).strip().lower() == "directeur"
+    # Pydantic peut fournir un RoleEnum juste après la création, alors qu'une
+    # lecture depuis SQLAlchemy renvoie une chaîne. Normaliser les deux évite
+    # d'enfermer par erreur un nouveau Directeur dans une seule annexe.
+    normalized_role = str(getattr(sub_user.role, "value", sub_user.role)).strip()
+    is_director = normalized_role.lower() == "directeur"
     target_enterprise = None
     if not is_director:
         enterprise_query = db.query(Enterprise).filter(
@@ -186,7 +190,7 @@ def attach_subuser_to_enterprise(
             )
 
     if membership:
-        membership.role = str(sub_user.role)
+        membership.role = normalized_role
         membership.scope = "group" if is_director else "enterprise"
         membership.enterprise_id = None if is_director else target_enterprise.id
         membership.is_active = True
@@ -196,7 +200,7 @@ def attach_subuser_to_enterprise(
         sub_user_id=sub_user.id,
         group_id=group.id,
         enterprise_id=None if is_director else target_enterprise.id,
-        role=str(sub_user.role),
+        role=normalized_role,
         scope="group" if is_director else "enterprise",
         is_active=True,
     )

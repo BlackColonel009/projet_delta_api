@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from fastapi import FastAPI, Depends, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from jose import JWTError
@@ -174,10 +174,20 @@ app.include_router(
 )
 
 
-# Route de test
-@app.get("/", tags=["Test"])
+TRADE_CARE_BANNER = r"""
+████████╗██████╗  █████╗ ██████╗ ███████╗     ██████╗ █████╗ ██████╗ ███████╗
+╚══██╔══╝██╔══██╗██╔══██╗██╔══██╗██╔════╝    ██╔════╝██╔══██╗██╔══██╗██╔════╝
+   ██║   ██████╔╝███████║██║  ██║█████╗      ██║     ███████║██████╔╝█████╗
+   ██║   ██╔══██╗██╔══██║██║  ██║██╔══╝      ██║     ██╔══██║██╔══██╗██╔══╝
+   ██║   ██║  ██║██║  ██║██████╔╝███████╗    ╚██████╗██║  ██║██║  ██║███████╗
+   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝     ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝
+""".strip()
+
+
+# Route d'accueil de l'API
+@app.get("/", tags=["Test"], response_class=PlainTextResponse)
 def read_root():
-    return {"message": "Bienvenue sur l’API du Projet DELTA 🚀"}
+    return f"\n\nBienvenue sur l’API: \n \n\n{TRADE_CARE_BANNER} 🚀"
 
 @app.head("/")
 def head_root():

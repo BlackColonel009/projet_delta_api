@@ -31,6 +31,7 @@ from app.routes.enterprise_context import (
     search_group_products,
 )
 from app.schemas.enterprise_schema import EnterpriseCreate
+from app.schemas.user_schema import RoleEnum
 
 
 class EnterpriseFoundationTests(unittest.TestCase):
@@ -209,6 +210,25 @@ class EnterpriseFoundationTests(unittest.TestCase):
         self.assertIsNone(membership.enterprise_id)
         _, selected = resolve_active_enterprise(self.db, director, annex.id)
         self.assertEqual(selected.id, annex.id)
+
+    def test_director_enum_from_registration_receives_group_scope(self):
+        owner = self._owner("enum-director@example.com", "Direction Enum")
+        group, _ = create_owner_foundation(self.db, owner)
+        director = SubUser(
+            username="direction-enum",
+            password_hash="test-only",
+            role=RoleEnum.directeur,
+            parent_user_id=owner.id,
+        )
+        self.db.add(director)
+        self.db.flush()
+
+        membership = attach_subuser_to_enterprise(self.db, director)
+
+        self.assertEqual(membership.group_id, group.id)
+        self.assertEqual(membership.role, "Directeur")
+        self.assertEqual(membership.scope, "group")
+        self.assertIsNone(membership.enterprise_id)
 
     def test_local_collaborator_can_be_assigned_to_an_annex_only(self):
         owner = self._owner("annex-owner@example.com", "Groupe Annexes")
