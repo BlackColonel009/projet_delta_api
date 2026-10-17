@@ -72,6 +72,7 @@ class EnterpriseOut(BaseModel):
     invoice_color: str
     simple_invoice_template: str
     professional_invoice_template: str
+    show_invoice_agent: bool
     currency: str
     timezone: str
     map_position_x: float | None

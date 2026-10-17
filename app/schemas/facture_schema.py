@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 from datetime import datetime
 from app.models.model_facture import TypeFacture
@@ -28,6 +28,11 @@ class InvoiceOfficialDateUpdate(BaseModel):
     invoice_date: datetime
 
 
+class InvoiceLineDisplayUpdate(BaseModel):
+    description: str = Field(min_length=1, max_length=500)
+    caracteristiques: Dict[str, str] = Field(default_factory=dict)
+
+
 # class LigneFactureOut(LigneFactureIn):
 #     id: int
 #     total_ligne: float
@@ -40,6 +45,7 @@ class LigneFactureOut(BaseModel):
     quantite: int
     prix_unitaire: float
     total_ligne: float
+    caracteristiques: Optional[Union[Dict[str, str], str]] = None
     produit: Optional[dict] = None  # nom + caracs
     unites: List[UniteProduitOut] = Field(default_factory=list)
 

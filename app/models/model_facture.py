@@ -38,6 +38,7 @@ class Facture(Base):
     
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
+    enterprise = relationship("Enterprise", foreign_keys=[enterprise_id])
     user = relationship("User", foreign_keys=[user_id], backref="factures")
 
     sub_user_id = Column(Integer, ForeignKey("sub_users.id"), nullable=True)
@@ -66,6 +67,8 @@ class LigneFacture(Base):
     facture_id = Column(Integer, ForeignKey("factures.id"))
     produit_id = Column(Integer, ForeignKey("produits.id"))
     description = Column(String, nullable=False)
+    # Copie modifiable uniquement pour cette facture. La fiche produit reste intacte.
+    caracteristiques_snapshot = Column(Text, nullable=True)
     quantite = Column(Integer, nullable=False)
     prix_unitaire = Column(Float, nullable=False)
     # Coût figé au moment de la facturation pour les indicateurs de marge.

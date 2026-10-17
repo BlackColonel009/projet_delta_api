@@ -89,6 +89,7 @@ class Enterprise(Base):
     professional_invoice_template = Column(
         String(48), nullable=False, default="professional_signature"
     )
+    show_invoice_agent = Column(Boolean, nullable=False, default=True)
     currency = Column(String(10), nullable=False, default="XOF")
     timezone = Column(String(64), nullable=False, default="Africa/Lome")
     map_position_x = Column(Float, nullable=True)

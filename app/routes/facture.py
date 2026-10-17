@@ -20,6 +20,7 @@ from app.schemas.facture_depot_schema import FactureDepotOut
 from app.schemas.facture_schema import (
     FactureOut,
     FactureCreate,
+    InvoiceLineDisplayUpdate,
     InvoiceOfficialDateUpdate,
 )
 from fastapi.responses import FileResponse
@@ -37,6 +38,10 @@ from app.services.enterprise_service import (
 from app.services.invoice_snapshot_service import (
     invoice_snapshot_values,
     validate_official_invoice_date,
+)
+from app.services.invoice_line_snapshot_service import (
+    invoice_line_characteristics,
+    serialize_characteristics,
 )
 import os
 
@@ -109,6 +114,9 @@ def create_facture(
             facture_id=facture.id,
             produit_id=ligne.produit_id,
             description=ligne.description,
+            caracteristiques_snapshot=serialize_characteristics(
+                company_products[ligne.produit_id].caracteristiques
+            ),
             quantite=ligne.quantite,
             prix_unitaire=ligne.prix_unitaire,
             cout_achat_unitaire=float(
@@ -122,6 +130,78 @@ def create_facture(
     db.commit()
     db.refresh(facture)
     return facture
+
+
+@router.patch("/{facture_id}/lines/{line_id}/display", response_model=dict)
+def update_invoice_line_display(
+    facture_id: int,
+    line_id: int,
+    payload: InvoiceLineDisplayUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([
+        RoleEnum.admin,
+        RoleEnum.directeur,
+        RoleEnum.gestionnaire_stock,
+        RoleEnum.commercial,
+        RoleEnum.caissier,
+        RoleEnum.comptable,
+    ])),
+):
+    """Edit only the text printed for one invoice line."""
+
+    facture = db.query(Facture).filter(
+        Facture.id == facture_id,
+        enterprise_scope_filter(Facture, current_user),
+    ).first()
+    if not facture:
+        raise HTTPException(status_code=404, detail="Facture non trouvée")
+
+    line = db.query(LigneFacture).filter(
+        LigneFacture.id == line_id,
+        LigneFacture.facture_id == facture.id,
+        LigneFacture.enterprise_id == facture.enterprise_id,
+    ).first()
+    if not line:
+        raise HTTPException(status_code=404, detail="Ligne de facture introuvable")
+
+    description = payload.description.strip()
+    if not description:
+        raise HTTPException(status_code=422, detail="La désignation est obligatoire")
+    characteristics = {
+        key.strip(): value.strip()
+        for key, value in payload.caracteristiques.items()
+        if key.strip()
+    }
+    if len(characteristics) > 30:
+        raise HTTPException(
+            status_code=422,
+            detail="Une ligne ne peut pas contenir plus de 30 caractéristiques.",
+        )
+
+    line.description = description
+    line.caracteristiques_snapshot = serialize_characteristics(characteristics)
+    log_action(
+        db,
+        action="Modification d'une ligne de facture",
+        type_entite="facture",
+        entite_id=facture.id,
+        current_user=current_user,
+        details=(
+            f"Ligne #{line.id} personnalisée pour la facture #{facture.id}; "
+            "la fiche produit n'a pas été modifiée."
+        ),
+        commit=False,
+    )
+    db.commit()
+    db.refresh(line)
+    return {
+        "message": "Ligne de facture mise à jour.",
+        "line": {
+            "id": line.id,
+            "description": line.description,
+            "caracteristiques": invoice_line_characteristics(line),
+        },
+    }
 
 #changer le type de la facture
 @router.patch("/{facture_id}/type", response_model=dict)
@@ -255,6 +335,7 @@ def get_facture(
             "quantite": quantite,
             "prix_unitaire": ligne.prix_unitaire,
             "total_ligne": ligne.total_ligne,
+            "caracteristiques": invoice_line_characteristics(ligne),
             "produit": {
                 "id": produit.id,
                 "nom": produit.nom,
@@ -344,6 +425,7 @@ def list_factures(
                 "quantite": ligne.quantite,
                 "prix_unitaire": ligne.prix_unitaire,
                 "total_ligne": ligne.total_ligne,
+                "caracteristiques": invoice_line_characteristics(ligne),
                 "produit": {
                     "id": produit.id,
                     "nom": produit.nom,

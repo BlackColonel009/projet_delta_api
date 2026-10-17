@@ -21,6 +21,7 @@ from app.services.invoice_snapshot_service import (
     validate_official_invoice_date,
 )
 from app.services.invoice_template_registry import TEMPLATES_BY_CODE
+from app.services.invoice_line_snapshot_service import serialize_characteristics
 import re
 import tempfile
 
@@ -87,6 +88,9 @@ def generate_facture_from_commande(
             facture_id=facture.id,
             produit_id=ligne.produit_id,
             description=ligne.description,
+            caracteristiques_snapshot=serialize_characteristics(
+                getattr(getattr(ligne, "produit", None), "caracteristiques", None)
+            ),
             quantite=ligne.quantite,
             prix_unitaire=ligne.prix_unitaire,
             cout_achat_unitaire=(
@@ -142,45 +146,13 @@ def generate_facture_from_commande(
         os.remove(tmp_path)
     return facture
 
-from num2words import num2words
-
-def montant_to_words(montant: float, devise="FCFA", language="fr"):
-    devise_lettres = {
-        "FCFA": "francs CFA",
-        "XOF": "francs CFA",
-        "EUR": "euros",
-        "€": "euros",
-        "USD": "dollars",
-        "$": "dollars",
-        "GBP": "livres sterling",
-        "£": "livres sterling",
-        "JPY": "yens",
-        "¥": "yens",
-        "CAD": "dollars canadiens",
-        "AUD": "dollars australiens",
-        "CHF": "francs suisses",
-        "CNY": "yuans chinois",
-        "INR": "roupies indiennes",
-        "RUB": "roubles russes",
-        "BRL": "réals brésiliens",
-        "ZAR": "rands sud-africains",
-    }
-    try:
-        mots = num2words(montant, lang=language)
-        devise_texte = (
-            devise_lettres.get(devise.upper(), devise)
-            if language == "fr"
-            else devise
-        )
-        return mots.capitalize() + f" {devise_texte}"
-    except Exception:
-        return f"{montant:.2f} {devise}"
+from app.utils.amount_in_words import amount_to_words
 
 
 def generate_facture_pdf(facture, db: Session ):
     devise = facture.user.devise or "XOF"
     language = language_of(facture.sub_user or facture.user)
-    montant_en_lettres = montant_to_words(facture.total_ttc, devise, language)
+    montant_en_lettres = amount_to_words(facture.total_ttc, devise, language)
     logo_url = public_url(facture.user.logo_entreprise)
 
     template_directory = Path(__file__).resolve().parent.parent / "template"
@@ -252,6 +224,9 @@ def generate_facture_pdf(facture, db: Session ):
             "email": facture.user.email
         },
         vendeur=vendeur,
+        show_agent_name=getattr(
+            getattr(facture, "enterprise", None), "show_invoice_agent", True
+        ),
         logo_url=logo_url,
         montant_en_lettres=montant_en_lettres,
         color_background=palette["primary_pale"],

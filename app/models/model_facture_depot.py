@@ -31,6 +31,7 @@ class FactureDepot(Base):
 
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # 👈 nouvelle colonne
     enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
+    enterprise = relationship("Enterprise", foreign_keys=[enterprise_id])
     user = relationship("User", foreign_keys=[user_id])
 
     issued_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)

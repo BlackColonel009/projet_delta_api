@@ -17,6 +17,8 @@ from reportlab.platypus import (
 )
 
 from app.models.model_unite_produit import UniteProduit
+from app.services.invoice_line_snapshot_service import invoice_line_characteristics
+from app.utils.amount_in_words import amount_to_words
 from app.utils.i18n import language_of, translated
 
 
@@ -39,7 +41,7 @@ def _document_title(facture, tr) -> str:
 def _line_details(db, facture, line, tr) -> str:
     product = line.produit
     details: list[str] = []
-    characteristics = getattr(product, "caracteristiques", None) if product else None
+    characteristics = invoice_line_characteristics(line)
     if isinstance(characteristics, dict):
         details.append(", ".join(f"{key}: {value}" for key, value in characteristics.items()))
     elif characteristics:
@@ -109,28 +111,19 @@ def render_simple_invoice(facture, db, actor) -> BytesIO:
     center = ParagraphStyle("InvoiceCenter", parent=body, alignment=TA_CENTER)
     story = []
 
-    company_name = facture.user.societe_ou_entreprise or facture.user.email
     meta = (
         f"<b>{tr('Date', 'Date')}:</b> {facture.date_creation.strftime('%d/%m/%Y')}<br/>"
         f"<b>N°:</b> {facture.id}"
     )
-    company = (
-        f"<b>{company_name}</b><br/>"
-        f"{facture.user.addresse or ''}<br/>"
-        f"NIF: {facture.user.nif or '-'} · {facture.user.telephone or ''}"
-    )
-
     if receipt:
         story.extend([
-            Paragraph(company, center),
-            Spacer(1, 4 * mm),
             Paragraph(_document_title(facture, tr), heading),
             Paragraph(meta, center),
         ])
     elif compact:
         header = Table(
-            [[Paragraph(_document_title(facture, tr), heading), Paragraph(company, right), Paragraph(meta, right)]],
-            colWidths=[document.width * 0.38, document.width * 0.37, document.width * 0.25],
+            [[Paragraph(_document_title(facture, tr), heading), Paragraph(meta, right)]],
+            colWidths=[document.width * 0.65, document.width * 0.35],
         )
         header.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -140,14 +133,13 @@ def render_simple_invoice(facture, db, actor) -> BytesIO:
         story.append(header)
     else:
         header = Table(
-            [[Paragraph(_document_title(facture, tr), heading), Paragraph(company, right)],
-             [Paragraph(meta, body), ""]],
-            colWidths=[document.width * 0.52, document.width * 0.48],
+            [[Paragraph(_document_title(facture, tr), heading), Paragraph(meta, right)]],
+            colWidths=[document.width * 0.65, document.width * 0.35],
         )
         header.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("LINEBEFORE", (1, 0), (1, -1), 4, accent),
-            ("LEFTPADDING", (1, 0), (1, -1), 10),
+            ("LINEBELOW", (0, 0), (-1, -1), 2, accent),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
         ]))
         story.append(header)
 
@@ -178,7 +170,7 @@ def render_simple_invoice(facture, db, actor) -> BytesIO:
         Paragraph("<b>Total</b>", right),
     ]]
     for line in facture.lignes:
-        product_name = getattr(line.produit, "nom", None) or line.description
+        product_name = line.description or getattr(line.produit, "nom", None)
         details = _line_details(db, facture, line, tr)
         description = f"<b>{product_name}</b>"
         if details:
@@ -234,6 +226,14 @@ def render_simple_invoice(facture, db, actor) -> BytesIO:
         ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
     ]))
     story.append(totals)
+    story.extend([
+        Spacer(1, 4 * mm),
+        Paragraph(
+            f"<b>{tr('Montant en lettres', 'Amount in words')} :</b> "
+            f"{amount_to_words(facture.total_ttc, currency, language)}",
+            small,
+        ),
+    ])
 
     issuer = facture.issuer_name_snapshot or facture.user.username or facture.user.email
     issuer_role = facture.issuer_role_snapshot or tr("Propriétaire", "Owner")
@@ -243,17 +243,27 @@ def render_simple_invoice(facture, db, actor) -> BytesIO:
         Paragraph(f"<b>{status}</b>", ParagraphStyle(
             "InvoiceStatus", parent=heading, fontSize=12, alignment=TA_RIGHT,
         )),
-        Paragraph(
-            f"<b>{tr('Émise par', 'Issued by')}:</b> {issuer} · {issuer_role}",
-            small,
-        ),
     ])
+    show_agent = getattr(
+        getattr(facture, "enterprise", None), "show_invoice_agent", True
+    )
+    if show_agent:
+        story.append(
+            Paragraph(
+                f"<b>{tr('Émise par', 'Issued by')}:</b> {issuer} · {issuer_role}",
+                small,
+            )
+        )
 
     def footer(canvas, doc):
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
         canvas.setFillColor(colors.HexColor("#77727B"))
-        canvas.drawString(doc.leftMargin, 6.5 * mm, company_name)
+        canvas.drawString(
+            doc.leftMargin,
+            6.5 * mm,
+            f"{_document_title(facture, tr)} #{facture.id}",
+        )
         canvas.drawRightString(
             page_size[0] - doc.rightMargin,
             6.5 * mm,

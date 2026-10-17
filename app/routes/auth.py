@@ -350,6 +350,7 @@ def get_company_invoice_theme(
         "facture_color": enterprise.invoice_color,
         "simple_invoice_template": enterprise.simple_invoice_template,
         "professional_invoice_template": enterprise.professional_invoice_template,
+        "show_invoice_agent": enterprise.show_invoice_agent,
     }
 
 
@@ -357,13 +358,21 @@ def get_company_invoice_theme(
 def update_company_invoice_theme(
     data: CompanyInvoiceThemeUpdate,
     db: Session = Depends(get_db),
-    current_user=Depends(check_role([])),
+    current_user=Depends(check_role(["admin"])),
     _=Depends(require_subscription_feature("theme_colors")),
 ):
-    if not getattr(current_user, "is_main_user", False):
+    can_manage_invoice_theme = (
+        getattr(current_user, "is_superuser", False)
+        or getattr(current_user, "is_main_user", False)
+        or str(getattr(current_user, "role", "")).strip().lower() == "admin"
+    )
+    if not can_manage_invoice_theme:
         raise HTTPException(
             status_code=403,
-            detail="Seul le propriétaire peut modifier le thème documentaire.",
+            detail=(
+                "Le thème documentaire est réservé au superadministrateur, "
+                "au propriétaire et aux collaborateurs administrateurs."
+            ),
         )
     facture_color = data.facture_color
     if not facture_color.startswith("#") or len(facture_color) not in (7, 9):
@@ -389,8 +398,10 @@ def update_company_invoice_theme(
     enterprise.invoice_color = facture_color.upper()
     enterprise.simple_invoice_template = simple_template
     enterprise.professional_invoice_template = professional_template
+    if data.show_invoice_agent is not None:
+        enterprise.show_invoice_agent = data.show_invoice_agent
     # Compatibilité des anciens écrans et documents de l'entreprise principale.
-    if enterprise.is_primary:
+    if enterprise.is_primary and getattr(current_user, "is_main_user", False):
         current_user.facture_color = enterprise.invoice_color
     db.commit()
     db.refresh(enterprise)
@@ -398,6 +409,7 @@ def update_company_invoice_theme(
         "facture_color": enterprise.invoice_color,
         "simple_invoice_template": enterprise.simple_invoice_template,
         "professional_invoice_template": enterprise.professional_invoice_template,
+        "show_invoice_agent": enterprise.show_invoice_agent,
     }
 
 

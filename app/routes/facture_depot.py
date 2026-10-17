@@ -26,6 +26,7 @@ from app.utils.logger import log_action
 from app.utils.permissions import All_required, check_role
 from app.utils.subscription_guard import enforce_feature_access, enforce_invoice_quota
 from app.utils.i18n import language_of, translated
+from app.utils.amount_in_words import amount_to_words
 from app.services.enterprise_service import actor_enterprise_id, actor_owner_id, enterprise_scope_filter
 from app.services.invoice_snapshot_service import (
     invoice_snapshot_values,
@@ -290,7 +291,7 @@ def _document(
                 color=design.primary,
                 spaceAfter=12,
             ),
-            design.p(f"{design.name} · {reference}"),
+            design.p(reference),
             design.p(
                 f"{tr('Client', 'Customer')} : {client} · "
                 f"{tr('Date', 'Date')} : {issued.strftime('%d/%m/%Y')}"
@@ -304,11 +305,24 @@ def _document(
             Spacer(1, 14),
             totals,
         ]
-    story += [
-        Spacer(1, 24),
+    story.extend([
+        Spacer(1, 14),
         design.p(
-            f"{tr('Émise par', 'Issued by')} : {issuer} · {issuer_role}"
+            f"<b>{tr('Montant en lettres', 'Amount in words')} :</b> "
+            f"{amount_to_words(facture.montant_ttc or calculated_total, currency, language)}"
         ),
+        Spacer(1, 10),
+    ])
+    show_agent = getattr(
+        getattr(facture, "enterprise", None), "show_invoice_agent", True
+    )
+    if show_agent:
+        story.append(
+            design.p(
+                f"{tr('Émise par', 'Issued by')} : {issuer} · {issuer_role}"
+            )
+        )
+    story.append(
         design.p(
             tr(
                 "Ce document confirme la prise en charge du bien. Conservez sa référence pour tout suivi.",
@@ -319,8 +333,8 @@ def _document(
                 "Merci pour votre confiance. Cette facture clôture les prestations du dépôt.",
                 "Thank you for your trust. This invoice closes the deposit services.",
             )
-        ),
-    ]
+        )
+    )
     buffer = BytesIO()
     design.build(buffer, story, pagesize=A4)
     return buffer

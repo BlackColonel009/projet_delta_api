@@ -49,6 +49,7 @@ class CompanyInvoiceThemeUpdate(BaseModel):
     # mobiles qui n'envoyaient que la couleur.
     simple_invoice_template: Optional[str] = None
     professional_invoice_template: Optional[str] = None
+    show_invoice_agent: Optional[bool] = None
 
 
 class CompanyThemeUpdate(BaseModel):

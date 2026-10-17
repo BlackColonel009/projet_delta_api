@@ -418,9 +418,10 @@
         <tr>
           <td>
             <strong>{{ ligne.description }}</strong>
-            {% if ligne.produit %}
+            {% if ligne.produit or ligne.caracteristiques_snapshot is not none %}
               <div class="item-details">
-                {% set caracteristiques = ligne.produit.caracteristiques|parse_characteristics %}
+                {% set caracteristiques_source = ligne.caracteristiques_snapshot if ligne.caracteristiques_snapshot is not none else ligne.produit.caracteristiques %}
+                {% set caracteristiques = caracteristiques_source|parse_characteristics %}
                 {% if caracteristiques %}
                   {% if caracteristiques is string %}
                     {{ caracteristiques }}
@@ -474,10 +475,12 @@
     <div class="amount-words">
       {{ 'Amount in words:' if lang == 'en' else 'Montant en lettres :' }} <strong>{{ montant_en_lettres }}</strong>
     </div>
+    {% if show_agent_name %}
     <div class="amount-words">
       <strong>{{ 'Issued by:' if lang == 'en' else 'Émise par :' }}</strong>
       {{ vendeur.nom }}{% if vendeur.poste %} · {{ vendeur.poste }}{% endif %}
     </div>
+    {% endif %}
   </div>
 </body>
 </html>
