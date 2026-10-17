@@ -3,7 +3,7 @@ import unicodedata
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.model_enterprise import (
     Enterprise,
@@ -233,7 +233,9 @@ def resolve_membership(db: Session, actor) -> EnterpriseMembership:
 
 
 def accessible_enterprises(db: Session, membership: EnterpriseMembership) -> list[Enterprise]:
-    query = db.query(Enterprise).filter(
+    query = db.query(Enterprise).options(
+        selectinload(Enterprise.service_profiles)
+    ).filter(
         Enterprise.group_id == membership.group_id,
         Enterprise.status == "active",
     )
