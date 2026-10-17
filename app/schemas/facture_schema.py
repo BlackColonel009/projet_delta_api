@@ -21,6 +21,11 @@ class FactureCreate(BaseModel):
     tva: float = Field(default=0.0, ge=0, le=100)
     lignes: List[LigneFactureIn] = Field(min_length=1)
     devise: str = "FCFA"
+    invoice_date: Optional[datetime] = None
+
+
+class InvoiceOfficialDateUpdate(BaseModel):
+    invoice_date: datetime
 
 
 # class LigneFactureOut(LigneFactureIn):
@@ -54,6 +59,12 @@ class FactureOut(BaseModel):
     total_ht: float
     total_ttc: float
     total_paye: float
+    technical_created_at: Optional[datetime] = None
+    issuer_name_snapshot: Optional[str] = None
+    issuer_role_snapshot: Optional[str] = None
+    invoice_color_snapshot: Optional[str] = None
+    simple_template_snapshot: Optional[str] = None
+    professional_template_snapshot: Optional[str] = None
     tva: float
     lignes: List[LigneFactureOut]
     total_paye: float

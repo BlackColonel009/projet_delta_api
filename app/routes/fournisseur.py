@@ -8,6 +8,11 @@ from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
 from app.utils.logger import log_action
+from app.services.enterprise_service import (
+    actor_enterprise_id,
+    actor_owner_id,
+    enterprise_scope_filter,
+)
 
 
 router = APIRouter(prefix="/fournisseurs", tags=["Fournisseurs"])
@@ -19,8 +24,12 @@ def create_fournisseur(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    fournisseur = Fournisseur(**data.dict(), user_id=parent_user_id)
+    parent_user_id = actor_owner_id(current_user)
+    fournisseur = Fournisseur(
+        **data.dict(),
+        user_id=parent_user_id,
+        enterprise_id=actor_enterprise_id(current_user),
+    )
     db.add(fournisseur)
     db.commit()
     db.refresh(fournisseur)
@@ -43,8 +52,10 @@ def list_fournisseurs(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier,  RoleEnum.commercial, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    return db.query(Fournisseur).filter(Fournisseur.user_id == parent_user_id).all()
+    parent_user_id = actor_owner_id(current_user)
+    return db.query(Fournisseur).filter(
+        enterprise_scope_filter(Fournisseur, current_user)
+    ).all()
 
 # 🔍 Voir un fournisseur par ID
 @router.get("/{fournisseur_id}", response_model=FournisseurOut)
@@ -53,10 +64,10 @@ def get_fournisseur(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier,  RoleEnum.commercial, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     fournisseur = db.query(Fournisseur).filter(
         Fournisseur.id == fournisseur_id,
-        Fournisseur.user_id == parent_user_id
+        enterprise_scope_filter(Fournisseur, current_user),
     ).first()
     if not fournisseur:
         raise HTTPException(status_code=404, detail="Fournisseur non trouvé")
@@ -70,10 +81,10 @@ def update_fournisseur(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     fournisseur = db.query(Fournisseur).filter(
         Fournisseur.id == fournisseur_id,
-        Fournisseur.user_id == parent_user_id
+        enterprise_scope_filter(Fournisseur, current_user),
     ).first()
     if not fournisseur:
         raise HTTPException(status_code=404, detail="Fournisseur non trouvé")
@@ -101,10 +112,10 @@ def delete_fournisseur(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     fournisseur = db.query(Fournisseur).filter(
         Fournisseur.id == fournisseur_id,
-        Fournisseur.user_id == parent_user_id
+        enterprise_scope_filter(Fournisseur, current_user),
     ).first()
     if not fournisseur:
         raise HTTPException(status_code=404, detail="Fournisseur non trouvé")

@@ -17,6 +17,7 @@ def _access(**overrides):
         "plan_name": "Bronze Classic",
         "features": frozenset({"reports", "full_qr"}),
         "max_sub_users": 2,
+        "max_enterprises": 1,
         "max_products": 1000,
         "max_clients": 1000,
         "max_invoices_per_month": 200,
@@ -54,6 +55,17 @@ class SubscriptionAccessTests(unittest.TestCase):
         self.assertEqual(caught.exception.detail["code"], "QUOTA_REACHED")
         self.assertEqual(caught.exception.detail["limit"], 2)
         self.assertEqual(caught.exception.detail["current"], 2)
+
+    def test_enterprise_quota_counts_the_primary_enterprise(self):
+        with self.assertRaises(HTTPException) as caught:
+            enforce_quota_limit(
+                _access(max_enterprises=1),
+                "max_enterprises",
+                1,
+                "entreprises et annexes",
+            )
+
+        self.assertEqual(caught.exception.detail["resource"], "max_enterprises")
 
     def test_null_quota_and_superadmin_are_unlimited(self):
         enforce_quota_limit(

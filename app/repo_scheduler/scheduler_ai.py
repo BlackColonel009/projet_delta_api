@@ -197,14 +197,22 @@ def generate_product_pdf(product, user):
 
 
 
-async def run_followup_scheduler(db: Session):
+async def run_followup_scheduler(
+    db: Session,
+    enterprise_id: int | None = None,
+):
     now = datetime.utcnow()
     
 
-    followups = db.query(ClientFollowup).filter(
+    followups_query = db.query(ClientFollowup).filter(
         ClientFollowup.date_prochain_envoi <= now,
         ClientFollowup.statut != FollowupStatus.termine
-    ).all()
+    )
+    if enterprise_id is not None:
+        followups_query = followups_query.filter(
+            ClientFollowup.enterprise_id == enterprise_id
+        )
+    followups = followups_query.all()
 
     
     
@@ -219,7 +227,10 @@ async def run_followup_scheduler(db: Session):
         if not f.client or not f.client.email:
             continue
 
-        commande = db.query(CommandeVente).filter(CommandeVente.id == f.commande_id).first()
+        commande = db.query(CommandeVente).filter(
+            CommandeVente.id == f.commande_id,
+            CommandeVente.enterprise_id == f.enterprise_id,
+        ).first()
         if not commande:
             continue
 
@@ -232,7 +243,8 @@ async def run_followup_scheduler(db: Session):
         # Récupérer tous les produits liés au client
         produits_client = db.query(ClientProduit).filter(
             ClientProduit.client_id == f.client_id,
-            ClientProduit.commande_id == f.commande_id
+            ClientProduit.commande_id == f.commande_id,
+            ClientProduit.enterprise_id == f.enterprise_id,
         ).all()
 
         if f.type_followup == "relance_paiement":
@@ -251,7 +263,10 @@ async def run_followup_scheduler(db: Session):
         # Extraire les noms des produits (backup_nom supposé exister)
         noms_produits_list = [p.nom_produit for p in produits_client]
         # Récupérer la facture liée à la commande (si tu as la facture)
-        facture = db.query(Facture).filter(Facture.commande_id == commande.id).first()
+        facture = db.query(Facture).filter(
+            Facture.commande_id == commande.id,
+            Facture.enterprise_id == f.enterprise_id,
+        ).first()
         if not facture:
             continue
 
@@ -259,7 +274,10 @@ async def run_followup_scheduler(db: Session):
 
         # Calculer le total payé via la table Paiement
         total_paye = db.query(func.coalesce(func.sum(Paiement.montant), 0))\
-            .filter(Paiement.facture_id == facture.id).scalar()
+            .filter(
+                Paiement.facture_id == facture.id,
+                Paiement.enterprise_id == f.enterprise_id,
+            ).scalar()
 
         # Calculer le reste à payer
         reste = facture.total_ttc - total_paye
@@ -350,7 +368,11 @@ async def run_followup_scheduler(db: Session):
                     f.statut = FollowupStatus.termine
                     db.commit()
                     continue
-                produits = get_2_random_produits(db, f.user_id)
+                produits = get_2_random_produits(
+                    db,
+                    f.user_id,
+                    f.enterprise_id,
+                )
                 for p in produits:
                     # Génére le PDF en mémoire
                     # pdf_buffer = generate_product_pdf(p, user)
@@ -386,13 +408,19 @@ async def run_followup_scheduler(db: Session):
         db.commit()
 
 # Simule la récupération de 2 produits aléatoires
-def get_2_random_produits(db: Session, user_id: int):
+def get_2_random_produits(
+    db: Session,
+    user_id: int,
+    enterprise_id: int | None = None,
+):
+    query = db.query(Produit).filter(
+        Produit.image_url != None,
+        Produit.user_id == user_id,
+    )
+    if enterprise_id is not None:
+        query = query.filter(Produit.enterprise_id == enterprise_id)
     return (
-        db.query(Produit)
-        .filter(
-            Produit.image_url != None,
-            Produit.user_id == user_id  # filtre sur l'utilisateur connecté
-        )
+        query
         .order_by(func.random())
         .limit(2)
         .all()

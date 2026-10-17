@@ -12,6 +12,7 @@ from app.models.model_client import Client
 from app.models.model_facture import Facture
 from app.models.model_facture_depot import FactureDepot
 from app.models.model_user import User
+from app.models.model_enterprise import Enterprise, EnterpriseGroup
 from app.schemas.subscription_plan_schema import (
     SubscriptionPlanOut,
     SubscriptionPlanUpdate,
@@ -57,6 +58,15 @@ def get_my_plan_access(
         "max_sub_users": db.query(SubUser).filter(
             SubUser.parent_user_id == access.owner_id
         ).count(),
+        "max_enterprises": (
+            db.query(Enterprise)
+            .join(EnterpriseGroup, EnterpriseGroup.id == Enterprise.group_id)
+            .filter(
+                EnterpriseGroup.owner_user_id == access.owner_id,
+                Enterprise.status == "active",
+            )
+            .count()
+        ),
         "max_products": db.query(Produit).filter(
             Produit.user_id == access.owner_id,
             Produit.date_suppression.is_(None),
@@ -83,6 +93,7 @@ def get_my_plan_access(
         "features": sorted(access.effective_features()),
         "quotas": {
             "max_sub_users": access.quota("max_sub_users"),
+            "max_enterprises": access.quota("max_enterprises"),
             "max_products": access.quota("max_products"),
             "max_clients": access.quota("max_clients"),
             "max_invoices_per_month": access.quota(

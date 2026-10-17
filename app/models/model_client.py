@@ -33,6 +33,7 @@ class Client(Base):
     )
     
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     user = relationship("User", backref="clients")
     commandes = relationship("CommandeVente", back_populates="client")
     factures = relationship("Facture", back_populates="client")

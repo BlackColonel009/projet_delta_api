@@ -37,6 +37,7 @@ class Depot(Base):
     facture = relationship("FactureDepot", back_populates="depot", uselist=False)
 
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # <-- nouveau champ
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     user = relationship("User", back_populates="depots", foreign_keys=[user_id])
 
     @property

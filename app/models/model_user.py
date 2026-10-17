@@ -56,7 +56,11 @@ class User(Base):
     )
     depot_services = relationship("DepotService", back_populates="user")
     depot_tarifs = relationship("DepotTarif", back_populates="user")
-    factures_depot = relationship("FactureDepot", back_populates="user")
+    factures_depot = relationship(
+        "FactureDepot",
+        back_populates="user",
+        foreign_keys="[FactureDepot.user_id]",
+    )
     subscriptions = relationship(
         "Subscription",
         back_populates="user",

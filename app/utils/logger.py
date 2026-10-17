@@ -20,19 +20,32 @@ def log_action(
     if not current_user:
         return  # sécurité
 
-    if getattr(current_user, "is_main_user", False):
+    if getattr(current_user, "is_main_user", False) or getattr(
+        current_user, "is_superuser", False
+    ):
         user_id = current_user.id
         sub_user_id = None
         nom_user = getattr(current_user, "email", None)
         nom_sub_user = None
     else:
         sub_user = db.query(SubUser).filter(SubUser.id == current_user.id).first()
-        parent_user = db.query(User).filter(User.id == sub_user.parent_user_id).first()
+        if not sub_user:
+            # Garde-fou pour les comptes historiques ou objets d'authentification
+            # qui ne sont ni un main user ni une ligne SubUser exploitable.
+            user_id = getattr(current_user, "parent_user_id", None)
+            sub_user_id = getattr(current_user, "id", None)
+            nom_user = None
+            nom_sub_user = getattr(current_user, "username", None)
+            parent_user = None
+        else:
+            parent_user = db.query(User).filter(
+                User.id == sub_user.parent_user_id
+            ).first()
 
-        user_id = parent_user.id
-        sub_user_id = sub_user.id
-        nom_user = parent_user.email
-        nom_sub_user = sub_user.username
+            user_id = parent_user.id if parent_user else sub_user.parent_user_id
+            sub_user_id = sub_user.id
+            nom_user = parent_user.email if parent_user else None
+            nom_sub_user = sub_user.username
 
     h = Historique(
         action=action,
@@ -43,6 +56,7 @@ def log_action(
         details=details,
         nom_user=nom_user,
         nom_sub_user=nom_sub_user,
+        enterprise_id=getattr(current_user, "active_enterprise_id", None),
     )
     db.add(h)
     if commit:

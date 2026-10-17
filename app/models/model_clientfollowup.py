@@ -19,6 +19,7 @@ class ClientFollowup(Base):
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)  # adapte le nom de la table client
     commande_id = Column(Integer, ForeignKey("commandes_ventes.id"), nullable=False)    # adapte le nom de la table commande
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # 
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     date_achat = Column(DateTime, default=datetime.utcnow)
     statut = Column(Enum(FollowupStatus), default=FollowupStatus.en_attente)
     date_prochain_envoi = Column(DateTime, nullable=True)

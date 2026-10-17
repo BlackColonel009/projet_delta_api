@@ -15,6 +15,7 @@ from app.services import bilan_annuel_service as bilan_annuel
 from app.schemas.rapport_financier_schema import RapportAnnuel
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
+from app.services.enterprise_service import actor_enterprise_id
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
@@ -27,15 +28,15 @@ router = APIRouter(prefix="/rapports", tags=["Rapports Annuels"])
 # ➡ Années disponibles
 @router.get("/annees-disponibles")
 def annees_disponibles(db: Session = Depends(get_db), current_user=Depends(check_role([RoleEnum.admin]))):
-    owner_id = current_user.id if current_user.is_main_user else current_user.parent_user_id
+    owner_id = actor_enterprise_id(current_user)
     ventes_years = db.query(func.distinct(func.extract('year', CommandeVente.date_commande))).filter(
-        CommandeVente.user_id == owner_id
+        CommandeVente.enterprise_id == owner_id
     ).all()
     achats_years = db.query(func.distinct(func.extract('year', CommandeAchat.date_commande))).filter(
-        CommandeAchat.user_id == owner_id
+        CommandeAchat.enterprise_id == owner_id
     ).all()
     depenses_years = db.query(func.distinct(func.extract('year', Depense.date_depense))).filter(
-        Depense.user_id == owner_id
+        Depense.enterprise_id == owner_id
     ).all()
     years = set([int(y[0]) for y in ventes_years + achats_years + depenses_years if y[0]])
     return sorted(list(years))
@@ -43,7 +44,7 @@ def annees_disponibles(db: Session = Depends(get_db), current_user=Depends(check
 # ➡ JSON rapport annuel
 @router.get("/annuel/{annee}", response_model=RapportAnnuel)
 def rapport_annuel(annee: int, db: Session = Depends(get_db), current_user=Depends(check_role([RoleEnum.admin]))):
-    user_id = current_user.id if current_user.is_main_user else current_user.parent_user_id
+    user_id = actor_enterprise_id(current_user)
     ventes = bilan_annuel.calcul_ventes(db, annee, user_id)
     achats = bilan_annuel.calcul_achats(db, annee, user_id)
     depenses = bilan_annuel.calcul_depenses(db, annee, user_id)
@@ -75,7 +76,7 @@ def get_mensuel_totaux(db: Session, user_id: int, annee: int):
         extract("month", CommandeVente.date_commande).label("mois"),
         func.sum(CommandeVente.total_ttc).label("total")
     ).filter(
-        CommandeVente.user_id == user_id,
+        CommandeVente.enterprise_id == user_id,
         extract("year", CommandeVente.date_commande) == annee
     ).group_by("mois").all()
 
@@ -83,7 +84,7 @@ def get_mensuel_totaux(db: Session, user_id: int, annee: int):
         extract("month", CommandeAchat.date_commande).label("mois"),
         func.sum(CommandeAchat.total_ttc).label("total")
     ).filter(
-        CommandeAchat.user_id == user_id,
+        CommandeAchat.enterprise_id == user_id,
         extract("year", CommandeAchat.date_commande) == annee
     ).group_by("mois").all()
 
@@ -91,7 +92,7 @@ def get_mensuel_totaux(db: Session, user_id: int, annee: int):
         extract("month", Depense.date_depense).label("mois"),
         func.sum(Depense.montant).label("total")
     ).filter(
-        Depense.user_id == user_id,
+        Depense.enterprise_id == user_id,
         extract("year", Depense.date_depense) == annee
     ).group_by("mois").all()
 
@@ -131,12 +132,16 @@ def creer_graphique_mensuel(data, annee):
 
 
 def calcul_stock_fin_annee(db: Session, user_id: int):
-    produits = db.query(Produit).filter(Produit.user_id == user_id).all()
+    produits = db.query(Produit).filter(Produit.enterprise_id == user_id).all()
     stock_dict = {}
     for p in produits:
-        stock_total = db.query(UniteProduit).filter(UniteProduit.produit_id == p.id).count()
+        stock_total = db.query(UniteProduit).filter(
+            UniteProduit.produit_id == p.id,
+            UniteProduit.enterprise_id == user_id,
+        ).count()
         stock_disponible = db.query(UniteProduit).filter(
             UniteProduit.produit_id == p.id,
+            UniteProduit.enterprise_id == user_id,
             UniteProduit.statut == "disponible"
         ).count()
         stock_dict[p.nom] = {
@@ -151,7 +156,7 @@ def get_factures_non_reglees(db: Session, user_id: int, annee: int):
     # Ventes impayées
     ventes_non_reglees = db.query(Facture).filter(
         Facture.type == "vente",
-        Facture.user_id == user_id,
+        Facture.enterprise_id == user_id,
         Facture.statut.notin_(["payée", "annulée"]),
         extract('year', Facture.date_creation) == annee
     ).all()
@@ -159,7 +164,7 @@ def get_factures_non_reglees(db: Session, user_id: int, annee: int):
     # Achats impayés
     achats_non_reglees = db.query(Facture).filter(
         Facture.type == "achat",
-        Facture.user_id == user_id,
+        Facture.enterprise_id == user_id,
         Facture.statut.notin_(["payée", "annulée"]),
         extract('year', Facture.date_creation) == annee
     ).all()
@@ -176,7 +181,7 @@ def rapport_annuel_pdf(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_enterprise_id(current_user)
     from app.services.report_design import company_owner, build_annual_report
     company = company_owner(db, current_user)
     monthly = {}

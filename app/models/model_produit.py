@@ -33,6 +33,7 @@ class Produit(Base):
 
     
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     user = relationship("User", backref="produits")
 
     date_creation = Column(DateTime, default=datetime.utcnow)

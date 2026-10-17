@@ -15,6 +15,7 @@ from app.utils.logger import log_action
 from typing import Optional
 from sqlalchemy import DateTime
 from datetime import date
+from app.services.enterprise_service import actor_enterprise_id, actor_owner_id, enterprise_scope_filter
 
 
 
@@ -28,7 +29,7 @@ def create_intervention(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.technicien]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     from app.models.model_produit import Produit
 
     intervention = Intervention(
@@ -36,13 +37,21 @@ def create_intervention(
         description=data.description,
         statut=data.statut,
         user_id=parent_user_id,
+        enterprise_id=actor_enterprise_id(current_user),
         produit_ex=data.produit_ex,
         caracteristique_ex=data.caracteristique_ex,
         commentaire_ex=data.commentaire_ex
     )
 
 
-    produits = db.query(Produit).filter(Produit.id.in_(data.produits_ids)).all()
+    if not db.query(Client).filter(Client.id == data.client_id, enterprise_scope_filter(Client, current_user)).first():
+        raise HTTPException(status_code=404, detail="Client introuvable dans cette entreprise")
+    produits = db.query(Produit).filter(
+        Produit.id.in_(data.produits_ids),
+        enterprise_scope_filter(Produit, current_user),
+    ).all()
+    if len(produits) != len(set(data.produits_ids)):
+        raise HTTPException(status_code=404, detail="Produit introuvable dans cette entreprise")
     intervention.produits = produits
 
     db.add(intervention)
@@ -82,7 +91,7 @@ def update_intervention(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.technicien])),
     background_tasks: BackgroundTasks = None
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     user = db.query(User).filter(User.id == parent_user_id).first()  # 👈 le user principal
 
     if not user:
@@ -90,7 +99,7 @@ def update_intervention(
 
     intervention = db.query(Intervention).filter(
         Intervention.id == intervention_id,
-        Intervention.user_id == parent_user_id
+        enterprise_scope_filter(Intervention, current_user),
     ).first()
 
 
@@ -111,7 +120,14 @@ def update_intervention(
 
     # Mise à jour des produits liés
     from app.models.model_produit import Produit
-    produits = db.query(Produit).filter(Produit.id.in_(data.produits_ids)).all()
+    if not db.query(Client).filter(Client.id == data.client_id, enterprise_scope_filter(Client, current_user)).first():
+        raise HTTPException(status_code=404, detail="Client introuvable dans cette entreprise")
+    produits = db.query(Produit).filter(
+        Produit.id.in_(data.produits_ids),
+        enterprise_scope_filter(Produit, current_user),
+    ).all()
+    if len(produits) != len(set(data.produits_ids)):
+        raise HTTPException(status_code=404, detail="Produit introuvable dans cette entreprise")
     intervention.produits = produits
     
     facturation = intervention.commentaire_ex  # pour le mail
@@ -130,7 +146,10 @@ def update_intervention(
 
     # Si statut passe à "termine", on envoie un mail au client
     if statut_avant != "termine" and data.statut == "termine":
-        client = db.query(Client).filter(Client.id == data.client_id).first()
+        client = db.query(Client).filter(
+            Client.id == data.client_id,
+            enterprise_scope_filter(Client, current_user),
+        ).first()
 
         # Préparer le nom du ou des produits
         nom_produits = ""
@@ -189,12 +208,9 @@ def list_interventions(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.technicien]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     offset = (page - 1) * limit
     query = db.query(Intervention).filter(
-        Intervention.user_id == (
-            current_user.parent_user_id if not current_user.is_main_user else current_user.id
-        ),
+        enterprise_scope_filter(Intervention, current_user),
     )
 
     
@@ -234,10 +250,9 @@ def get_intervention(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.technicien]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     i = db.query(Intervention).filter(
         Intervention.id == intervention_id,
-        Intervention.user_id == parent_user_id
+        enterprise_scope_filter(Intervention, current_user),
     ).first()
     if not i:
         raise HTTPException(status_code=404, detail="Intervention non trouvée")
@@ -258,10 +273,9 @@ def delete_intervention(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.technicien]))
 ):  
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     i = db.query(Intervention).filter(
         Intervention.id == intervention_id,
-        Intervention.user_id == parent_user_id
+        enterprise_scope_filter(Intervention, current_user),
     ).first()
     if not i:
         raise HTTPException(status_code=404, detail="Intervention non trouvée")

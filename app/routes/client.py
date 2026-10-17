@@ -10,6 +10,11 @@ from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
 from app.utils.logger import log_action
 from app.utils.subscription_guard import enforce_subscription_quota
+from app.services.enterprise_service import (
+    actor_enterprise_id,
+    actor_owner_id,
+    enterprise_scope_filter,
+)
 
 
 router = APIRouter(prefix="/clients", tags=["Clients"])
@@ -21,7 +26,8 @@ def create_client(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial, RoleEnum.secretaire, RoleEnum.technicien]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
+    enterprise_id = actor_enterprise_id(current_user)
     enforce_subscription_quota(
         db,
         current_user,
@@ -30,7 +36,11 @@ def create_client(
         "clients",
     )
     # 🔐 Liaison automatique avec l'utilisateur connecté
-    client = Client(**data.dict(), user_id=parent_user_id)
+    client = Client(
+        **data.dict(),
+        user_id=parent_user_id,
+        enterprise_id=enterprise_id,
+    )
     db.add(client)
     db.commit()
     db.refresh(client)
@@ -52,8 +62,10 @@ def list_clients(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial, RoleEnum.secretaire, RoleEnum.technicien] ))
 ):  
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    return db.query(Client).filter(Client.user_id == parent_user_id).all()
+    parent_user_id = actor_owner_id(current_user)
+    return db.query(Client).filter(
+        enterprise_scope_filter(Client, current_user)
+    ).all()
 
 # @router.get("/", response_model=List[ClientOut])
 # def get_clients(db: Session = Depends(get_db)):
@@ -67,10 +79,10 @@ def get_client(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial, RoleEnum.secretaire, RoleEnum.technicien]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     client = db.query(Client).filter(
         Client.id == client_id,
-        Client.user_id == parent_user_id
+        enterprise_scope_filter(Client, current_user),
     ).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client non trouvé")
@@ -84,10 +96,10 @@ def update_client(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial, RoleEnum.secretaire]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     client = db.query(Client).filter(
         Client.id == client_id,
-        Client.user_id == parent_user_id
+        enterprise_scope_filter(Client, current_user),
     ).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client non trouvé")
@@ -117,10 +129,10 @@ def delete_client(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial, RoleEnum.secretaire]))
 ):  
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     client = db.query(Client).filter(
         Client.id == client_id,
-        Client.user_id == parent_user_id
+        enterprise_scope_filter(Client, current_user),
     ).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client non trouvé")

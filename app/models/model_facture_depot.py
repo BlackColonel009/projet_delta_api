@@ -30,4 +30,13 @@ class FactureDepot(Base):
     client = relationship("Client")
 
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # 👈 nouvelle colonne
-    user = relationship("User")  
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
+    user = relationship("User", foreign_keys=[user_id])
+
+    issued_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    issued_by_sub_user_id = Column(Integer, ForeignKey("sub_users.id"), nullable=True)
+    issuer_name_snapshot = Column(String(160), nullable=True)
+    issuer_role_snapshot = Column(String(80), nullable=True)
+    invoice_color_snapshot = Column(String(16), nullable=True)
+    simple_template_snapshot = Column(String(48), nullable=True)
+    professional_template_snapshot = Column(String(48), nullable=True)

@@ -13,6 +13,7 @@ class DepotTarifItem(Base):
     quantite = Column(Integer, default=1)
     prix_personnalise = Column(Float, nullable=True)
     description = Column(String, nullable=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     # Instantané financier : une modification ultérieure du catalogue ne doit
     # jamais changer le montant historique d'un dépôt.
     mode_tarification_snapshot = Column(String, nullable=False, default="unitaire")

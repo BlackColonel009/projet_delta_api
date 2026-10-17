@@ -24,6 +24,7 @@ def create_generated_unit(
     suffix: Optional[str] = None,
     date_creation: Optional[datetime] = None,
     commande_achat_id: Optional[int] = None,
+    enterprise_id: Optional[int] = None,
 ) -> UniteProduit:
     """Crée une traçabilité qui ne dépend jamais du nombre d'unités restantes.
 
@@ -31,8 +32,15 @@ def create_generated_unit(
     réutilisé après une suppression. Une valeur temporaire UUID permet de
     respecter la contrainte UNIQUE pendant le premier flush.
     """
+    if enterprise_id is None:
+        from app.models.model_produit import Produit
+
+        enterprise_id = db.query(Produit.enterprise_id).filter(
+            Produit.id == produit_id
+        ).scalar()
     unit = UniteProduit(
         produit_id=produit_id,
+        enterprise_id=enterprise_id,
         tracabilite=f"TMP-{uuid4().hex}",
         statut=statut,
         date_creation=date_creation or datetime.utcnow(),

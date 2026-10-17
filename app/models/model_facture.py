@@ -22,6 +22,7 @@ class Facture(Base):
     fournisseur_id = Column(Integer, ForeignKey("fournisseurs.id"), nullable=True)
     # depot_id = Column(Integer, ForeignKey("depots.id"), nullable=True)
     date_creation = Column(DateTime, default=datetime.utcnow)
+    technical_created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     statut = Column(String, default="en attente")  # ex: brouillon, envoyé, payé, annulé
     remarques = Column(Text, nullable=True)
     total_ht = Column(Float, default=0.0)
@@ -36,10 +37,19 @@ class Facture(Base):
     # depot = relationship("Depot", back_populates="facture", uselist=False)
     
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    user = relationship("User", backref="factures")
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
+    user = relationship("User", foreign_keys=[user_id], backref="factures")
 
     sub_user_id = Column(Integer, ForeignKey("sub_users.id"), nullable=True)
-    sub_user = relationship("SubUser")
+    sub_user = relationship("SubUser", foreign_keys=[sub_user_id])
+
+    issued_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    issued_by_sub_user_id = Column(Integer, ForeignKey("sub_users.id"), nullable=True)
+    issuer_name_snapshot = Column(String(160), nullable=True)
+    issuer_role_snapshot = Column(String(80), nullable=True)
+    invoice_color_snapshot = Column(String(16), nullable=True)
+    simple_template_snapshot = Column(String(48), nullable=True)
+    professional_template_snapshot = Column(String(48), nullable=True)
 
 
     client = relationship("Client", back_populates="factures")
@@ -63,6 +73,7 @@ class LigneFacture(Base):
     total_ligne = Column(Float, nullable=False)
     
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     user = relationship("User", backref="lignes_facture")
 
 

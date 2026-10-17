@@ -13,6 +13,13 @@ from app.utils.security import get_current_user
 from app.models.model_user import User
 from app.schemas.user_schema import RoleEnum
 from app.models.model_unite_produit import UniteProduit
+from app.models.model_categorie import Categorie
+from app.models.model_fournisseur import Fournisseur
+from app.services.enterprise_service import (
+    actor_enterprise_id,
+    actor_owner_id,
+    enterprise_scope_filter,
+)
 from app.services.traceability_service import create_generated_unit
 from app.utils.subscription_guard import (
     enforce_subscription_quota,
@@ -47,8 +54,20 @@ def create_produit(
     db: Session = Depends(get_db),
     current_user = Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
+    enterprise_id = actor_enterprise_id(current_user)
     image_path = None
+
+    if not db.query(Categorie.id).filter(
+        Categorie.id == categorie_id,
+        enterprise_scope_filter(Categorie, current_user),
+    ).first():
+        raise HTTPException(status_code=400, detail="Catégorie non disponible dans cette entreprise")
+    if fournisseur_id is not None and not db.query(Fournisseur.id).filter(
+        Fournisseur.id == fournisseur_id,
+        enterprise_scope_filter(Fournisseur, current_user),
+    ).first():
+        raise HTTPException(status_code=400, detail="Fournisseur non disponible dans cette entreprise")
 
     enforce_subscription_quota(
         db,
@@ -91,6 +110,7 @@ def create_produit(
             emplacement=emplacement,
             image_url=f"/static/produits/{image_filename}",
             user_id=parent_user_id,
+            enterprise_id=enterprise_id,
             a_des_barcodes=False
         )
 
@@ -121,6 +141,7 @@ def create_produit(
             now = datetime.utcnow()
             for code in scanned_barcodes:
                 exists = db.query(UniteProduit).filter(
+                    UniteProduit.enterprise_id == enterprise_id,
                     or_(
                         UniteProduit.code_barre == code,
                         UniteProduit.tracabilite == code,
@@ -142,6 +163,7 @@ def create_produit(
 
                 unites.append(UniteProduit(
                     produit_id=produit.id,
+                    enterprise_id=enterprise_id,
                     tracabilite=code,
                     code_barre=code,
                     statut="disponible",
@@ -179,7 +201,11 @@ def create_produit(
         # ⚙️ Sinon : génération automatique par nombre
         elif quantite  > 0:
             for _ in range(quantite):
-                create_generated_unit(db, produit_id=produit.id)
+                create_generated_unit(
+                    db,
+                    produit_id=produit.id,
+                    enterprise_id=enterprise_id,
+                )
 
             db.flush()
 
@@ -216,10 +242,10 @@ def list_produits(
     db: Session = Depends(get_db),
     current_user=Depends(All_required())
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     return db.query(Produit).filter(
         Produit.date_suppression == None,
-        Produit.user_id == parent_user_id,
+        enterprise_scope_filter(Produit, current_user),
     ).order_by(Produit.date_creation.desc()).all()
 
 # 🔍 Voir un produit par ID
@@ -229,11 +255,11 @@ def get_produit(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     produit = db.query(Produit).filter(
         Produit.id == produit_id,
         Produit.date_suppression == None,
-        Produit.user_id == parent_user_id,
+        enterprise_scope_filter(Produit, current_user),
     ).first()
 
     if not produit:
@@ -266,14 +292,26 @@ def update_produit(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
+    enterprise_id = actor_enterprise_id(current_user)
     produit = db.query(Produit).filter(
         Produit.id == produit_id,
-        Produit.user_id == parent_user_id,
+        enterprise_scope_filter(Produit, current_user),
         Produit.date_suppression.is_(None),
     ).first()
     if not produit:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
+
+    if not db.query(Categorie.id).filter(
+        Categorie.id == categorie_id,
+        enterprise_scope_filter(Categorie, current_user),
+    ).first():
+        raise HTTPException(status_code=400, detail="Catégorie non disponible dans cette entreprise")
+    if fournisseur_id is not None and not db.query(Fournisseur.id).filter(
+        Fournisseur.id == fournisseur_id,
+        enterprise_scope_filter(Fournisseur, current_user),
+    ).first():
+        raise HTTPException(status_code=400, detail="Fournisseur non disponible dans cette entreprise")
 
     # 📷 Mise à jour de l'image si fournie
     if image:
@@ -319,11 +357,13 @@ def update_produit(
             ))
             for code in normalized_barcodes:
                 exists = db.query(UniteProduit).filter(
-                    UniteProduit.code_barre == code
+                    UniteProduit.code_barre == code,
+                    UniteProduit.enterprise_id == enterprise_id,
                 ).first()
                 if not exists:
                     new_unite = UniteProduit(
                         produit_id=produit.id,
+                        enterprise_id=enterprise_id,
                         tracabilite=code,
                         code_barre=code,
                         statut="disponible",
@@ -371,9 +411,12 @@ def delete_produit(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
 
-    produit = db.query(Produit).filter(Produit.id == produit_id).first()
+    produit = db.query(Produit).filter(
+        Produit.id == produit_id,
+        enterprise_scope_filter(Produit, current_user),
+    ).first()
     if not produit:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
 
@@ -403,7 +446,10 @@ def list_deleted_produits(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin]))
 ):
-    return db.query(Produit).filter(Produit.date_suppression.isnot(None)).all()
+    return db.query(Produit).filter(
+        Produit.date_suppression.isnot(None),
+        enterprise_scope_filter(Produit, current_user),
+    ).all()
 
 # 🛆 Scan QR code (vente ou ajout rapide)
 @router.post(
@@ -415,14 +461,19 @@ def scan_qr_code(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock, RoleEnum.technicien, RoleEnum.caissier]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     tracabilite = data.get("tracabilite")
     if not tracabilite:
         raise HTTPException(status_code=400, detail="Tracabilité manquante.")
 
-    produit = db.query(Produit).filter(Produit.tracabilite == tracabilite).first()
+    unite = db.query(UniteProduit).join(UniteProduit.produit).filter(
+        UniteProduit.tracabilite == tracabilite,
+        enterprise_scope_filter(Produit, current_user),
+    ).first()
+    produit = unite.produit if unite else None
 
-    log_action(
+    if produit:
+        log_action(
             db=db,
             current_user=current_user,
             action="Scan QR produit existant",
@@ -464,7 +515,17 @@ def scan_qr_code(
         
 #Stock d'un produit
 @router.get("/{produit_id}/stock-disponible", response_model=dict)
-def get_stock_disponible(produit_id: int, db: Session = Depends(get_db)):
+def get_stock_disponible(
+    produit_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    product_exists = db.query(Produit.id).filter(
+        Produit.id == produit_id,
+        enterprise_scope_filter(Produit, current_user),
+    ).first()
+    if not product_exists:
+        raise HTTPException(status_code=404, detail="Produit non trouvé")
     total = db.query(UniteProduit).filter(UniteProduit.produit_id == produit_id).count()
     disponible = db.query(UniteProduit).filter(
         UniteProduit.produit_id == produit_id,

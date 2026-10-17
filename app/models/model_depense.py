@@ -13,4 +13,5 @@ class Depense(Base):
     date_depense = Column(DateTime, default=datetime.utcnow)
     
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     user = relationship("User", backref="depenses")

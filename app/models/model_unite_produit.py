@@ -1,18 +1,29 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Index, text
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
 
 class UniteProduit(Base):
     __tablename__ = "unites_produit"
+    __table_args__ = (
+        Index(
+            "uq_unites_produit_enterprise_code_barre",
+            "enterprise_id",
+            "code_barre",
+            unique=True,
+            postgresql_where=text("code_barre IS NOT NULL AND enterprise_id IS NOT NULL"),
+            sqlite_where=text("code_barre IS NOT NULL AND enterprise_id IS NOT NULL"),
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     produit_id = Column(Integer, ForeignKey("produits.id", ondelete="CASCADE"), nullable=True)  # ← mettre True
     tracabilite = Column(String, unique=True, index=True, nullable=False)
     statut = Column(String, default="disponible")  # ex: disponible, vendu, réparé, supprimé
     date_creation = Column(DateTime, default=datetime.utcnow)
-    code_barre = Column(String, unique=True, index=True, nullable=True)
+    code_barre = Column(String, index=True, nullable=True)
     date_modification = Column(DateTime, nullable=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     
 
     

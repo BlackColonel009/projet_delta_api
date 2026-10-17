@@ -34,6 +34,7 @@ def _plan_payload(plan: SubscriptionPlan | None):
         "monthly_price": plan.monthly_price,
         "annual_price": plan.annual_price,
         "max_sub_users": plan.max_sub_users,
+        "max_enterprises": plan.max_enterprises,
         "max_products": plan.max_products,
         "max_clients": plan.max_clients,
         "max_invoices_per_month": plan.max_invoices_per_month,

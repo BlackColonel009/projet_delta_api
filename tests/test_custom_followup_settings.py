@@ -45,7 +45,12 @@ class _Db:
 
 
 def _main_user():
-    return SimpleNamespace(id=11, is_main_user=True)
+    return SimpleNamespace(
+        id=11,
+        is_main_user=True,
+        active_enterprise_id=101,
+        active_enterprise_is_primary=True,
+    )
 
 
 class CustomFollowupSettingsTests(unittest.TestCase):

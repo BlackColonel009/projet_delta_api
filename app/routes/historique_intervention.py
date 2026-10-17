@@ -7,6 +7,9 @@ from app.models.model_historique_intervention import HistoriqueIntervention
 from app.schemas.historique_intervention_schema import HistInterventionOut, HistInterventionCreate
 from app.utils.security import get_current_user
 from app.utils.permissions import technicien_required
+from app.models.model_intervention import Intervention
+from app.models.model_produit import Produit
+from app.services.enterprise_service import actor_enterprise_id, actor_owner_id, enterprise_scope_filter
 
 router = APIRouter(prefix="/historiques/interventions", tags=["Historique Interventions"])
 
@@ -17,8 +20,19 @@ def create_historique_intervention(
     db: Session = Depends(get_db),
     current_user= Depends(technicien_required())
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    h = HistoriqueIntervention(**data.dict(), user_id=parent_user_id)
+    if not db.query(Intervention).filter(
+        Intervention.id == data.intervention_id,
+        enterprise_scope_filter(Intervention, current_user),
+    ).first() or not db.query(Produit).filter(
+        Produit.id == data.produit_id,
+        enterprise_scope_filter(Produit, current_user),
+    ).first():
+        raise HTTPException(status_code=404, detail="Intervention ou produit introuvable")
+    h = HistoriqueIntervention(
+        **data.dict(),
+        user_id=actor_owner_id(current_user),
+        enterprise_id=actor_enterprise_id(current_user),
+    )
     db.add(h)
     db.commit()
     db.refresh(h)
@@ -34,8 +48,9 @@ def list_historiques_interventions(
     db: Session = Depends(get_db),
     current_user= Depends(technicien_required())
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    query = db.query(HistoriqueIntervention).filter(HistoriqueIntervention.user_id == parent_user_id)
+    query = db.query(HistoriqueIntervention).filter(
+        enterprise_scope_filter(HistoriqueIntervention, current_user)
+    )
     
     if start:
         query = query.filter(HistoriqueIntervention.date_action >= start)

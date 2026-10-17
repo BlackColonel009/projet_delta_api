@@ -13,6 +13,7 @@ class DepotService(Base):
     date_creation = Column(DateTime, default=datetime.utcnow)
 
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # <-- nouveau champ
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     user = relationship("User", back_populates="depot_services")
 
     __table_args__ = (

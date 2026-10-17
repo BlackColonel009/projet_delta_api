@@ -25,6 +25,9 @@ class SubscriptionFeature(str, Enum):
     multi_depot = "multi_depot"
     priority_support = "priority_support"
     onboarding = "onboarding"
+    multi_enterprise = "multi_enterprise"
+    group_dashboard = "group_dashboard"
+    global_stock_search = "global_stock_search"
 
 
 class SubscriptionPlanUpdate(BaseModel):
@@ -34,6 +37,7 @@ class SubscriptionPlanUpdate(BaseModel):
     annual_price: float = Field(ge=0)
     currency: str = Field(min_length=2, max_length=10)
     max_sub_users: int | None = Field(default=None, ge=0)
+    max_enterprises: int | None = Field(default=None, ge=1)
     max_products: int | None = Field(default=None, ge=0)
     max_clients: int | None = Field(default=None, ge=0)
     max_invoices_per_month: int | None = Field(default=None, ge=0)

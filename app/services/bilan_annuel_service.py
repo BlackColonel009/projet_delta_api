@@ -17,7 +17,7 @@ def calcul_ventes(db: Session, year: int, user_id: int):
             func.sum(Facture.total_ttc).label('total')
         )
         .filter(
-            Facture.user_id == user_id,
+            Facture.enterprise_id == user_id,
             Facture.type == TypeFacture.vente,
             Facture.statut != "annulée",
             extract('year', Facture.date_creation) == year
@@ -37,7 +37,7 @@ def calcul_achats(db: Session, year: int, user_id: int):
             func.sum(CommandeAchat.total_ttc).label('total')
         )
         .filter(
-            CommandeAchat.user_id == user_id,
+            CommandeAchat.enterprise_id == user_id,
             CommandeAchat.statut == "validée",
             extract('year', CommandeAchat.date_commande) == year
         )
@@ -56,7 +56,7 @@ def calcul_depenses(db: Session, year: int, user_id: int):
             func.sum(Depense.montant).label('total')
         )
         .filter(
-            Depense.user_id == user_id,
+            Depense.enterprise_id == user_id,
             extract('year', Depense.date_depense) == year
         )
         .group_by('month')
@@ -74,7 +74,7 @@ def calcul_cout_produits_vendus(db: Session, year: int, user_id: int) -> float:
             0,
         )
     ).join(Facture, Facture.id == LigneFacture.facture_id).filter(
-        Facture.user_id == user_id,
+        Facture.enterprise_id == user_id,
         Facture.type == TypeFacture.vente,
         Facture.statut != "annulée",
         extract('year', Facture.date_creation) == year,
@@ -84,7 +84,7 @@ def calcul_cout_produits_vendus(db: Session, year: int, user_id: int) -> float:
 
 def calcul_total_ventes_ht(db: Session, year: int, user_id: int) -> float:
     value = db.query(func.coalesce(func.sum(Facture.total_ht), 0)).filter(
-        Facture.user_id == user_id,
+        Facture.enterprise_id == user_id,
         Facture.type == TypeFacture.vente,
         Facture.statut != "annulée",
         extract('year', Facture.date_creation) == year,
@@ -100,22 +100,23 @@ def calcul_benefices(ventes_ht, cout_produits_vendus, depenses):
 def calcul_clients(db: Session, year: int, user_id: int):
     # Nouveaux clients de l'année
     nouveaux = db.query(Client).filter(
-        Client.user_id == user_id,
+        Client.enterprise_id == user_id,
         extract('year', Client.date_creation) == year
     ).count()
     # Impayés (toutes factures non réglées)
     impayes = db.query(Facture).filter(
-        Facture.user_id == user_id,
+        Facture.enterprise_id == user_id,
         Facture.statut.notin_(["payée", "annulée"])
     ).count()
     return {"nouveaux": nouveaux, "impayes": impayes}
 
 def calcul_stock_fin_annee(db: Session, year: int, user_id: int):
-    produits = db.query(Produit).filter(Produit.user_id == user_id).all()
+    produits = db.query(Produit).filter(Produit.enterprise_id == user_id).all()
     stock_dict = {}
     for p in produits:
         stock_dispo = db.query(UniteProduit).filter(
             UniteProduit.produit_id == p.id,
+            UniteProduit.enterprise_id == user_id,
             UniteProduit.statut == "disponible"
         ).count()
         stock_dict[p.nom] = float(stock_dispo)  # <- juste la quantité disponible

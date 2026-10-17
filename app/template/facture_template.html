@@ -219,9 +219,137 @@
     .amount-words strong {
       color: #241a29;
     }
+
+    /* Eight deliberately distinct professional compositions. The immutable
+       template code saved on the invoice chooses one of these renderings. */
+    body.template-professional-executive {
+      font-family: Arial, Helvetica, sans-serif;
+      color: #172033;
+    }
+    body.template-professional-executive .accent { height: 14px; }
+    body.template-professional-executive .document-title {
+      font-size: 34px;
+      letter-spacing: 1px;
+      color: {{ color_dark or color_text or '#5c6bc0' }};
+    }
+    body.template-professional-executive .items th { padding: 9px 7px; }
+
+    body.template-professional-modern {
+      font-family: Helvetica, Arial, sans-serif;
+      color: #18212b;
+    }
+    body.template-professional-modern .accent {
+      height: 12px;
+      background-color: {{ color_highlight or color_text or '#5c6bc0' }};
+    }
+    body.template-professional-modern .items th {
+      background-color: #202735;
+      border-bottom: 4px solid {{ color_text or '#5c6bc0' }};
+    }
+
+    body.template-professional-minimal {
+      font-family: Helvetica, Arial, sans-serif;
+      color: #202124;
+    }
+    body.template-professional-minimal .accent { height: 1px; }
+    body.template-professional-minimal .document-title {
+      font-size: 25px;
+      font-weight: normal;
+      letter-spacing: 2px;
+    }
+    body.template-professional-minimal .company-accent { display: none; }
+    body.template-professional-minimal .items th {
+      color: #202124;
+      background-color: #ffffff;
+      border-top: 1px solid #202124;
+      border-bottom: 1px solid #202124;
+    }
+    body.template-professional-minimal .client-card td { background: #ffffff; }
+
+    body.template-professional-ledger {
+      font-family: "Times New Roman", Times, serif;
+      color: #25211d;
+    }
+    body.template-professional-ledger .document-title {
+      font-family: "Times New Roman", Times, serif;
+      font-size: 31px;
+      text-transform: none;
+    }
+    body.template-professional-ledger .items th,
+    body.template-professional-ledger .items td {
+      border: 1px solid #b8afa4;
+      background-color: #ffffff;
+      color: #25211d;
+    }
+    body.template-professional-ledger .items th {
+      border-top: 4px solid {{ color_text or '#5c6bc0' }};
+    }
+
+    body.template-professional-boutique {
+      font-family: Georgia, "Times New Roman", serif;
+      color: #34262d;
+    }
+    body.template-professional-boutique .accent { height: 9px; }
+    body.template-professional-boutique .document-title {
+      font-family: Georgia, "Times New Roman", serif;
+      text-transform: none;
+      font-style: italic;
+    }
+    body.template-professional-boutique .client-card td {
+      border: 1px dashed {{ color_text or '#5c6bc0' }};
+      border-left: 7px solid {{ color_text or '#5c6bc0' }};
+    }
+    body.template-professional-boutique .items th { text-transform: none; }
+
+    body.template-professional-tech {
+      font-family: "Courier New", Courier, monospace;
+      color: #16222b;
+    }
+    body.template-professional-tech .document-title {
+      font-family: "Courier New", Courier, monospace;
+      font-size: 27px;
+      letter-spacing: 1px;
+    }
+    body.template-professional-tech .items th,
+    body.template-professional-tech .items td { border: 1px solid #b9c6ce; }
+    body.template-professional-tech .items tr:nth-child(even) td {
+      background-color: {{ color_background or '#f5f1f8' }};
+    }
+    body.template-professional-tech .totals {
+      font-size: 8px;
+    }
+    body.template-professional-tech .totals .grand-total td {
+      font-size: 9px;
+    }
+
+    body.template-professional-elegant {
+      font-family: Georgia, "Times New Roman", serif;
+      color: #201d24;
+    }
+    body.template-professional-elegant .accent {
+      height: 3px;
+      margin-bottom: 8px;
+    }
+    body.template-professional-elegant .document-title {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 32px;
+      font-weight: normal;
+      text-transform: none;
+    }
+    body.template-professional-elegant .items th {
+      background-color: #ffffff;
+      color: {{ color_dark or color_text or '#5c6bc0' }};
+      border-top: 2px solid {{ color_text or '#5c6bc0' }};
+      border-bottom: 2px solid {{ color_text or '#5c6bc0' }};
+    }
+    body.template-professional-elegant .totals .grand-total td {
+      border-top: 2px solid {{ color_text or '#5c6bc0' }};
+      background-color: #ffffff;
+      color: {{ color_dark or color_text or '#5c6bc0' }};
+    }
   </style>
 </head>
-<body>
+<body class="template-{{ template_code|replace('_', '-') }}">
   <div class="accent"></div>
   <div class="page">
     <table class="header">
@@ -345,6 +473,10 @@
 
     <div class="amount-words">
       {{ 'Amount in words:' if lang == 'en' else 'Montant en lettres :' }} <strong>{{ montant_en_lettres }}</strong>
+    </div>
+    <div class="amount-words">
+      <strong>{{ 'Issued by:' if lang == 'en' else 'Émise par :' }}</strong>
+      {{ vendeur.nom }}{% if vendeur.poste %} · {{ vendeur.poste }}{% endif %}
     </div>
   </div>
 </body>

@@ -24,6 +24,8 @@ import os
 import tempfile
 
 from app.services.generate_facture_from_commande import generate_facture_pdf
+from app.services.simple_invoice_renderer import render_simple_invoice
+from app.services.enterprise_service import enterprise_scope_filter
 from app.utils.subscription_guard import enforce_feature_access
 from app.utils.i18n import language_of, translated
 
@@ -51,7 +53,7 @@ def preview_facture_pdf(
         joinedload(Facture.paiements)
     ).filter(
         Facture.id == facture_id,
-        Facture.user_id == parent_user_id,
+        enterprise_scope_filter(Facture, current_user),
     ).first()
 
     if not facture:
@@ -66,6 +68,11 @@ def preview_facture_pdf(
             filename=f"facture_professionnelle_{facture.id}.pdf",
             background=BackgroundTask(os.remove, pdf_path),
         )
+
+    pdf_buffer = render_simple_invoice(facture, db, current_user)
+    return StreamingResponse(pdf_buffer, media_type="application/pdf", headers={
+        "Content-Disposition": f"inline; filename=facture_{facture.id}.pdf"
+    })
 
     total_paye = sum(p.montant for p in facture.paiements) if facture.paiements else 0.0
 
@@ -83,6 +90,10 @@ def preview_facture_pdf(
     y -= 1.2 * cm
     pdf.setFont("Helvetica", 11)
     pdf.drawString(2 * cm, y, f"{tr('Date :', 'Date:')} {facture.date_creation.strftime('%d/%m/%Y')}")
+    y -= 0.8 * cm
+    issuer = facture.issuer_name_snapshot or getattr(facture.user, "username", None) or facture.user.email
+    issuer_role = facture.issuer_role_snapshot or tr("Propriétaire", "Owner")
+    pdf.drawString(2 * cm, y, f"{tr('Émise par :', 'Issued by:')} {issuer} · {issuer_role}")
     y -= 0.8 * cm
 
     if facture.client:
@@ -296,7 +307,7 @@ async def send_facture_to_client_memory(
         joinedload(Facture.paiements)
     ).filter(
         Facture.id == facture_id,
-        Facture.user_id == parent_user_id,
+        enterprise_scope_filter(Facture, current_user),
     ).first()
 
     if not facture:
@@ -334,6 +345,37 @@ async def send_facture_to_client_memory(
             )
         }
 
+    buffer = render_simple_invoice(facture, db, current_user)
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        prefix=f"facture_simple_{facture.id}_",
+        suffix=".pdf",
+        delete=False,
+    ) as pdf_file:
+        pdf_file.write(buffer.getvalue())
+        pdf_path = pdf_file.name
+    try:
+        message = MessageSchema(
+            subject=tr(
+                f"Votre facture #{facture.id}",
+                f"Your invoice #{facture.id}",
+            ),
+            recipients=[facture.client.email],
+            body=tr(
+                f"Bonjour {facture.client.nom},\n\nVeuillez trouver votre facture #{facture.id} en pièce jointe.\n\nMerci pour votre confiance.",
+                f"Hello {facture.client.nom},\n\nPlease find invoice #{facture.id} attached.\n\nThank you for your trust.",
+            ),
+            subtype=MessageType.plain,
+            attachments=[pdf_path],
+        )
+        await FastMail(conf).send_message(message)
+    finally:
+        if os.path.exists(pdf_path):
+            os.remove(pdf_path)
+    return {
+        "message": f"Facture simple #{facture.id} envoyée à {facture.client.email}"
+    }
+
     total_paye = sum(p.montant for p in facture.paiements) if facture.paiements else 0.0
 
     buffer = BytesIO()
@@ -346,6 +388,10 @@ async def send_facture_to_client_memory(
     y -= 1.2 * cm
     pdf.setFont("Helvetica", 11)
     pdf.drawString(2 * cm, y, f"{tr('Date :', 'Date:')} {facture.date_creation.strftime('%d/%m/%Y')}")
+    y -= 0.8 * cm
+    issuer = facture.issuer_name_snapshot or getattr(facture.user, "username", None) or facture.user.email
+    issuer_role = facture.issuer_role_snapshot or tr("Propriétaire", "Owner")
+    pdf.drawString(2 * cm, y, f"{tr('Émise par :', 'Issued by:')} {issuer} · {issuer_role}")
     y -= 0.8 * cm
 
     if facture.client:

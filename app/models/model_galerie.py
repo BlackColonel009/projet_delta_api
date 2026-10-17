@@ -8,6 +8,7 @@ class GaleriePhoto(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     produit_id = Column(Integer, ForeignKey("produits.id"), nullable=False)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     image_url = Column(String, nullable=False)
     date_ajout = Column(DateTime, default=datetime.utcnow)
 

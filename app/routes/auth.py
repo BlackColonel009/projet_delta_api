@@ -13,10 +13,20 @@ from app.models.model_historique_intervention import HistoriqueIntervention
 from app.models.model_intervention import Intervention
 from app.models.model_produit import Produit
 from app.models.model_rapport import Rapport
-from app.schemas.user_schema import CompanyThemeUpdate, DeleteAccountRequest, InterfaceLanguageUpdate, SessionLockUpdate, SessionUnlockRequest, SubUserOut, UserCreate, SubUserCreate, UserLogin, GroupUserLogin
+from app.schemas.user_schema import CompanyInvoiceThemeUpdate, CompanyThemeUpdate, DeleteAccountRequest, InterfaceLanguageUpdate, SessionLockUpdate, SessionUnlockRequest, SubUserOut, UserCreate, SubUserCreate, UserLogin, GroupUserLogin
 from app.models.model_user import User, SubUser
 from app.models.model_role import Role
+from app.models.model_enterprise import Enterprise, EnterpriseMembership
 from app.services.subscription_service import create_free_subscription
+from app.services.enterprise_service import (
+    actor_enterprise_id,
+    attach_subuser_to_enterprise,
+    create_owner_foundation,
+)
+from app.services.invoice_template_registry import (
+    serialized_catalog,
+    validate_template_code,
+)
 from app.utils.security import (
     hash_password, verify_password, create_access_token,
     get_current_user, get_current_sub_user, get_active_user, require_role, 
@@ -24,7 +34,7 @@ from app.utils.security import (
 )
 from app.database import get_db
 from app.utils.logger import log_action
-from app.utils.permissions import All_required
+from app.utils.permissions import All_required, check_role
 from app.utils.subscription_guard import (
     enforce_subscription_quota,
     require_subscription_feature,
@@ -108,9 +118,8 @@ def register_user(data: UserCreate, db: Session = Depends(get_db)):
         interface_language=data.interface_language,
     )
     db.add(new_user)
-    
-    db.flush()  # Parfois suffisant
-    
+    db.flush()
+    create_owner_foundation(db, new_user)
     db.commit()
     
     # 🧠 Fix Render: propagation vers DB réelle
@@ -180,6 +189,8 @@ def register_sub_user(
 
     )
     db.add(new_sub)
+    db.flush()
+    attach_subuser_to_enterprise(db, new_sub, data.enterprise_id)
     db.commit()
     db.refresh(new_sub)
 
@@ -270,8 +281,36 @@ def login_sub_user(data: GroupUserLogin, db: Session = Depends(get_db)):
 
 # 👀 Lister mes sub-users
 @router.get("/my_subusers", tags=["SubUsers"])
-def list_my_subusers(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return db.query(SubUser).filter(SubUser.parent_user_id == current_user.id).all()
+def list_my_subusers(
+    current_user: User = Depends(require_main_user),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(SubUser, EnterpriseMembership, Enterprise)
+        .outerjoin(
+            EnterpriseMembership,
+            EnterpriseMembership.sub_user_id == SubUser.id,
+        )
+        .outerjoin(Enterprise, Enterprise.id == EnterpriseMembership.enterprise_id)
+        .filter(SubUser.parent_user_id == current_user.id)
+        .order_by(SubUser.created_at.desc(), SubUser.id.desc())
+        .all()
+    )
+    return [
+        {
+            "id": sub.id,
+            "username": sub.username,
+            "role": sub.role,
+            "bio": sub.bio,
+            "avatar_url": sub.avatar_url,
+            "telephone": sub.telephone,
+            "created_at": sub.created_at,
+            "enterprise_id": membership.enterprise_id if membership else None,
+            "enterprise_scope": membership.scope if membership else None,
+            "enterprise_name": enterprise.name if enterprise else None,
+        }
+        for sub, membership, enterprise in rows
+    ]
 
 
 @router.put("/theme", tags=["Users"])
@@ -292,19 +331,74 @@ def update_company_theme(
     }
 
 
+@router.get("/facture-theme/catalog", tags=["Users"])
+def get_invoice_template_catalog(current_user=Depends(All_required())):
+    return serialized_catalog()
+
+
+@router.get("/facture-theme", tags=["Users"])
+def get_company_invoice_theme(
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    enterprise = db.query(Enterprise).filter(
+        Enterprise.id == actor_enterprise_id(current_user)
+    ).first()
+    if not enterprise:
+        raise HTTPException(status_code=404, detail="Entreprise introuvable")
+    return {
+        "facture_color": enterprise.invoice_color,
+        "simple_invoice_template": enterprise.simple_invoice_template,
+        "professional_invoice_template": enterprise.professional_invoice_template,
+    }
+
+
 @router.put("/facture-theme", tags=["Users"])
 def update_company_invoice_theme(
-    facture_color: str = Body(..., embed=True),
+    data: CompanyInvoiceThemeUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_main_user),
+    current_user=Depends(check_role([])),
     _=Depends(require_subscription_feature("theme_colors")),
 ):
+    if not getattr(current_user, "is_main_user", False):
+        raise HTTPException(
+            status_code=403,
+            detail="Seul le propriétaire peut modifier le thème documentaire.",
+        )
+    facture_color = data.facture_color
     if not facture_color.startswith("#") or len(facture_color) not in (7, 9):
         raise HTTPException(status_code=422, detail="Couleur de facture invalide")
-    current_user.facture_color = facture_color.upper()
+    enterprise = db.query(Enterprise).filter(
+        Enterprise.id == actor_enterprise_id(current_user)
+    ).first()
+    if not enterprise:
+        raise HTTPException(status_code=404, detail="Entreprise introuvable")
+    try:
+        simple_template = validate_template_code(
+            data.simple_invoice_template or enterprise.simple_invoice_template,
+            "simple",
+        )
+        professional_template = validate_template_code(
+            data.professional_invoice_template
+            or enterprise.professional_invoice_template,
+            "professional",
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    enterprise.invoice_color = facture_color.upper()
+    enterprise.simple_invoice_template = simple_template
+    enterprise.professional_invoice_template = professional_template
+    # Compatibilité des anciens écrans et documents de l'entreprise principale.
+    if enterprise.is_primary:
+        current_user.facture_color = enterprise.invoice_color
     db.commit()
-    db.refresh(current_user)
-    return {"facture_color": current_user.facture_color}
+    db.refresh(enterprise)
+    return {
+        "facture_color": enterprise.invoice_color,
+        "simple_invoice_template": enterprise.simple_invoice_template,
+        "professional_invoice_template": enterprise.professional_invoice_template,
+    }
 
 
 @router.put("/me-sub/password", tags=["SubUsers"])
@@ -454,8 +548,9 @@ def update_subuser(
     avatar_url: Optional[str] = Body(None),
     bio: Optional[str] = Body(None),
     telephone : Optional[str] = Body(None),
+    enterprise_id: Optional[int] = Body(None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_main_user)
 ):
     sub = db.query(SubUser).filter(
         SubUser.id == sub_id,
@@ -490,11 +585,17 @@ def update_subuser(
         if password:
             sub.password_hash = hash_password(password)
 
+    assignment_changed = enterprise_id is not None
     if role is not None:
         normalized_role = role.strip()
         if not normalized_role:
             raise HTTPException(status_code=400, detail="Le rôle est obligatoire")
+        if not db.query(Role).filter(Role.name == normalized_role).first():
+            raise HTTPException(status_code=400, detail="Rôle non autorisé")
         sub.role = normalized_role
+        assignment_changed = True
+    if assignment_changed:
+        attach_subuser_to_enterprise(db, sub, enterprise_id)
     if avatar_url is not None:
         sub.avatar_url = avatar_url.strip() or None
     if bio is not None:
@@ -513,6 +614,17 @@ def update_subuser(
         entite_id=sub.id,
         details=f"Sub-user {sub.username} mis à jour"
     )
+    membership = db.query(EnterpriseMembership).filter(
+        EnterpriseMembership.sub_user_id == sub.id,
+        EnterpriseMembership.is_active.is_(True),
+    ).first()
+    assigned_enterprise = (
+        db.query(Enterprise).filter(
+            Enterprise.id == membership.enterprise_id
+        ).first()
+        if membership and membership.enterprise_id
+        else None
+    )
 
     return {
         "message": "Sous-utilisateur mis à jour avec succès",
@@ -524,12 +636,17 @@ def update_subuser(
             "telephone": sub.telephone,
             "avatar_url": sub.avatar_url,
             "created_at": sub.created_at,
+            "enterprise_id": membership.enterprise_id if membership else None,
+            "enterprise_scope": membership.scope if membership else None,
+            "enterprise_name": (
+                assigned_enterprise.name if assigned_enterprise else None
+            ),
         },
     }
 
 # ❌ Supprimer subuser
 @router.delete("/subuser/{sub_id}", tags=["SubUsers"])
-def delete_subuser(sub_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def delete_subuser(sub_id: int, current_user: User = Depends(require_main_user), db: Session = Depends(get_db)):
     sub = db.query(SubUser).filter(SubUser.id == sub_id, SubUser.parent_user_id == current_user.id).first()
     if not sub:
         raise HTTPException(status_code=404, detail="Sub-user not found")

@@ -16,6 +16,7 @@ class Paiement(Base):
     # commande_id = Column(Integer, ForeignKey("commandes_ventes.id"), nullable=True)
 
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     
     user = relationship("User", backref="paiements")
 

@@ -32,6 +32,7 @@ from app.models.model_produit import Produit
 from app.models.model_unite_produit import UniteProduit
 from app.schemas.user_schema import RoleEnum
 from app.utils.permissions import check_role
+from app.services.enterprise_service import actor_enterprise_id
 
 router = APIRouter(prefix="/export", tags=["Exports Financiers"])
 
@@ -562,46 +563,42 @@ def export_rapport_complet(
         check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable])
     ),
 ):
-    parent_user_id = (
-        current_user.parent_user_id
-        if not current_user.is_main_user
-        else current_user.id
-    )
+    parent_user_id = actor_enterprise_id(current_user)
     company = company_owner(db, current_user)
     devise = company.devise or "FCFA"
     total_ventes = (
         db.query(func.sum(CommandeVente.total_ttc))
-        .filter(CommandeVente.user_id == parent_user_id)
+        .filter(CommandeVente.enterprise_id == parent_user_id)
         .scalar()
         or 0
     )
     total_achats = (
         db.query(func.sum(CommandeAchat.total_ttc))
-        .filter(CommandeAchat.user_id == parent_user_id)
+        .filter(CommandeAchat.enterprise_id == parent_user_id)
         .scalar()
         or 0
     )
     total_depenses = (
         db.query(func.sum(Depense.montant))
-        .filter(Depense.user_id == parent_user_id)
+        .filter(Depense.enterprise_id == parent_user_id)
         .scalar()
         or 0
     )
     ventes = (
         db.query(CommandeVente)
-        .filter(CommandeVente.user_id == parent_user_id)
+        .filter(CommandeVente.enterprise_id == parent_user_id)
         .order_by(CommandeVente.date_commande.desc())
         .all()
     )
     achats = (
         db.query(CommandeAchat)
-        .filter(CommandeAchat.user_id == parent_user_id)
+        .filter(CommandeAchat.enterprise_id == parent_user_id)
         .order_by(CommandeAchat.date_commande.desc())
         .all()
     )
     depenses = (
         db.query(Depense)
-        .filter(Depense.user_id == parent_user_id)
+        .filter(Depense.enterprise_id == parent_user_id)
         .order_by(Depense.date_depense.desc())
         .all()
     )
@@ -628,10 +625,10 @@ def export_rapport_depenses(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier])),
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_enterprise_id(current_user)
     company = company_owner(db, current_user)
     devise = company.devise or "FCFA"
-    depenses = db.query(Depense).filter(Depense.user_id == parent_user_id).order_by(Depense.date_depense.desc()).all()
+    depenses = db.query(Depense).filter(Depense.enterprise_id == parent_user_id).order_by(Depense.date_depense.desc()).all()
     buffer = BytesIO()
     _build_expense_report(buffer, devise, depenses, company=company)
     return _response(buffer, "rapport_depenses.pdf")
@@ -642,12 +639,12 @@ def export_rapport_ventes(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier])),
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_enterprise_id(current_user)
     company = company_owner(db, current_user)
     devise = company.devise or "FCFA"
     ventes = (
         db.query(CommandeVente)
-        .filter(CommandeVente.user_id == parent_user_id)
+        .filter(CommandeVente.enterprise_id == parent_user_id)
         .filter(CommandeVente.statut.in_(["validée", "en_attente"]))
         .order_by(CommandeVente.date_commande.desc())
         .all()
@@ -662,10 +659,10 @@ def export_rapport_achats(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier])),
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_enterprise_id(current_user)
     company = company_owner(db, current_user)
     devise = company.devise or "FCFA"
-    achats = db.query(CommandeAchat).filter(CommandeAchat.user_id == parent_user_id).order_by(CommandeAchat.date_commande.desc()).all()
+    achats = db.query(CommandeAchat).filter(CommandeAchat.enterprise_id == parent_user_id).order_by(CommandeAchat.date_commande.desc()).all()
     buffer = BytesIO()
     _build_purchase_report(buffer, devise, achats, company=company)
     return _response(buffer, "rapport_achats.pdf")
@@ -676,13 +673,13 @@ def export_etat_stock(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier])),
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_enterprise_id(current_user)
     parent_user = getattr(current_user, "parent_user", None)
     company = company_owner(db, current_user)
     devise = company.devise or "FCFA"
     produits = (
         db.query(Produit)
-        .filter(Produit.user_id == parent_user_id, Produit.date_suppression.is_(None))
+        .filter(Produit.enterprise_id == parent_user_id, Produit.date_suppression.is_(None))
         .order_by(Produit.nom.asc())
         .all()
     )
@@ -698,7 +695,8 @@ def export_etat_stock(
         )
         .join(Produit, UniteProduit.produit_id == Produit.id)
         .filter(
-            Produit.user_id == parent_user_id,
+            Produit.enterprise_id == parent_user_id,
+            UniteProduit.enterprise_id == parent_user_id,
             Produit.date_suppression.is_(None),
         )
         .all()

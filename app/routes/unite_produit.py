@@ -16,6 +16,15 @@ from app.schemas.user_schema import RoleEnum
 from app.utils.logger import log_action
 from app.services.traceability_service import create_generated_unit
 from app.utils.subscription_guard import require_subscription_feature
+from app.services.enterprise_service import (
+    actor_enterprise_id,
+    actor_owner_id,
+    enterprise_scope_filter,
+)
+from app.utils.enterprise_context import (
+    ActiveEnterpriseContext,
+    get_active_enterprise_context,
+)
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 from datetime import datetime
@@ -40,11 +49,12 @@ def add_unites_to_produit(
     db: Session = Depends(get_db),
     current_user = Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
+    enterprise_id = actor_enterprise_id(current_user)
     # 🔍 Récupérer le produit
     produit = db.query(Produit).filter(
         Produit.id == produit_id,
-        Produit.user_id == parent_user_id,
+        enterprise_scope_filter(Produit, current_user),
         Produit.date_suppression.is_(None),
     ).first()
     if not produit:
@@ -91,6 +101,7 @@ def add_unites_to_produit(
         for tracabilite in normalized_traces:
             unite = UniteProduit(
                 produit_id=produit.id,
+                enterprise_id=enterprise_id,
                 tracabilite=tracabilite,
                 statut="disponible",
                 date_creation=datetime.utcnow()
@@ -129,12 +140,12 @@ def list_unites_for_produit(
     db: Session = Depends(get_db),
     current_user = Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     from app.models.model_unite_produit import UniteProduit
 
     unites = db.query(UniteProduit).join(UniteProduit.produit).filter(
         UniteProduit.produit_id == produit_id,  # ✅ filtre ajouté
-        Produit.user_id == parent_user_id
+        enterprise_scope_filter(Produit, current_user),
     ).order_by(UniteProduit.date_creation.desc()).all()
 
     return [
@@ -156,11 +167,11 @@ def list_unites_visibles(
     db: Session = Depends(get_db),
     current_user = Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
 
     unites = db.query(UniteProduit).join(UniteProduit.produit).filter(
         UniteProduit.statut.in_(["disponible", "indisponible", "vendu", "en cours"]),  # ✅ inclut les deux
-        Produit.user_id == parent_user_id
+        enterprise_scope_filter(Produit, current_user),
     ).all()
 
     return [
@@ -210,12 +221,15 @@ def purge_temp_units(
 def preview_stock_cleanup(
     db: Session = Depends(get_db),
     current_user=Depends(require_main_user),
+    enterprise_context: ActiveEnterpriseContext = Depends(
+        get_active_enterprise_context
+    ),
 ):
     """Retourne uniquement les volumes; cette route ne modifie aucune donnée."""
     status_rows = (
         db.query(UniteProduit.statut, func.count(UniteProduit.id))
         .join(UniteProduit.produit)
-        .filter(Produit.user_id == current_user.id)
+        .filter(Produit.enterprise_id == enterprise_context.enterprise_id)
         .group_by(UniteProduit.statut)
         .all()
     )
@@ -231,7 +245,7 @@ def preview_stock_cleanup(
         db.query(func.count(func.distinct(UniteProduit.produit_id)))
         .join(UniteProduit.produit)
         .filter(
-            Produit.user_id == current_user.id,
+            Produit.enterprise_id == enterprise_context.enterprise_id,
             UniteProduit.statut.in_(STOCK_CLEANUP_STATUSES),
         )
         .scalar()
@@ -254,6 +268,9 @@ def cleanup_company_stock(
     data: StockCleanupRequest,
     db: Session = Depends(get_db),
     current_user=Depends(require_main_user),
+    enterprise_context: ActiveEnterpriseContext = Depends(
+        get_active_enterprise_context
+    ),
 ):
     """Supprime définitivement les unités disponibles/indisponibles de l'entreprise."""
     if data.confirmation.strip().upper() != STOCK_CLEANUP_CONFIRMATION:
@@ -266,7 +283,7 @@ def cleanup_company_stock(
         db.query(UniteProduit)
         .join(UniteProduit.produit)
         .filter(
-            Produit.user_id == current_user.id,
+            Produit.enterprise_id == enterprise_context.enterprise_id,
             UniteProduit.statut.in_(STOCK_CLEANUP_STATUSES),
         )
         .all()
@@ -303,7 +320,7 @@ def cleanup_company_stock(
                 db.query(Produit)
                 .filter(
                     Produit.id.in_(product_ids),
-                    Produit.user_id == current_user.id,
+                    Produit.enterprise_id == enterprise_context.enterprise_id,
                 )
                 .all()
             )
@@ -352,13 +369,13 @@ def delete_unite_produit(
     db: Session = Depends(get_db),
     current_user = Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     unite = (
         db.query(UniteProduit)
         .join(UniteProduit.produit)
         .filter(
             UniteProduit.id == unite_id,
-            Produit.user_id == parent_user_id,
+            enterprise_scope_filter(Produit, current_user),
         )
         .first()
     )
@@ -420,10 +437,14 @@ def store_temp_barcodes(
     db: Session = Depends(get_db),
     current_user = Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])),
 ):
+    enterprise_id = actor_enterprise_id(current_user)
     inserted = 0
     for code in barcodes:
         # Vérifie si le code existe déjà
-        exist = db.query(UniteProduit).filter(UniteProduit.code_barre == code).first()
+        exist = db.query(UniteProduit).filter(
+            UniteProduit.code_barre == code,
+            UniteProduit.enterprise_id == enterprise_id,
+        ).first()
         if exist:
             continue  # ne pas dupliquer
 
@@ -432,6 +453,7 @@ def store_temp_barcodes(
             code_barre=code,
             statut="temp",
             produit_id=None,
+            enterprise_id=enterprise_id,
             date_creation=datetime.utcnow()
         )
         db.add(unite)
@@ -452,10 +474,11 @@ def lier_barcodes_a_produit(
     db: Session = Depends(get_db),
     current_user = Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])),
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
+    enterprise_id = actor_enterprise_id(current_user)
     produit = db.query(Produit).filter(
         Produit.id == produit_id,
-        Produit.user_id == parent_user_id,
+        enterprise_scope_filter(Produit, current_user),
         Produit.date_suppression.is_(None),
     ).first()
     if not produit:
@@ -474,7 +497,8 @@ def lier_barcodes_a_produit(
 
     for code in normalized_codes:
         unite = db.query(UniteProduit).filter(
-            UniteProduit.code_barre == code
+            UniteProduit.code_barre == code,
+            UniteProduit.enterprise_id == enterprise_id,
         ).first()
         if unite:
             if unite.produit_id == produit_id:
@@ -490,6 +514,7 @@ def lier_barcodes_a_produit(
         else:
             unite = UniteProduit(
                 produit_id=produit_id,
+                enterprise_id=enterprise_id,
                 tracabilite=code,
                 code_barre=code,
                 statut="disponible",
@@ -542,7 +567,7 @@ def get_produits_par_codes(
     db: Session = Depends(get_db),
     current_user = Depends(All_required()),
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     regroupement = {}
     invalid_codes = []
 
@@ -552,7 +577,7 @@ def get_produits_par_codes(
             UniteProduit.produit_id.isnot(None),
             UniteProduit.statut == "disponible"
         ).join(UniteProduit.produit).filter(
-            Produit.user_id == parent_user_id
+            enterprise_scope_filter(Produit, current_user),
         ).first()
 
         if not unite or not unite.produit:
@@ -580,10 +605,10 @@ def get_unite_by_barcode(
     db: Session = Depends(get_db),
     current_user = Depends(All_required()),
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     unite = db.query(UniteProduit).join(UniteProduit.produit).filter(
         UniteProduit.code_barre == code,
-        Produit.user_id == parent_user_id,
+        enterprise_scope_filter(Produit, current_user),
     ).first()
     if not unite:
         raise HTTPException(status_code=404, detail="Code-barre introuvable")

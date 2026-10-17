@@ -8,6 +8,11 @@ from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
 from app.utils.logger import log_action
+from app.services.enterprise_service import (
+    actor_enterprise_id,
+    actor_owner_id,
+    enterprise_scope_filter,
+)
 
 
 router = APIRouter(prefix="/depenses", tags=["Dépenses"])
@@ -19,8 +24,12 @@ def create_depense(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    depense = Depense(**data.dict(), user_id=parent_user_id)  # 🔐 Liaison user
+    parent_user_id = actor_owner_id(current_user)
+    depense = Depense(
+        **data.dict(),
+        user_id=parent_user_id,
+        enterprise_id=actor_enterprise_id(current_user),
+    )
     db.add(depense)
     db.commit()
     db.refresh(depense)
@@ -43,8 +52,9 @@ def list_depenses(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):  
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    return db.query(Depense).filter(Depense.user_id == parent_user_id).order_by(Depense.date_depense.desc()).all()
+    return db.query(Depense).filter(
+        enterprise_scope_filter(Depense, current_user)
+    ).order_by(Depense.date_depense.desc()).all()
 
 # 📁 Filtrer les dépenses par catégorie
 @router.get("/categorie/{categorie}", response_model=List[DepenseOut])
@@ -53,10 +63,12 @@ def list_depenses_par_categorie(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     depenses = (
         db.query(Depense)
-        .filter(Depense.categorie == categorie, Depense.user_id == parent_user_id)
+        .filter(
+            Depense.categorie == categorie,
+            enterprise_scope_filter(Depense, current_user),
+        )
         .order_by(Depense.date_depense.desc())
         .all()
     )
@@ -69,10 +81,9 @@ def delete_depense(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     depense = db.query(Depense).filter(
         Depense.id == depense_id,
-        Depense.user_id == parent_user_id
+        enterprise_scope_filter(Depense, current_user),
     ).first()
     if not depense:
         raise HTTPException(status_code=404, detail="Dépense non trouvée")

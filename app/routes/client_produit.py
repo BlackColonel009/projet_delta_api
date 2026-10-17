@@ -9,26 +9,55 @@ from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
 from app.models.model_client_produit import ClientProduit
+from app.models.model_client import Client
 from app.schemas.client_produit_schema import ClientProduitOut
+from app.schemas.user_schema import RoleEnum
+from app.utils.permissions import check_role
+from app.services.enterprise_service import enterprise_scope_filter
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.lib import colors
 
 router = APIRouter(prefix="/client-produits", tags=["ClientProduit"])
 
+CLIENT_PRODUCT_ROLES = [
+    RoleEnum.admin,
+    RoleEnum.commercial,
+    RoleEnum.caissier,
+    RoleEnum.comptable,
+    RoleEnum.gestionnaire_stock,
+    RoleEnum.secretaire,
+]
+
 # 📋 Liste des produits achetés (actifs uniquement)
 @router.get("/client/{client_id}", response_model=List[ClientProduitOut])
-def get_produits_by_client(client_id: int, db: Session = Depends(get_db)):
+def get_produits_by_client(
+    client_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role(CLIENT_PRODUCT_ROLES)),
+):
+    client = db.query(Client).filter(
+        Client.id == client_id,
+        enterprise_scope_filter(Client, current_user),
+    ).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client introuvable")
     return db.query(ClientProduit).filter(
         ClientProduit.client_id == client_id,
+        enterprise_scope_filter(ClientProduit, current_user),
         (ClientProduit.note == None) | (ClientProduit.note == "")
     ).all()
 
 # 🔍 Détail d’un produit acheté (si actif uniquement)
 @router.get("/{id}", response_model=ClientProduitOut)
-def get_client_produit(id: int, db: Session = Depends(get_db)):
+def get_client_produit(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role(CLIENT_PRODUCT_ROLES)),
+):
     item = db.query(ClientProduit).filter(
         ClientProduit.id == id,
+        enterprise_scope_filter(ClientProduit, current_user),
         (ClientProduit.note == None) | (ClientProduit.note == "")
     ).first()
     if not item:
@@ -39,8 +68,15 @@ def get_client_produit(id: int, db: Session = Depends(get_db)):
 
 # 🗑 Suppression logique d'un lien client-produit
 @router.delete("/{id}")
-def delete_client_produit(id: int, db: Session = Depends(get_db)):
-    item = db.query(ClientProduit).filter(ClientProduit.id == id).first()
+def delete_client_produit(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial])),
+):
+    item = db.query(ClientProduit).filter(
+        ClientProduit.id == id,
+        enterprise_scope_filter(ClientProduit, current_user),
+    ).first()
     if not item:
         raise HTTPException(status_code=404, detail="Achat client non trouvé")
     
@@ -53,14 +89,22 @@ def delete_client_produit(id: int, db: Session = Depends(get_db)):
 
 # export pdf
 @router.get("/{client_id}/export", response_class=StreamingResponse)
-def export_client_produits_pdf(client_id: int, db: Session = Depends(get_db)):
-    from app.models.model_client import Client
-
-    client = db.query(Client).filter(Client.id == client_id).first()
+def export_client_produits_pdf(
+    client_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role(CLIENT_PRODUCT_ROLES)),
+):
+    client = db.query(Client).filter(
+        Client.id == client_id,
+        enterprise_scope_filter(Client, current_user),
+    ).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client introuvable")
 
-    produits_all = db.query(ClientProduit).filter(ClientProduit.client_id == client_id).all()
+    produits_all = db.query(ClientProduit).filter(
+        ClientProduit.client_id == client_id,
+        enterprise_scope_filter(ClientProduit, current_user),
+    ).all()
     if not produits_all:
         raise HTTPException(status_code=404, detail="Aucun produit trouvé pour ce client")
 

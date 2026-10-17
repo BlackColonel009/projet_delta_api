@@ -8,6 +8,7 @@ from app.models.model_commande import CommandeVente, CommandeAchat
 from app.models.model_facture import Facture, LigneFacture, TypeFacture
 from app.models.model_paiement import Paiement
 from app.models.model_depense import Depense
+from app.services.enterprise_service import actor_enterprise_id
 from app.schemas.user_schema import RoleEnum
 from app.utils.subscription_guard import require_subscription_feature
 from app.utils.permissions import check_role
@@ -27,7 +28,9 @@ def get_year(year: int | None):
     return year or datetime.utcnow().year
 
 def get_owner_id(current_user):
-    return current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    # Conserve le nom historique de la variable dans ce module, mais retourne
+    # desormais le perimetre financier actif, pas le proprietaire du groupe.
+    return actor_enterprise_id(current_user)
 
 
 def merge_available_years(*year_groups):
@@ -48,7 +51,7 @@ def merge_available_years(*year_groups):
 
 def _active_invoice_filters(owner_id: int, selected_year: int):
     return (
-        Facture.user_id == owner_id,
+        Facture.enterprise_id == owner_id,
         Facture.type == TypeFacture.vente,
         Facture.statut != "annulée",
         extract("year", Facture.date_creation) == selected_year,
@@ -91,7 +94,7 @@ def _payment_total(
     value = db.query(func.coalesce(func.sum(Paiement.montant), 0)).join(
         Facture, Facture.id == Paiement.facture_id
     ).filter(
-        Facture.user_id == owner_id,
+        Facture.enterprise_id == owner_id,
         Facture.type == invoice_type,
         Facture.statut != "annulée",
         extract("year", Paiement.date_paiement) == selected_year,
@@ -155,7 +158,7 @@ def achats_par_mois(
             func.sum(CommandeAchat.total_ttc).label('total_achats')
         )
         .filter(
-            CommandeAchat.user_id == owner_id,
+            CommandeAchat.enterprise_id == owner_id,
             CommandeAchat.statut == "validée",
             extract('year', CommandeAchat.date_commande) == selected_year
         )
@@ -183,7 +186,7 @@ def depenses_par_mois(
             func.sum(Depense.montant).label('total_depenses')
         )
         .filter(
-            Depense.user_id == owner_id,
+            Depense.enterprise_id == owner_id,
             extract('year', Depense.date_depense) == selected_year
         )
         .group_by('month')
@@ -210,7 +213,7 @@ def depenses_par_categorie(
             func.sum(Depense.montant).label('total_par_categorie')
         )
         .filter(
-            Depense.user_id == owner_id,
+            Depense.enterprise_id == owner_id,
             extract('year', Depense.date_depense) == selected_year,
         )
         .group_by(Depense.categorie)
@@ -252,7 +255,7 @@ def benefice_net(
     metrics = _sales_metrics(db, owner_id, selected_year)
 
     total_depenses = db.query(func.sum(Depense.montant)).filter(
-        Depense.user_id == owner_id,
+        Depense.enterprise_id == owner_id,
         extract('year', Depense.date_depense) == selected_year
     ).scalar() or 0
 
@@ -276,7 +279,7 @@ def tva_collectee(
     total_tva = db.query(
         func.coalesce(func.sum(Facture.total_ttc - Facture.total_ht), 0)
     ).filter(
-        Facture.user_id == owner_id,
+        Facture.enterprise_id == owner_id,
         Facture.type == TypeFacture.vente,
         Facture.statut == "payée",
         extract("year", Facture.date_creation) == selected_year,
@@ -294,7 +297,7 @@ def clients_en_retard(
     owner_id = get_owner_id(current_user)
     factures = db.query(Facture).filter(
         Facture.type == "vente",
-        Facture.user_id == owner_id,
+        Facture.enterprise_id == owner_id,
         Facture.statut.notin_(["payée", "annulée"]),
         extract('year', Facture.date_creation) == selected_year
     ).all()
@@ -325,7 +328,7 @@ def fournisseurs_a_payer(
     owner_id = get_owner_id(current_user)
     factures = db.query(Facture).filter(
         Facture.type == "achat",
-        Facture.user_id == owner_id,
+        Facture.enterprise_id == owner_id,
         Facture.statut.notin_(["payée", "annulée"]),
         extract('year', Facture.date_creation) == selected_year
     ).all()
@@ -359,14 +362,14 @@ def dashboard_overview(
 
     # Achats
     total_achats = db.query(func.sum(CommandeAchat.total_ttc)).filter(
-        CommandeAchat.user_id == owner_id,
+        CommandeAchat.enterprise_id == owner_id,
         CommandeAchat.statut == "validée",
         extract('year', CommandeAchat.date_commande) == selected_year
     ).scalar() or 0
 
     # Dépenses
     total_depenses = db.query(func.sum(Depense.montant)).filter(
-        Depense.user_id == owner_id,
+        Depense.enterprise_id == owner_id,
         extract('year', Depense.date_depense) == selected_year
     ).scalar() or 0
 
@@ -382,7 +385,7 @@ def dashboard_overview(
     tva_collectee = db.query(
         func.coalesce(func.sum(Facture.total_ttc - Facture.total_ht), 0)
     ).filter(
-        Facture.user_id == owner_id,
+        Facture.enterprise_id == owner_id,
         Facture.type == TypeFacture.vente,
         Facture.statut == "payée",
         extract("year", Facture.date_creation) == selected_year,
@@ -391,7 +394,7 @@ def dashboard_overview(
     # Clients en retard
     factures_clients_retard = db.query(Facture).filter(
         Facture.type == "vente",
-        Facture.user_id == owner_id,
+        Facture.enterprise_id == owner_id,
         Facture.statut.notin_(["payée", "annulée"]),
         extract('year', Facture.date_creation) == selected_year
     ).all()
@@ -403,7 +406,7 @@ def dashboard_overview(
     # Fournisseurs à payer
     factures_fournisseurs = db.query(Facture).filter(
         Facture.type == "achat",
-        Facture.user_id == owner_id,
+        Facture.enterprise_id == owner_id,
         Facture.statut.notin_(["payée", "annulée"]),
         extract('year', Facture.date_creation) == selected_year
     ).all()
@@ -456,19 +459,19 @@ def annees_disponibles(
 ):
     owner_id = get_owner_id(current_user)
     years_ventes = db.query(extract("year", Facture.date_creation).label("year")).filter(
-        Facture.user_id == owner_id,
+        Facture.enterprise_id == owner_id,
         Facture.type == TypeFacture.vente,
     )
     years_achats = db.query(extract("year", CommandeAchat.date_commande).label("year")).filter(
-        CommandeAchat.user_id == owner_id
+        CommandeAchat.enterprise_id == owner_id
     )
     years_depenses = db.query(extract("year", Depense.date_depense).label("year")).filter(
-        Depense.user_id == owner_id
+        Depense.enterprise_id == owner_id
     )
     years_paiements = db.query(
         extract("year", Paiement.date_paiement).label("year")
     ).join(Facture, Facture.id == Paiement.facture_id).filter(
-        Facture.user_id == owner_id
+        Facture.enterprise_id == owner_id
     )
 
     return merge_available_years(
@@ -489,7 +492,7 @@ def ventes_annulees(
     from app.models.model_commande import CommandeVente
     owner_id = get_owner_id(current_user)
     commandes = db.query(CommandeVente).filter(
-        CommandeVente.user_id == owner_id,
+        CommandeVente.enterprise_id == owner_id,
         CommandeVente.statut == "annulée"
     ).order_by(CommandeVente.date_commande.desc()).all()
 
@@ -511,7 +514,7 @@ def achats_annules(
     from app.models.model_commande import CommandeAchat
     owner_id = get_owner_id(current_user)
     commandes = db.query(CommandeAchat).filter(
-        CommandeAchat.user_id == owner_id,
+        CommandeAchat.enterprise_id == owner_id,
         CommandeAchat.statut == "annulée"
     ).order_by(CommandeAchat.date_commande.desc()).all()
 

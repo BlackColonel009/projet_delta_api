@@ -27,3 +27,4 @@ class ClientProduit(Base):
     produit = relationship("Produit")
 
     date_modification = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)

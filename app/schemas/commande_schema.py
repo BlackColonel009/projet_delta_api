@@ -15,6 +15,7 @@ class CommandeVenteCreate(BaseModel):
     lignes: List[LigneCommandeVenteCreate] = Field(min_length=1)
     tva_appliquee: bool
     statut: str = "en_attente"
+    invoice_date: Optional[datetime] = None
 
 
 class LigneCommandeAchatCreate(BaseModel):
@@ -27,6 +28,7 @@ class CommandeAchatCreate(BaseModel):
     lignes: List[LigneCommandeAchatCreate] = Field(min_length=1)
     tva_appliquee: bool
     statut: str = "en_attente"
+    invoice_date: Optional[datetime] = None
 
 
 class LigneCommandeOut(BaseModel):

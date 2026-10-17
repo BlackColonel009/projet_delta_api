@@ -14,6 +14,7 @@ from app.schemas.notification_schema import (
 )
 from app.utils.permissions import All_required
 from app.database import get_db
+from app.services.enterprise_service import actor_enterprise_id, actor_owner_id, enterprise_scope_filter
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
 
@@ -85,13 +86,8 @@ def get_notifications(
 
     safe_limit = max(1, min(limit, 100))
     safe_offset = max(0, offset)
-    parent_id = (
-        current_user.id
-        if current_user.is_main_user
-        else current_user.parent_user_id
-    )
     query = db.query(Notification).filter(
-        Notification.parent_user_id == parent_id,
+        enterprise_scope_filter(Notification, current_user),
         Notification.titre != _COMPANY_ALARM_TEST_TITLE,
     )
     if unread_only:
@@ -119,12 +115,13 @@ def create_notification(
     db: Session = Depends(get_db),
     current_user = Depends(All_required())
 ):
-    parent_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_id = actor_owner_id(current_user)
 
     notif = Notification(
         titre=data.titre,
         message=data.message,
         parent_user_id=parent_id,
+        enterprise_id=actor_enterprise_id(current_user),
         user_id=None if current_user.is_main_user else current_user.id,
         sub_user_id=current_user.id if not current_user.is_main_user else None,
         sub_user_name=current_user.username if not current_user.is_main_user else None,
@@ -225,6 +222,7 @@ def trigger_company_alarm_test(
         titre=_COMPANY_ALARM_TEST_TITLE,
         message="Test de l’alarme d’entreprise",
         parent_user_id=owner.id,
+        enterprise_id=actor_enterprise_id(current_user),
         user_id=None if current_user.is_main_user else current_user.id,
         sub_user_id=None if current_user.is_main_user else current_user.id,
         sub_user_name=actor_name,
@@ -249,7 +247,7 @@ def get_latest_company_alarm_test(
     event = (
         db.query(Notification)
         .filter(
-            Notification.parent_user_id == owner.id,
+            enterprise_scope_filter(Notification, current_user),
             Notification.titre == _COMPANY_ALARM_TEST_TITLE,
         )
         .order_by(Notification.created_at.desc(), Notification.id.desc())
@@ -272,7 +270,7 @@ def mark_notification_as_read(
 
     notif = db.query(Notification).filter(
         Notification.id == notif_id,
-        Notification.parent_user_id == current_user.id,
+        enterprise_scope_filter(Notification, current_user),
     ).first()
     if not notif:
         raise HTTPException(status_code=404, detail="Notification non trouvée")

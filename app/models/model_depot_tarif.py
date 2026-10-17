@@ -18,6 +18,7 @@ class DepotTarif(Base):
     service = relationship("DepotService", backref="tarifs")
 
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # <-- nouveau champ
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     user = relationship("User", back_populates="depot_tarifs")
 
 

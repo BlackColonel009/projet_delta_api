@@ -18,6 +18,7 @@ class Fournisseur(Base):
     date_creation = Column(DateTime, default=datetime.utcnow)
     
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     user = relationship("User", backref="fournisseurs")
     commandes = relationship("CommandeAchat", back_populates="fournisseur", cascade="all, delete")
     factures = relationship("Facture", back_populates="fournisseur")

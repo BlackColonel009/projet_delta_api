@@ -13,6 +13,7 @@ class HistoriqueIntervention(Base):
     intervention_id = Column(Integer, ForeignKey("interventions.id"), nullable=False)
     produit_id = Column(Integer, ForeignKey("produits.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     action = Column(Text, nullable=True)  # Exemple : "réparé", "diagnostiqué", "changé RAM"
     date_action = Column(DateTime, default=datetime.utcnow)
     sub_user_id = Column(Integer, ForeignKey("sub_users.id"), nullable=True)

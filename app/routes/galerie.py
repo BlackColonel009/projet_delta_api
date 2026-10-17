@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.model_galerie import GaleriePhoto
 from app.models.model_produit import Produit
+from app.services.enterprise_service import actor_enterprise_id, enterprise_scope_filter
 from typing import List
 from app.schemas.galerie_schema import GalerieOut
 import shutil, os
@@ -28,7 +29,7 @@ def ajouter_photo_galerie(
     )
     produit = db.query(Produit).filter(
         Produit.id == produit_id,
-        Produit.user_id == parent_user_id,
+        enterprise_scope_filter(Produit, current_user),
         Produit.date_suppression.is_(None),
     ).first()
     if not produit:
@@ -44,6 +45,7 @@ def ajouter_photo_galerie(
 
     g = GaleriePhoto(
         produit_id=produit_id,
+        enterprise_id=actor_enterprise_id(current_user),
         image_url=f"/static/galerie/{filename}",
         date_ajout=datetime.utcnow()
     )
@@ -64,7 +66,7 @@ def update_image_galerie(
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     image = db.query(GaleriePhoto).join(GaleriePhoto.produit).filter(
         GaleriePhoto.id == image_id,
-        Produit.user_id == parent_user_id,
+        enterprise_scope_filter(GaleriePhoto, current_user),
     ).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image non trouvée")
@@ -98,7 +100,7 @@ def delete_image_galerie(
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     image = db.query(GaleriePhoto).join(GaleriePhoto.produit).filter(
         GaleriePhoto.id == image_id,
-        Produit.user_id == parent_user_id,
+        enterprise_scope_filter(GaleriePhoto, current_user),
     ).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image non trouvée")
@@ -131,6 +133,6 @@ def get_galerie_by_produit(
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     images = db.query(GaleriePhoto).join(GaleriePhoto.produit).filter(
         GaleriePhoto.produit_id == produit_id,
-        Produit.user_id == parent_user_id,
+        enterprise_scope_filter(GaleriePhoto, current_user),
     ).order_by(GaleriePhoto.date_ajout.desc()).all()
     return images

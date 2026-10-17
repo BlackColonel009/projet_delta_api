@@ -71,6 +71,8 @@ class RapportTests(unittest.TestCase):
             id=5,
             parent_user_id=42,
             is_main_user=False,
+            active_enterprise_id=1,
+            active_enterprise_is_primary=True,
         )
 
         with self.assertRaises(HTTPException) as caught:
@@ -87,6 +89,8 @@ class RapportTests(unittest.TestCase):
             id=5,
             parent_user_id=42,
             is_main_user=False,
+            active_enterprise_id=1,
+            active_enterprise_is_primary=True,
         )
 
         result = delete_rapport(9, db=db, current_user=current_subuser)
@@ -98,7 +102,7 @@ class RapportTests(unittest.TestCase):
     def test_main_user_can_moderate_company_report(self):
         report = SimpleNamespace(id=9, user_id=42, sub_user_id=5)
         db = _FakeDb(report)
-        admin = SimpleNamespace(id=42, is_main_user=True)
+        admin = SimpleNamespace(id=42, is_main_user=True, active_enterprise_id=1, active_enterprise_is_primary=True)
 
         delete_rapport(9, db=db, current_user=admin)
 
@@ -124,6 +128,8 @@ class RapportTests(unittest.TestCase):
             avatar_url=None,
             is_main_user=True,
             is_superuser=False,
+            active_enterprise_id=1,
+            active_enterprise_is_primary=True,
         )
 
         with self.assertRaises(HTTPException) as caught:
@@ -146,6 +152,8 @@ class RapportTests(unittest.TestCase):
             avatar_url=None,
             is_main_user=True,
             is_superuser=False,
+            active_enterprise_id=1,
+            active_enterprise_is_primary=True,
         )
         report = SimpleNamespace(
             id=9,

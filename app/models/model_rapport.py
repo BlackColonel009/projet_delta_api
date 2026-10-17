@@ -16,6 +16,7 @@ class Rapport(Base):
     date_modification = Column(DateTime, nullable=True)
 
     user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     sub_user_id = Column(Integer, ForeignKey("sub_users.id", ondelete="SET NULL"), nullable=True)
 
     user = relationship("User", back_populates="rapports")

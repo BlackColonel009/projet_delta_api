@@ -28,10 +28,14 @@ def company_owner(db, user):
 
 
 class ReportDesign:
-    def __init__(self, company=None):
+    def __init__(self, company=None, primary_color=None, document_template=None):
         self.company = company
+        self.document_template = document_template or "default"
         self.name = getattr(company, 'societe_ou_entreprise', None) or 'Trade Care'
-        self.palette = build_document_palette(THEMES.get(getattr(company, 'app_theme', 'tradecare'), THEMES['tradecare']))
+        theme_color = primary_color or THEMES.get(
+            getattr(company, 'app_theme', 'tradecare'), THEMES['tradecare']
+        )
+        self.palette = build_document_palette(theme_color)
         self.primary = colors.HexColor(self.palette['primary'])
         self.dark = colors.HexColor(self.palette['primary_dark'])
         self.soft = colors.HexColor(self.palette['primary_pale'])
@@ -46,6 +50,24 @@ class ReportDesign:
         self.styles['Heading1'].spaceAfter = 14
         self.styles['Heading2'].textColor = self.dark
         self.styles['Heading2'].spaceBefore = 12
+        if self.document_template in {
+            'professional_ledger',
+            'professional_boutique',
+            'professional_elegant',
+        }:
+            for style_name in ('Title', 'Heading1', 'Heading2', 'ReportBody'):
+                self.styles[style_name].fontName = 'Times-Roman'
+            self.styles['Title'].fontName = 'Times-Bold'
+        elif self.document_template == 'professional_tech':
+            for style_name in ('Title', 'Heading1', 'Heading2', 'ReportBody'):
+                self.styles[style_name].fontName = 'Courier'
+            self.styles['Title'].fontName = 'Courier-Bold'
+        elif self.document_template in {'professional_minimal', 'simple_receipt'}:
+            self.styles['Title'].fontSize = 23
+            self.styles['Title'].leading = 28
+        elif self.document_template == 'professional_executive':
+            self.styles['Title'].fontSize = 32
+            self.styles['Title'].leading = 38
 
     def p(self, text, style='ReportBody'):
         return Paragraph(escape(str(text)), self.styles[style])
@@ -84,7 +106,10 @@ class ReportDesign:
         width, height = doc.pagesize
         pdf.saveState()
         pdf.setFillColor(self.primary)
-        pdf.rect(0, height - 9, width, 9, fill=1, stroke=0)
+        top_height = 3 if self.document_template in {
+            'professional_minimal', 'professional_elegant', 'simple_receipt'
+        } else (14 if self.document_template == 'professional_executive' else 9)
+        pdf.rect(0, height - top_height, width, top_height, fill=1, stroke=0)
         pdf.setFont('Helvetica', 8)
         pdf.setFillColor(self.dark)
         pdf.drawString(doc.leftMargin, height - 28, self.name[:80])
@@ -97,19 +122,48 @@ class ReportDesign:
         pdf.restoreState()
 
     def table(self, headers, rows, widths=None):
-        style = ParagraphStyle('Cell', fontName='Helvetica', fontSize=8, leading=11)
+        font_name = (
+            'Courier'
+            if self.document_template == 'professional_tech'
+            else 'Times-Roman'
+            if self.document_template in {
+                'professional_ledger', 'professional_boutique', 'professional_elegant'
+            }
+            else 'Helvetica'
+        )
+        font_size = 7 if self.document_template in {'simple_compact', 'professional_tech'} else 8
+        style = ParagraphStyle('Cell', fontName=font_name, fontSize=font_size, leading=font_size + 3)
         head = ParagraphStyle('Head', parent=style, fontName='Helvetica-Bold', textColor=colors.white)
         data = [[Paragraph(escape(str(h)), head) for h in headers]]
         data += [[Paragraph(escape(str(v)), style) for v in row] for row in rows]
         if not rows:
             data.append([Paragraph('Aucune donnée', style)] + [''] * (len(headers) - 1))
         table = LongTable(data, colWidths=widths or [483 / len(headers)] * len(headers), repeatRows=1, hAlign='LEFT')
-        table.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, 0), self.dark),
-                                  ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, self.soft]),
-                                  ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                                  ('TOPPADDING', (0, 0), (-1, -1), 8),
-                                  ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-                                  ('LINEBELOW', (0, 0), (-1, -1), .3, colors.HexColor('#DDE2EA'))]))
+        header_background = self.dark
+        header_text = colors.white
+        if self.document_template in {
+            'professional_minimal', 'professional_elegant', 'simple_receipt'
+        }:
+            header_background = colors.white
+            header_text = self.dark
+            head.textColor = self.dark
+        padding = 5 if self.document_template in {'simple_compact', 'professional_tech'} else 8
+        table_style = [
+            ('BACKGROUND', (0, 0), (-1, 0), header_background),
+            ('TEXTCOLOR', (0, 0), (-1, 0), header_text),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, self.soft]),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('TOPPADDING', (0, 0), (-1, -1), padding),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), padding),
+            ('LINEBELOW', (0, 0), (-1, -1), .3, colors.HexColor('#DDE2EA')),
+        ]
+        if self.document_template in {'professional_ledger', 'professional_tech'}:
+            table_style.append(('GRID', (0, 0), (-1, -1), .45, colors.HexColor('#AEB8C4')))
+        if self.document_template in {
+            'professional_minimal', 'professional_elegant', 'simple_receipt'
+        }:
+            table_style.append(('LINEBELOW', (0, 0), (-1, 0), 1.5, self.primary))
+        table.setStyle(TableStyle(table_style))
         return table
 
     def chart(self, title, labels, series, names, currency=''):

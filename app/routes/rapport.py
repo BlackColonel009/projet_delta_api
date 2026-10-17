@@ -19,6 +19,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from io import BytesIO
 from datetime import datetime, date
+from app.services.enterprise_service import actor_enterprise_id, actor_owner_id, enterprise_scope_filter
 
 
 router = APIRouter(prefix="/rapports", tags=["Rapports"])
@@ -45,11 +46,12 @@ def create_rapport(
     db: Session = Depends(get_db), 
     current_user = Depends(All_required())
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
 
     rapport = Rapport(
         contenu=data.contenu,
-        user_id=parent_user_id
+        user_id=parent_user_id,
+        enterprise_id=actor_enterprise_id(current_user),
     )
 
     db.add(rapport)
@@ -90,7 +92,8 @@ def create_rapport_sub(
     rapport = Rapport(
         contenu=data.contenu,
         sub_user_id=current_sub.id,
-        user_id=current_sub.parent_user_id  # 👈 important !
+        user_id=current_sub.parent_user_id,
+        enterprise_id=actor_enterprise_id(current_user),
     )
 
     db.add(rapport)
@@ -128,12 +131,10 @@ def list_rapports(
     db: Session = Depends(get_db),
     current_user = Depends(All_required())
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-
     rapports = (
         db.query(Rapport)
         .options(joinedload(Rapport.user), joinedload(Rapport.sub_user))
-        .filter(Rapport.user_id == parent_user_id)
+        .filter(enterprise_scope_filter(Rapport, current_user))
         .order_by(Rapport.date_creation.desc())
         .all()
     )
@@ -217,7 +218,7 @@ def update_rapport(
     owner = _company_owner(db, current_user)
     rapport = db.query(Rapport).filter(
         Rapport.id == rapport_id,
-        Rapport.user_id == owner.id,
+        enterprise_scope_filter(Rapport, current_user),
     ).first()
     if not rapport:
         raise HTTPException(status_code=404, detail="Rapport introuvable")
@@ -279,10 +280,9 @@ def update_rapport(
 
 @router.delete("/{rapport_id}")
 def delete_rapport(rapport_id: int, db: Session = Depends(get_db), current_user=Depends(All_required())):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     rapport = db.query(Rapport).filter(
         Rapport.id == rapport_id,
-        Rapport.user_id == parent_user_id,
+        enterprise_scope_filter(Rapport, current_user),
     ).first()
 
     if not rapport:

@@ -27,6 +27,7 @@ class SubscriptionAccess:
     plan_name: str
     features: frozenset[str]
     max_sub_users: int | None
+    max_enterprises: int | None
     max_products: int | None
     max_clients: int | None
     max_invoices_per_month: int | None
@@ -95,6 +96,7 @@ def resolve_subscription_access(
             plan_name="Super administrateur",
             features=frozenset(),
             max_sub_users=None,
+            max_enterprises=None,
             max_products=None,
             max_clients=None,
             max_invoices_per_month=None,
@@ -109,6 +111,7 @@ def resolve_subscription_access(
             plan_name="Super administrateur",
             features=frozenset(),
             max_sub_users=None,
+            max_enterprises=None,
             max_products=None,
             max_clients=None,
             max_invoices_per_month=None,
@@ -160,6 +163,7 @@ def resolve_subscription_access(
         plan_name=plan.name,
         features=frozenset(plan.features or []),
         max_sub_users=plan.max_sub_users,
+        max_enterprises=plan.max_enterprises,
         max_products=plan.max_products,
         max_clients=plan.max_clients,
         max_invoices_per_month=plan.max_invoices_per_month,

@@ -1,7 +1,10 @@
 from fastapi import Depends, HTTPException, status
-from app.utils.security import get_current_user, get_active_user
 from app.schemas.user_schema import RoleEnum
 from app.utils.subscription_guard import require_active_subscription
+from app.utils.enterprise_context import (
+    ActiveEnterpriseContext,
+    get_active_enterprise_context,
+)
 
 # def check_role(required_roles: list):
 #     def role_checker(current_user=Depends(get_current_user)):
@@ -35,15 +38,30 @@ from app.utils.subscription_guard import require_active_subscription
 
 def check_role(required_roles: list):
     def role_checker(
-        current_user = Depends(get_active_user),
+        enterprise_context: ActiveEnterpriseContext = Depends(
+            get_active_enterprise_context
+        ),
         _ = Depends(require_active_subscription),  # 👈 abonnement vérifié ici
     ):
+        current_user = enterprise_context.actor
+        # Attributs transitoires non persistés : les routes migrées peuvent
+        # utiliser le contexte sans modifier la structure historique User/SubUser.
+        current_user.active_enterprise_id = enterprise_context.enterprise_id
+        current_user.active_enterprise_is_primary = (
+            enterprise_context.enterprise.is_primary
+        )
+        current_user.enterprise_group_id = enterprise_context.group_id
         # 🟢 Superuser → accès total (ignore abonnement + rôle)
         if getattr(current_user, "is_superuser", False):
             return current_user
 
         # 🟢 Main user → accès total (mais abonnement requis)
         if current_user.is_main_user:
+            return current_user
+
+        # Le Directeur agit sur toutes les entreprises du groupe, sans obtenir
+        # pour autant les opérations de propriété protégées par require_main_user.
+        if str(getattr(current_user, "role", "")).strip().lower() == "directeur":
             return current_user
 
         # 🔴 Sub-user → vérification du rôle

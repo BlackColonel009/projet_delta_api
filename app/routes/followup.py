@@ -18,6 +18,7 @@ from app.schemas.followup_schema import (
 from app.utils.logger import log_action
 from app.utils.permissions import check_role, RoleEnum
 from app.utils.security import get_active_user
+from app.services.enterprise_service import enterprise_scope_filter
 
 router_followup = APIRouter(prefix="/followups", tags=["Suivi client"])
 
@@ -70,30 +71,32 @@ def _client_followup_payload(client) -> dict:
 
 # ⚠️ Route de test manuelle pour déclencher l'envoi des messages
 @router_followup.get("/test_scheduler")
-def test_suivi_scheduler(
+async def test_suivi_scheduler(
     db: Session = Depends(get_db),
-    # current_user=Depends(check_role([RoleEnum.admin]))  # réservé aux admins
+    current_user=Depends(check_role([RoleEnum.admin])),
 ):
     """
     🔁 Déclenche manuellement le scheduler de suivi client pour test.
     """
-    run_followup_scheduler(db)
+    await run_followup_scheduler(
+        db,
+        enterprise_id=current_user.active_enterprise_id,
+    )
     return {"message": "Scheduler exécuté avec succès"}
 
 @router_followup.get("/count")
 def get_unique_followup_clients_count(
     db: Session = Depends(get_db),
-    current_user=Depends(get_active_user)
+    current_user=Depends(check_role([
+        RoleEnum.admin,
+        RoleEnum.commercial,
+        RoleEnum.caissier,
+        RoleEnum.gestionnaire_stock,
+    ])),
 ):
-    parent_user_id = (
-        current_user.parent_user_id
-        if not current_user.is_main_user
-        else current_user.id
-    )
-
     count = db.query(ClientFollowup.client_id).filter(
         ClientFollowup.type_followup == "fidélisation",
-        ClientFollowup.user_id == parent_user_id
+        enterprise_scope_filter(ClientFollowup, current_user),
     ).distinct().count()
     
     return {"count": count}
@@ -108,10 +111,9 @@ def get_invoice_payment_reminder(
     ),
 ):
     """Retourne la programmation de relance propre a une facture de vente."""
-    owner_id = _company_user_id(current_user)
     facture = db.query(Facture).filter(
         Facture.id == facture_id,
-        Facture.user_id == owner_id,
+        enterprise_scope_filter(Facture, current_user),
     ).first()
     if not facture:
         raise HTTPException(status_code=404, detail="Facture introuvable")
@@ -120,7 +122,7 @@ def get_invoice_payment_reminder(
     if facture.commande_id and facture.type == TypeFacture.vente:
         followup = db.query(ClientFollowup).filter(
             ClientFollowup.commande_id == facture.commande_id,
-            ClientFollowup.user_id == owner_id,
+            enterprise_scope_filter(ClientFollowup, current_user),
             ClientFollowup.type_followup == "relance_paiement",
         ).first()
     return _payment_reminder_payload(followup, facture_id)
@@ -134,10 +136,9 @@ def update_invoice_payment_reminder(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial])),
 ):
     """Programme le debut des relances sans affecter les autres factures."""
-    owner_id = _company_user_id(current_user)
     facture = db.query(Facture).filter(
         Facture.id == facture_id,
-        Facture.user_id == owner_id,
+        enterprise_scope_filter(Facture, current_user),
         Facture.type == TypeFacture.vente,
     ).first()
     if not facture or not facture.commande_id:
@@ -148,7 +149,7 @@ def update_invoice_payment_reminder(
 
     followup = db.query(ClientFollowup).filter(
         ClientFollowup.commande_id == facture.commande_id,
-        ClientFollowup.user_id == owner_id,
+        enterprise_scope_filter(ClientFollowup, current_user),
         ClientFollowup.type_followup == "relance_paiement",
     ).first()
     if not followup:
@@ -200,10 +201,9 @@ def get_client_followup_settings(
         )
     ),
 ):
-    owner_id = _company_user_id(current_user)
     client = db.query(Client).filter(
         Client.id == client_id,
-        Client.user_id == owner_id,
+        enterprise_scope_filter(Client, current_user),
     ).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client introuvable")
@@ -218,10 +218,9 @@ def update_client_followup_settings(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial])),
 ):
     """Personnalise le parcours apres paiement pour un seul client."""
-    owner_id = _company_user_id(current_user)
     client = db.query(Client).filter(
         Client.id == client_id,
-        Client.user_id == owner_id,
+        enterprise_scope_filter(Client, current_user),
     ).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client introuvable")
@@ -239,7 +238,7 @@ def update_client_followup_settings(
     now = datetime.utcnow()
     loyalty_followups = db.query(ClientFollowup).filter(
         ClientFollowup.client_id == client_id,
-        ClientFollowup.user_id == owner_id,
+        enterprise_scope_filter(ClientFollowup, current_user),
         ClientFollowup.type_followup == "fidélisation",
         ClientFollowup.statut != FollowupStatus.termine,
     ).all()
@@ -285,10 +284,9 @@ def desactiver_suivis_client(
     """
     Désactive tous les suivis liés à un client donné.
     """
-    owner_id = _company_user_id(current_user)
     suivis = db.query(ClientFollowup).filter(
         ClientFollowup.client_id == client_id,
-        ClientFollowup.user_id == owner_id,
+        enterprise_scope_filter(ClientFollowup, current_user),
         ClientFollowup.type_followup == FollowupStatus.fidelisation.value
     ).all()
 
@@ -321,10 +319,9 @@ def activer_suivis_client(
     """
     Active tous les suivis liés à un client donné.
     """
-    owner_id = _company_user_id(current_user)
     suivis = db.query(ClientFollowup).filter(
         ClientFollowup.client_id == client_id,
-        ClientFollowup.user_id == owner_id,
+        enterprise_scope_filter(ClientFollowup, current_user),
         ClientFollowup.type_followup == FollowupStatus.desactive.value
     ).all()
 
@@ -370,9 +367,8 @@ def lister_suivis_clients(
     """
     Liste paginée des suivis clients actifs pour l'utilisateur connecté.
     """
-    owner_id = _company_user_id(current_user)
     query = db.query(ClientFollowup).join(Client).join(CommandeVente).filter(
-        ClientFollowup.user_id == owner_id
+        enterprise_scope_filter(ClientFollowup, current_user),
     )
 
     if client_id:
@@ -415,10 +411,9 @@ def get_followup_details(
     """
     Récupère les détails d’un suivi client spécifique pour l’utilisateur connecté.
     """
-    owner_id = _company_user_id(current_user)
     followup = db.query(ClientFollowup).filter(
         ClientFollowup.id == followup_id,
-        ClientFollowup.user_id == owner_id
+        enterprise_scope_filter(ClientFollowup, current_user),
     ).first()
 
     if not followup:
@@ -447,10 +442,9 @@ def get_followups_for_client(
     """
     Récupère la liste des suivis client pour un client donné, pour l'utilisateur connecté.
     """
-    owner_id = _company_user_id(current_user)
     followups = db.query(ClientFollowup).filter(
         ClientFollowup.client_id == client_id,
-        ClientFollowup.user_id == owner_id
+        enterprise_scope_filter(ClientFollowup, current_user),
     ).all()
 
     return [
@@ -473,10 +467,9 @@ def update_delai_relance(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial]))
 ):
-    owner_id = _company_user_id(current_user)
     followup = db.query(ClientFollowup).filter(
         ClientFollowup.id == followup_id,
-        ClientFollowup.user_id == owner_id
+        enterprise_scope_filter(ClientFollowup, current_user),
     ).first()
 
     if not followup:

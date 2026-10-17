@@ -17,6 +17,7 @@ class CommandeVente(Base):
     tva_appliquee = Column(Boolean, default=False)
     statut = Column(String, default="en_attente")
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     
 
     unites_vendues = relationship("UniteProduit", back_populates="commande_vente")
@@ -47,6 +48,7 @@ class LigneCommandeVente(Base):
     cout_achat_unitaire = Column(Float, nullable=False, default=0)
     total_ligne = Column(Float, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     
     user = relationship("User", backref="lignes_commandes_ventes")
 
@@ -66,6 +68,7 @@ class CommandeAchat(Base):
     tva_appliquee = Column(Boolean, default=False)
     statut = Column(String, default="en_attente")
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     
     user = relationship("User", backref="commandes_achats")
 
@@ -86,6 +89,7 @@ class LigneCommandeAchat(Base):
     total_ligne = Column(Float, nullable=False)
 
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     
     user = relationship("User", backref="lignes_commandes_achats")
 

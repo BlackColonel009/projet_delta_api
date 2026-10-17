@@ -64,6 +64,8 @@ class HistoryPaginationTests(unittest.TestCase):
             id=9,
             is_main_user=True,
             parent_user_id=None,
+            active_enterprise_id=1,
+            active_enterprise_is_primary=True,
         )
 
         result = list_historiques(

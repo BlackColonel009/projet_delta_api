@@ -9,6 +9,11 @@ from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
 from app.utils.logger import log_action
+from app.services.enterprise_service import (
+    actor_enterprise_id,
+    actor_owner_id,
+    enterprise_scope_filter,
+)
 
 
 router = APIRouter(prefix="/categories", tags=["Catégories"])
@@ -21,16 +26,21 @@ def create_categorie(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])),
     
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
+    enterprise_id = actor_enterprise_id(current_user)
     if db.query(Categorie).filter(
         Categorie.nom == data.nom,
-        Categorie.user_id == parent_user_id,
+        enterprise_scope_filter(Categorie, current_user),
     ).first():
         raise HTTPException(status_code=400, detail="Cette catégorie existe déjà.")
     
     
     # 🔐 Liaison automatique à l'utilisateur connecté
-    categorie = Categorie(**data.dict(), user_id=parent_user_id)
+    categorie = Categorie(
+        **data.dict(),
+        user_id=parent_user_id,
+        enterprise_id=enterprise_id,
+    )
     db.add(categorie)
     try:
         db.commit()
@@ -61,9 +71,11 @@ def list_categories(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock, RoleEnum.technicien]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     # 🔐 Ne lister que les catégories appartenant à l'utilisateur connecté
-    return db.query(Categorie).filter(Categorie.user_id == parent_user_id).all()
+    return db.query(Categorie).filter(
+        enterprise_scope_filter(Categorie, current_user)
+    ).all()
 
 # 🔍 Obtenir une catégorie par ID
 @router.get("/{categorie_id}", response_model=CategorieOut)
@@ -72,11 +84,11 @@ def get_categorie(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     # 🔐 Accès uniquement à ses propres catégories
     categorie = db.query(Categorie).filter(
         Categorie.id == categorie_id,
-        Categorie.user_id == parent_user_id
+        enterprise_scope_filter(Categorie, current_user),
     ).first()
     if not categorie:
         raise HTTPException(status_code=404, detail="Catégorie non trouvée")
@@ -90,17 +102,17 @@ def update_categorie(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     categorie = db.query(Categorie).filter(
         Categorie.id == categorie_id,
-        Categorie.user_id == parent_user_id 
+        enterprise_scope_filter(Categorie, current_user),
     ).first()
     if not categorie:
         raise HTTPException(status_code=404, detail="Catégorie non trouvée")
 
     duplicate = db.query(Categorie).filter(
         Categorie.nom == data.nom,
-        Categorie.user_id == parent_user_id,
+        enterprise_scope_filter(Categorie, current_user),
         Categorie.id != categorie_id,
     ).first()
     if duplicate:
@@ -138,10 +150,10 @@ def delete_categorie(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
     ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     categorie = db.query(Categorie).filter(
         Categorie.id == categorie_id,
-        Categorie.user_id == parent_user_id 
+        enterprise_scope_filter(Categorie, current_user),
     ).first()
     if not categorie:
         raise HTTPException(status_code=404, detail="Catégorie non trouvée")

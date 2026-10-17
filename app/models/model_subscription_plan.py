@@ -15,6 +15,7 @@ class SubscriptionPlan(Base):
     annual_price = Column(Float, nullable=False, default=0)
     currency = Column(String(10), nullable=False, default="XOF")
     max_sub_users = Column(Integer, nullable=True)
+    max_enterprises = Column(Integer, nullable=True)
     max_products = Column(Integer, nullable=True)
     max_clients = Column(Integer, nullable=True)
     max_invoices_per_month = Column(Integer, nullable=True)

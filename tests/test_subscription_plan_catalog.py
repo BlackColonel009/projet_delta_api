@@ -21,6 +21,7 @@ def _valid_payload(**overrides):
         "annual_price": 125000,
         "currency": "xof",
         "max_sub_users": 8,
+        "max_enterprises": 3,
         "max_products": 10000,
         "max_clients": None,
         "max_invoices_per_month": None,
@@ -40,6 +41,20 @@ class SubscriptionPlanCatalogTests(unittest.TestCase):
         self.assertEqual(plan.currency, "XOF")
         self.assertEqual(len(plan.features), 2)
         self.assertIsNone(plan.max_clients)
+        self.assertEqual(plan.max_enterprises, 3)
+
+    def test_multi_enterprise_features_are_valid_catalog_values(self):
+        plan = SubscriptionPlanUpdate(
+            **_valid_payload(
+                features=[
+                    "multi_enterprise",
+                    "group_dashboard",
+                    "global_stock_search",
+                ]
+            )
+        )
+
+        self.assertEqual(len(plan.features), 3)
 
     def test_unknown_feature_is_rejected(self):
         with self.assertRaises(ValidationError):

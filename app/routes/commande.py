@@ -30,6 +30,11 @@ from app.utils.subscription_guard import (
     enforce_invoice_quota,
     resolve_subscription_access,
 )
+from app.services.enterprise_service import (
+    actor_enterprise_id,
+    actor_owner_id,
+    enterprise_scope_filter,
+)
 import os
 
 router_ventes = APIRouter(prefix="/commandes-ventes", tags=["Commandes Ventes"])
@@ -86,25 +91,25 @@ def create_commande_vente(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.commercial, RoleEnum.gestionnaire_stock]))
 ):
     # Détermine l'utilisateur principal (parent) s'il s'agit d'un sous-utilisateur
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
+    enterprise_id = actor_enterprise_id(current_user)
     enforce_invoice_quota(db, current_user)
     subscription_access = resolve_subscription_access(db, current_user)
 
     # Vérifie que le client existe et appartient à l'utilisateur
-    client = db.query(Client).filter(Client.id == data.client_id, Client.user_id == parent_user_id).first()
+    client = db.query(Client).filter(
+        Client.id == data.client_id,
+        enterprise_scope_filter(Client, current_user),
+    ).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client non trouvé")
 
-    categorie_nom = db.query(Categorie.nom).filter(Categorie.id == Produit.categorie_id).first()
-    categorie_nom = categorie_nom[0] if categorie_nom else None
-
-
-    
     # Crée la commande vente
     commande = CommandeVente(
         client_id=data.client_id,
         tva_appliquee=data.tva_appliquee,
         user_id=parent_user_id,
+        enterprise_id=enterprise_id,
         statut = data.statut
     )
     db.add(commande)
@@ -121,7 +126,7 @@ def create_commande_vente(
     for ligne_data in data.lignes:
         produit = db.query(Produit).filter(
             Produit.id == ligne_data.produit_id,
-            Produit.user_id == parent_user_id
+            enterprise_scope_filter(Produit, current_user),
         ).first()
 
         if not produit:
@@ -144,7 +149,8 @@ def create_commande_vente(
             quantite=ligne_data.quantite,
             prix_unitaire=prix_utilise,
             cout_achat_unitaire=float(produit.prix_achat or 0),
-            total_ligne=total_ligne
+            total_ligne=total_ligne,
+            enterprise_id=enterprise_id,
         )
         db.add(ligne_commande)
 
@@ -167,6 +173,7 @@ def create_commande_vente(
                     unite = db.query(UniteProduit).filter(
                         UniteProduit.tracabilite == code,
                         UniteProduit.produit_id == produit.id,
+                        UniteProduit.enterprise_id == enterprise_id,
                         UniteProduit.statut == "disponible"
                     ).with_for_update().first()
                     if not unite:
@@ -185,6 +192,7 @@ def create_commande_vente(
             else:
                 unites_dispo = db.query(UniteProduit).filter(
                     UniteProduit.produit_id == produit.id,
+                    UniteProduit.enterprise_id == enterprise_id,
                     UniteProduit.statut == "disponible"
                 ).with_for_update().limit(ligne_data.quantite).all()
 
@@ -199,6 +207,7 @@ def create_commande_vente(
             # 🔁 Mise à jour du stock disponible APRÈS modification des unités
             quantite_restante = db.query(UniteProduit).filter(
                 UniteProduit.produit_id == produit.id,
+                UniteProduit.enterprise_id == enterprise_id,
                 UniteProduit.statut == "disponible"
             ).count()
             produit.quantite = quantite_restante    
@@ -209,11 +218,14 @@ def create_commande_vente(
                 commande_id=commande.id,
                 produit_id=produit.id,
                 nom_produit=produit.nom,
-                categorie_produit=categorie_nom,
+                categorie_produit=(
+                    produit.categorie.nom if produit.categorie else None
+                ),
                 prix_unitaire_backup=produit.prix_vente,
                 quantite=ligne_data.quantite,
                 prix_unitaire=prix_utilise,
                 date_achat=commande.date_commande,
+                enterprise_id=enterprise_id,
             )
             db.add(client_produit)
         
@@ -252,6 +264,7 @@ def create_commande_vente(
             first_delay_days = 2
         followup = ClientFollowup(
             user_id=parent_user_id,
+            enterprise_id=enterprise_id,
             client_id=commande.client_id,
             commande_id=commande.id,
             date_achat=date_achat,
@@ -297,6 +310,8 @@ def create_commande_vente(
         commande,
         "vente",
         professional_invoice=can_use_professional_invoice,
+        current_actor=current_user,
+        official_date=data.invoice_date,
     )
     filename = None
     if can_use_professional_invoice:
@@ -317,11 +332,12 @@ def create_commande_achat(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
+    enterprise_id = actor_enterprise_id(current_user)
     enforce_invoice_quota(db, current_user)
     fournisseur = db.query(Fournisseur).filter(
         Fournisseur.id == data.fournisseur_id,
-        Fournisseur.user_id == parent_user_id
+        enterprise_scope_filter(Fournisseur, current_user),
     ).first()
     if not fournisseur:
         raise HTTPException(status_code=404, detail="Fournisseur non trouvé")
@@ -331,6 +347,7 @@ def create_commande_achat(
             fournisseur_id=data.fournisseur_id,
             tva_appliquee=data.tva_appliquee,
             user_id=parent_user_id,
+            enterprise_id=enterprise_id,
             statut=data.statut,
         )
         db.add(commande)
@@ -344,7 +361,7 @@ def create_commande_achat(
             # stock sans voir les changements de l'autre transaction.
             produit = db.query(Produit).filter(
                 Produit.id == ligne_data.produit_id,
-                Produit.user_id == parent_user_id,
+                enterprise_scope_filter(Produit, current_user),
                 Produit.date_suppression.is_(None),
             ).with_for_update().first()
             if not produit:
@@ -372,6 +389,7 @@ def create_commande_achat(
                 quantite=ligne_data.quantite,
                 prix_unitaire=prix_utilise,
                 total_ligne=total_ligne,
+                enterprise_id=enterprise_id,
             ))
 
             for _ in range(ligne_data.quantite):
@@ -429,6 +447,8 @@ def create_commande_achat(
         commande,
         "achat",
         professional_invoice=access.has_feature("professional_invoice"),
+        current_actor=current_user,
+        official_date=data.invoice_date,
     )
 
     return {"message": "Commande achat creee", "commande_id": commande.id}
@@ -440,10 +460,10 @@ def get_commandes_ventes(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier,  RoleEnum.commercial, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     query = db.query(CommandeVente).options(
         selectinload(CommandeVente.lignes).selectinload(LigneCommandeVente.produit)
-    ).filter(CommandeVente.user_id == parent_user_id)
+    ).filter(enterprise_scope_filter(CommandeVente, current_user))
     if start:
         date_start = datetime.strptime(start, "%Y-%m-%d").date()
         query = query.filter(CommandeVente.date_commande >= date_start)
@@ -456,12 +476,12 @@ def get_commande_vente(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier,  RoleEnum.commercial, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     commande = db.query(CommandeVente).options(
         selectinload(CommandeVente.lignes).selectinload(LigneCommandeVente.produit)
     ).filter(
         CommandeVente.id == commande_id,
-        CommandeVente.user_id == parent_user_id
+        enterprise_scope_filter(CommandeVente, current_user),
     ).first()
     if not commande:
         raise HTTPException(status_code=404, detail="Commande vente non trouvée")
@@ -474,10 +494,10 @@ def get_commandes_achats(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.gestionnaire_stock]))
 ):  
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     query = db.query(CommandeAchat).options(
         selectinload(CommandeAchat.lignes).selectinload(LigneCommandeAchat.produit)
-    ).filter(CommandeAchat.user_id == parent_user_id)
+    ).filter(enterprise_scope_filter(CommandeAchat, current_user))
     if start:
         date_start = datetime.strptime(start, "%Y-%m-%d").date()
         query = query.filter(CommandeAchat.date_commande >= date_start)
@@ -490,12 +510,12 @@ def get_commande_achat(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     commande = db.query(CommandeAchat).options(
         selectinload(CommandeAchat.lignes).selectinload(LigneCommandeAchat.produit)
     ).filter(
         CommandeAchat.id == commande_id,
-        CommandeAchat.user_id == parent_user_id
+        enterprise_scope_filter(CommandeAchat, current_user),
     ).first()
     if not commande:
         raise HTTPException(status_code=404, detail="Commande achat non trouvée")

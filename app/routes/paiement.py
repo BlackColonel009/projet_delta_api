@@ -20,6 +20,11 @@ from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
 from app.models.model_user import User
 from sqlalchemy import func
+from app.services.enterprise_service import (
+    actor_enterprise_id,
+    actor_owner_id,
+    enterprise_scope_filter,
+)
 
 router = APIRouter(prefix="/paiements", tags=["Paiements"])
 
@@ -31,11 +36,12 @@ async def create_paiement(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
+    enterprise_id = actor_enterprise_id(current_user)
     # 🔎 Récupérer la facture
     facture = db.query(Facture).filter(
         Facture.id == data.facture_id,
-        Facture.user_id == parent_user_id,
+        enterprise_scope_filter(Facture, current_user),
     ).with_for_update().first()
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
@@ -46,7 +52,8 @@ async def create_paiement(
         )
 
     total_avant = db.query(func.sum(Paiement.montant)).filter(
-        Paiement.facture_id == facture.id
+        Paiement.facture_id == facture.id,
+        Paiement.enterprise_id == facture.enterprise_id,
     ).scalar() or 0.0
     reste = max(float(facture.total_ttc or 0) - float(total_avant), 0.0)
     if data.montant > reste + 0.000001:
@@ -56,7 +63,11 @@ async def create_paiement(
         )
 
     # ➕ Enregistrer le paiement
-    paiement = Paiement(**data.model_dump(), user_id=parent_user_id)
+    paiement = Paiement(
+        **data.model_dump(),
+        user_id=parent_user_id,
+        enterprise_id=enterprise_id,
+    )
     db.add(paiement)
     db.flush()
 
@@ -70,13 +81,16 @@ async def create_paiement(
         facture.statut = "payée"
 
         if facture.type.value == "vente":
-            commande = db.query(CommandeVente).filter(CommandeVente.id == facture.commande_id).first()
+            commande = db.query(CommandeVente).filter(
+                CommandeVente.id == facture.commande_id,
+                CommandeVente.enterprise_id == facture.enterprise_id,
+            ).first()
             if commande:
                 
                 commande.statut = "validée"
                 followup = db.query(ClientFollowup).filter(
                     ClientFollowup.commande_id == commande.id,
-                    ClientFollowup.user_id == parent_user_id,
+                    ClientFollowup.enterprise_id == facture.enterprise_id,
                     ClientFollowup.type_followup == "relance_paiement",
                 ).first()
                 if followup:
@@ -94,6 +108,7 @@ async def create_paiement(
                 # ✅ Marquer toutes les unités liées comme vendues
                 unites = db.query(UniteProduit).filter(
                     UniteProduit.commande_vente_id == commande.id,
+                    UniteProduit.enterprise_id == facture.enterprise_id,
                     UniteProduit.statut.in_(["en cours", "disponible"])
                 ).with_for_update().all()
 
@@ -105,7 +120,7 @@ async def create_paiement(
             from app.models.model_commande import CommandeAchat
             commande = db.query(CommandeAchat).filter(
                 CommandeAchat.id == facture.commande_achat_id,
-                CommandeAchat.user_id == parent_user_id,
+                CommandeAchat.enterprise_id == facture.enterprise_id,
             ).first()
             if commande:
                 commande.statut = "validée"
@@ -177,13 +192,9 @@ def list_paiements_for_facture(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.comptable]))
 ):
-    parent_user_id = (
-        current_user.id if current_user.is_main_user
-        else current_user.parent_user_id
-    )
     facture = db.query(Facture).filter(
         Facture.id == facture_id,
-        Facture.user_id == parent_user_id,
+        enterprise_scope_filter(Facture, current_user),
     ).first()
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
@@ -193,6 +204,7 @@ def list_paiements_for_facture(
     # correctement rattachés à cette facture.
     paiements = db.query(Paiement).filter(
         Paiement.facture_id == facture.id,
+        Paiement.enterprise_id == facture.enterprise_id,
     ).order_by(Paiement.date_paiement.desc(), Paiement.id.desc()).all()
     return [
         {
@@ -210,13 +222,9 @@ def delete_paiement(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier]))
 ):
-    parent_user_id = (
-        current_user.id if current_user.is_main_user
-        else current_user.parent_user_id
-    )
     paiement = db.query(Paiement).join(Facture).filter(
         Paiement.id == paiement_id,
-        Facture.user_id == parent_user_id,
+        enterprise_scope_filter(Facture, current_user),
     ).with_for_update().first()
     if not paiement:
         raise HTTPException(status_code=404, detail="Paiement non trouvé")
@@ -228,7 +236,8 @@ def delete_paiement(
 
     # 🔁 Recalcul du statut de la facture après suppression
     total_paye = db.query(func.sum(Paiement.montant)).filter(
-        Paiement.facture_id == facture.id
+        Paiement.facture_id == facture.id,
+        Paiement.enterprise_id == facture.enterprise_id,
     ).scalar() or 0.0
 
     if total_paye >= facture.total_ttc:
@@ -244,13 +253,13 @@ def delete_paiement(
     if total_paye < facture.total_ttc and facture.type.value == "vente":
         commande_ouverte = db.query(CommandeVente).filter(
             CommandeVente.id == facture.commande_id,
-            CommandeVente.user_id == parent_user_id,
+            CommandeVente.enterprise_id == facture.enterprise_id,
         ).first()
         if commande_ouverte:
             commande_ouverte.statut = "en_attente"
             followup = db.query(ClientFollowup).filter(
                 ClientFollowup.commande_id == commande_ouverte.id,
-                ClientFollowup.user_id == parent_user_id,
+                ClientFollowup.enterprise_id == facture.enterprise_id,
             ).first()
             if followup:
                 followup.type_followup = "relance_paiement"
@@ -266,11 +275,12 @@ def delete_paiement(
         if facture.type.value == "vente":
             commande = db.query(CommandeVente).filter(
                 CommandeVente.id == facture.commande_id,
-                CommandeVente.user_id == parent_user_id,
+                CommandeVente.enterprise_id == facture.enterprise_id,
             ).first()
             if commande:
                 unites = db.query(UniteProduit).filter(
                     UniteProduit.commande_vente_id == commande.id,
+                    UniteProduit.enterprise_id == facture.enterprise_id,
                     UniteProduit.statut.in_(["en cours", "vendu"])
                 ).all()
 

@@ -11,6 +11,7 @@ from app.schemas.historique_general_schema import HistoriqueOut, HistoriqueCreat
 from app.utils.security import get_current_user
 from app.utils.permissions import All_required
 from app.models.model_user import User, SubUser
+from app.services.enterprise_service import actor_enterprise_id, actor_owner_id, enterprise_scope_filter
 
 router = APIRouter(prefix="/historiques", tags=["Historique"])
 
@@ -22,8 +23,11 @@ def add_historique(
     current_user = Depends(All_required())  # ✅ OK : FastAPI va exécuter la dépendance
 
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    h = Historique(**data.dict(), user_id=parent_user_id)
+    h = Historique(
+        **data.dict(),
+        user_id=actor_owner_id(current_user),
+        enterprise_id=actor_enterprise_id(current_user),
+    )
     db.add(h)
     db.commit()
     db.refresh(h)
@@ -41,12 +45,10 @@ def list_historiques(
     current_user = Depends(All_required())  # ✅ OK : FastAPI va exécuter la dépendance
 
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-
     query = db.query(Historique).options(
         joinedload(Historique.user),
         joinedload(Historique.sub_user)
-    ).filter(Historique.user_id == parent_user_id)
+    ).filter(enterprise_scope_filter(Historique, current_user))
 
     if start:
         query = query.filter(Historique.date_action >= start)

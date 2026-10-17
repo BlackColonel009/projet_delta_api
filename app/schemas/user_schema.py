@@ -12,6 +12,7 @@ class UserCreate(BaseModel):
     interface_language: Literal["fr", "en"] = "fr"
     
 class RoleEnum(str, Enum):
+    directeur = "Directeur"
     technicien = "Technicien(ne)"
     secretaire = "Secretaire"
     caissier = "Caissier(e)"
@@ -26,6 +27,9 @@ class SubUserCreate(BaseModel):
     bio: str | None
     password: str
     role: RoleEnum
+    # Facultatif pour conserver la compatibilite avec les anciens mobiles.
+    # Sans valeur, le collaborateur est affecte a l'entreprise principale.
+    enterprise_id: int | None = None
     
 class MainUserData(BaseModel):
     societe_ou_entreprise: Optional[str]
@@ -37,6 +41,14 @@ class MainUserData(BaseModel):
     facture_color: Optional[str] 
     app_theme: Optional[str] = "tradecare"
     theme_mode: Optional[str] = "system"
+
+
+class CompanyInvoiceThemeUpdate(BaseModel):
+    facture_color: str
+    # Optionnels pour conserver la compatibilité avec les anciennes versions
+    # mobiles qui n'envoyaient que la couleur.
+    simple_invoice_template: Optional[str] = None
+    professional_invoice_template: Optional[str] = None
 
 
 class CompanyThemeUpdate(BaseModel):

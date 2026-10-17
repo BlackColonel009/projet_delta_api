@@ -15,6 +15,7 @@ class Historique(Base):
     type_entite = Column(String, nullable=False)  # Exemple: 'produit', 'vente', 'intervention'
     entite_id = Column(Integer, nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     details = Column(Text, nullable=True)  # description facultative ou JSON brut
     date_action = Column(DateTime, default=datetime.utcnow)
     sub_user_id = Column(Integer, ForeignKey("sub_users.id"), nullable=True)

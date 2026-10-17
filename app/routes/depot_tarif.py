@@ -11,6 +11,7 @@ from app.schemas.user_schema import RoleEnum
 from app.utils.logger import log_action
 from sqlalchemy.orm import joinedload
 from app.services.depot_pricing_service import normalize_pricing_mode
+from app.services.enterprise_service import actor_enterprise_id, actor_owner_id, enterprise_scope_filter
 
 router = APIRouter(prefix="/depot-tarifs", tags=["Dépôt - Tarifs"])
 
@@ -21,10 +22,10 @@ def create_tarif(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
+    parent_user_id = actor_owner_id(current_user)
     service = db.query(DepotService).filter(
         DepotService.id == data.service_id,
-        DepotService.user_id == parent_user_id
+        enterprise_scope_filter(DepotService, current_user),
     ).first()
     if not service:
         raise HTTPException(status_code=404, detail="Service introuvable ou non autorisé.")
@@ -37,6 +38,7 @@ def create_tarif(
     tarif = DepotTarif(
         **data.model_dump(exclude={"service_nom"}),
         user_id=parent_user_id,
+        enterprise_id=actor_enterprise_id(current_user),
     )
     db.add(tarif)
     db.commit()
@@ -62,8 +64,9 @@ def list_tarifs(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
-    query = db.query(DepotTarif).join(DepotService).filter(DepotService.user_id == parent_user_id)
+    query = db.query(DepotTarif).join(DepotService).filter(
+        enterprise_scope_filter(DepotTarif, current_user)
+    )
 
     if service_id:
         query = query.filter(DepotTarif.service_id == service_id)
@@ -95,17 +98,16 @@ def update_tarif(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin]))
 ):
-    parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     tarif = db.query(DepotTarif).join(DepotService).filter(
         DepotTarif.id == tarif_id,
-        DepotService.user_id == parent_user_id
+        enterprise_scope_filter(DepotTarif, current_user),
     ).first()
     if not tarif:
         raise HTTPException(status_code=404, detail="Tarif introuvable ou non autorisé.")
 
     target_service = db.query(DepotService).filter(
         DepotService.id == data.service_id,
-        DepotService.user_id == parent_user_id,
+        enterprise_scope_filter(DepotService, current_user),
     ).first()
     if not target_service:
         raise HTTPException(

@@ -11,7 +11,8 @@ intervention_produits = Table(
     "intervention_produits",
     Base.metadata,
     Column("intervention_id", Integer, ForeignKey("interventions.id")),
-    Column("produit_id", Integer, ForeignKey("produits.id"))
+    Column("produit_id", Integer, ForeignKey("produits.id")),
+    Column("enterprise_id", Integer, ForeignKey("enterprises.id"), index=True),
 )
 
 class Intervention(Base):
@@ -20,6 +21,7 @@ class Intervention(Base):
     id = Column(Integer, primary_key=True, index=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # utilisateur principal (technicien)
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     description = Column(Text, nullable=True)
     statut = Column(String, default="en cours")  # ex: en cours, terminé, annulé
     date_intervention = Column(DateTime, default=datetime.utcnow)

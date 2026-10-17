@@ -20,6 +20,7 @@ class Notification(Base):
     message = Column(String, nullable=False)
     user_id = Column(Integer, nullable=True)  # sub-user ou null
     parent_user_id = Column(Integer, ForeignKey("users.id"))
+    enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)
     # models/model_notification.py (exemple)
     sub_user_id = Column(Integer, ForeignKey("sub_users.id"), nullable=True)
     sub_user_name = Column(String(100), nullable=True)

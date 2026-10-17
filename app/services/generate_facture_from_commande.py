@@ -16,6 +16,11 @@ from app.utils.color_theme import build_document_palette
 from app.utils.security import get_current_sub_user
 from app.utils.i18n import language_of, translated
 from datetime import datetime
+from app.services.invoice_snapshot_service import (
+    invoice_snapshot_values,
+    validate_official_invoice_date,
+)
+from app.services.invoice_template_registry import TEMPLATES_BY_CODE
 import re
 import tempfile
 
@@ -43,8 +48,13 @@ def generate_facture_from_commande(
     commande_type: str,
     current_sub: Optional[SubUser] = None,
     professional_invoice: bool = True,
+    current_actor=None,
+    official_date: datetime | None = None,
 ):
-    sub_user_id = current_sub.id if current_sub else None
+    actor = current_actor or current_sub
+    sub_user_id = actor.id if isinstance(actor, SubUser) else None
+    issuer = actor or db.query(User).filter(User.id == commande.user_id).first()
+    snapshot = invoice_snapshot_values(db, issuer, commande.enterprise_id)
 
     # Définition sécurisée de type_enum à partir de commande.statut ou fallback
     if isinstance(commande.statut, str) and commande.statut in TypeFacture._value2member_map_:
@@ -60,9 +70,13 @@ def generate_facture_from_commande(
         tva=commande.tva,
         total_ttc=commande.total_ttc,
         user_id=commande.user_id,
+        enterprise_id=commande.enterprise_id,
         sub_user_id=sub_user_id,
+        date_creation=validate_official_invoice_date(official_date),
+        technical_created_at=datetime.utcnow(),
         commande_id=commande.id if commande_type == "vente" else None,
         commande_achat_id=commande.id if commande_type == "achat" else None,
+        **snapshot,
     )
     db.add(facture)
     db.commit()
@@ -80,7 +94,8 @@ def generate_facture_from_commande(
                 if commande_type == "vente"
                 else float(ligne.prix_unitaire or 0)
             ),
-            total_ligne=ligne.total_ligne
+            total_ligne=ligne.total_ligne,
+            enterprise_id=commande.enterprise_id,
         ))
 
     db.commit()
@@ -177,11 +192,18 @@ def generate_facture_pdf(facture, db: Session ):
     template = env.get_template("facture_template.html")
 
     vendeur = {
-        "nom": facture.sub_user.username,
-        "poste": facture.sub_user.role
-    } if hasattr(facture, "sub_user") and facture.sub_user else {
-        "nom": facture.user.societe_ou_entreprise or facture.user.email,
-        "poste": "Administrateur"
+        "nom": facture.issuer_name_snapshot
+        or (
+            facture.sub_user.username
+            if getattr(facture, "sub_user", None)
+            else facture.user.societe_ou_entreprise or facture.user.email
+        ),
+        "poste": facture.issuer_role_snapshot
+        or (
+            facture.sub_user.role
+            if getattr(facture, "sub_user", None)
+            else "Administrateur"
+        ),
     }
 
     # Ajout des unités concernées sans modifier les produits persistés.
@@ -204,9 +226,16 @@ def generate_facture_pdf(facture, db: Session ):
             )
 
     palette = build_document_palette(
-        facture.user.facture_color,
+        facture.invoice_color_snapshot or facture.user.facture_color,
         fallback="#5C6BC0",
     )
+
+    template_code = (
+        facture.professional_template_snapshot or "professional_signature"
+    )
+    template_definition = TEMPLATES_BY_CODE.get(template_code)
+    if not template_definition or template_definition.family != "professional":
+        template_code = "professional_signature"
 
 
 
@@ -230,6 +259,7 @@ def generate_facture_pdf(facture, db: Session ):
         color_dark=palette["primary_dark"],
         color_highlight=palette["primary_soft"],
         color_on_primary=palette["on_primary"],
+        template_code=template_code,
     )
 
     buffer = BytesIO()

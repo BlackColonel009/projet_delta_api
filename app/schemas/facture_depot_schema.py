@@ -6,6 +6,7 @@ from typing import Optional
 class FactureDepotCreate(BaseModel):
     depot_id: int
     remarques: Optional[str] = Field(default=None, max_length=1000)
+    invoice_date: Optional[datetime] = None
 
 
 class FactureDepotUpdate(BaseModel):
@@ -31,5 +32,10 @@ class FactureDepotOut(BaseModel):
     date_facture: datetime
     created_at: datetime
     updated_at: datetime
+    issuer_name_snapshot: Optional[str] = None
+    issuer_role_snapshot: Optional[str] = None
+    invoice_color_snapshot: Optional[str] = None
+    simple_template_snapshot: Optional[str] = None
+    professional_template_snapshot: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)

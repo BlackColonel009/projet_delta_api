@@ -32,22 +32,20 @@ from app.services.depot_workflow_service import (
     InvalidDepositTransition,
     validate_deposit_transition,
 )
+from app.services.enterprise_service import actor_enterprise_id, actor_owner_id, enterprise_scope_filter
+from app.services.invoice_snapshot_service import invoice_snapshot_values
 
 router = APIRouter(prefix="/depots", tags=["Dépôt - Dépôts"])
 
 
 def _owner_id(current_user) -> int:
-    return (
-        current_user.id
-        if current_user.is_main_user
-        else current_user.parent_user_id
-    )
+    return actor_owner_id(current_user)
 
 
-def _locked_depot(db: Session, depot_id: int, owner_id: int) -> Depot:
+def _locked_depot(db: Session, depot_id: int, current_user) -> Depot:
     depot = (
         db.query(Depot)
-        .filter(Depot.id == depot_id, Depot.user_id == owner_id)
+        .filter(Depot.id == depot_id, enterprise_scope_filter(Depot, current_user))
         .with_for_update()
         .first()
     )
@@ -78,9 +76,10 @@ def create_depot(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = _owner_id(current_user)
+    enterprise_id = actor_enterprise_id(current_user)
     access = resolve_subscription_access(db, current_user)
     existing_depots = db.query(Depot).filter(
-        Depot.user_id == parent_user_id
+        enterprise_scope_filter(Depot, current_user)
     ).count()
     if existing_depots >= 1 and not access.has_feature("multi_depot"):
         enforce_feature_access(db, current_user, "multi_depot")
@@ -88,7 +87,7 @@ def create_depot(
 
     client = db.query(Client).filter(
         Client.id == data.client_id,
-        Client.user_id == parent_user_id,
+        enterprise_scope_filter(Client, current_user),
     ).first()
     if not client:
         raise HTTPException(
@@ -97,7 +96,7 @@ def create_depot(
         )
     service = db.query(DepotService).filter(
         DepotService.id == data.service_id,
-        DepotService.user_id == parent_user_id
+        enterprise_scope_filter(DepotService, current_user),
     ).first()
     if not service:
         raise HTTPException(status_code=404, detail="Service introuvable ou non autorisé.")
@@ -109,7 +108,7 @@ def create_depot(
     for item in data.tarif_items:
         tarif = db.query(DepotTarif).filter(
             DepotTarif.id == item.tarif_id,
-            DepotTarif.user_id == parent_user_id,
+            enterprise_scope_filter(DepotTarif, current_user),
             DepotTarif.service_id == data.service_id,
             DepotTarif.actif.is_(True),
         ).first()
@@ -139,6 +138,7 @@ def create_depot(
             statut="en_attente",
             prix_total=round(prix_total, 2),
             user_id=parent_user_id,
+            enterprise_id=enterprise_id,
         )
         db.add(depot)
         db.flush()
@@ -154,6 +154,7 @@ def create_depot(
                     mode_tarification_snapshot=calculated.mode,
                     prix_unitaire_snapshot=calculated.unit_price,
                     montant_total=calculated.total,
+                    enterprise_id=enterprise_id,
                 )
             )
 
@@ -166,6 +167,8 @@ def create_depot(
             statut="en_attente",
             date_facture=datetime.utcnow(),
             user_id=parent_user_id,
+            enterprise_id=enterprise_id,
+            **invoice_snapshot_values(db, current_user, enterprise_id),
         )
         db.add(facture_depot)
         db.flush()
@@ -197,8 +200,9 @@ def list_depots(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = _owner_id(current_user)
-    depots = db.query(Depot).filter(Depot.user_id == parent_user_id).order_by(Depot.date_depot.desc()).all()
+    depots = db.query(Depot).filter(
+        enterprise_scope_filter(Depot, current_user)
+    ).order_by(Depot.date_depot.desc()).all()
 
     # reste du code identique...
 
@@ -209,7 +213,7 @@ def list_depots(
         facture_depot = (
             db.query(FactureDepot)
             .filter(FactureDepot.depot_id == depot.id)
-            .filter(FactureDepot.user_id == parent_user_id)
+            .filter(FactureDepot.enterprise_id == depot.enterprise_id)
             .first()
         )
 
@@ -264,7 +268,7 @@ def stocker_depot(
         check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])
     ),
 ):
-    depot = _locked_depot(db, depot_id, _owner_id(current_user))
+    depot = _locked_depot(db, depot_id, current_user)
     _ensure_transition(depot, "stocke")
     now = datetime.utcnow()
     depot.statut = "stocke"
@@ -295,7 +299,7 @@ def marquer_depot_pret_retrait(
         check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])
     ),
 ):
-    depot = _locked_depot(db, depot_id, _owner_id(current_user))
+    depot = _locked_depot(db, depot_id, current_user)
     _ensure_transition(depot, "pret_retrait")
     now = datetime.utcnow()
     depot.statut = "pret_retrait"
@@ -328,7 +332,7 @@ def annuler_depot(
     ),
 ):
     owner_id = _owner_id(current_user)
-    depot = _locked_depot(db, depot_id, owner_id)
+    depot = _locked_depot(db, depot_id, current_user)
     _ensure_transition(depot, "annule")
     now = datetime.utcnow()
     depot.statut = "annule"
@@ -337,7 +341,7 @@ def annuler_depot(
     _record_status_change(depot, current_user, now)
     facture = db.query(FactureDepot).filter(
         FactureDepot.depot_id == depot.id,
-        FactureDepot.user_id == owner_id,
+        FactureDepot.enterprise_id == depot.enterprise_id,
     ).first()
     if facture and facture.statut not in {"paye", "payee", "soldee"}:
         facture.statut = "annulee"
@@ -366,7 +370,7 @@ def restaurer_depot(
     current_user=Depends(check_role([RoleEnum.admin])),
 ):
     owner_id = _owner_id(current_user)
-    depot = _locked_depot(db, depot_id, owner_id)
+    depot = _locked_depot(db, depot_id, current_user)
     _ensure_transition(depot, "recu")
     now = datetime.utcnow()
     # ``en_attente`` reste la représentation persistée temporaire de ``recu``
@@ -377,7 +381,7 @@ def restaurer_depot(
     _record_status_change(depot, current_user, now)
     facture = db.query(FactureDepot).filter(
         FactureDepot.depot_id == depot.id,
-        FactureDepot.user_id == owner_id,
+        FactureDepot.enterprise_id == depot.enterprise_id,
     ).first()
     if facture and facture.statut == "annulee":
         facture.statut = "en_attente"
@@ -407,7 +411,7 @@ def retirer_depot(
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = _owner_id(current_user)
-    depot = _locked_depot(db, depot_id, parent_user_id)
+    depot = _locked_depot(db, depot_id, current_user)
     _ensure_transition(depot, "retire")
 
     depot.date_retrait = datetime.utcnow()
@@ -448,7 +452,7 @@ def retirer_depot(
     depot.prix_total = round(prix_total, 2)
     facture = db.query(FactureDepot).filter(
         FactureDepot.depot_id == depot.id,
-        FactureDepot.user_id == parent_user_id,
+        FactureDepot.enterprise_id == depot.enterprise_id,
     ).first()
     if not facture:
         raise HTTPException(
