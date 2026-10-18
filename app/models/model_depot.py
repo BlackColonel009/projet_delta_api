@@ -1,10 +1,13 @@
-from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey, Index
 from datetime import datetime
 from app.database import Base
 from sqlalchemy.orm import relationship
 
 class Depot(Base):
     __tablename__ = "depots"
+    __table_args__ = (
+        Index("ix_depots_enterprise_date", "enterprise_id", "date_depot"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)

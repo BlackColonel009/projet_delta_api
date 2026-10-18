@@ -50,6 +50,9 @@ def check_role(required_roles: list):
         current_user.active_enterprise_is_primary = (
             enterprise_context.enterprise.is_primary
         )
+        current_user.active_enterprise_business_type = (
+            enterprise_context.enterprise.business_type
+        )
         current_user.enterprise_group_id = enterprise_context.group_id
         # 🟢 Superuser → accès total (ignore abonnement + rôle)
         if getattr(current_user, "is_superuser", False):

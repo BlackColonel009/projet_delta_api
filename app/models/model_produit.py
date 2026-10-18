@@ -1,7 +1,7 @@
 # 📦 MODELE PRODUIT SQLALCHEMY
 # Fichier : app/models/model_produit.py
 
-from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, Text
+from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, Text, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
@@ -11,6 +11,14 @@ from app.models.model_galerie import GaleriePhoto
 
 class Produit(Base):
     __tablename__ = "produits"
+    __table_args__ = (
+        Index(
+            "ix_produits_enterprise_active_date",
+            "enterprise_id",
+            "date_suppression",
+            "date_creation",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     nom = Column(String, nullable=False)

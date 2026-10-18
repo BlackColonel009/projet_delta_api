@@ -1,12 +1,15 @@
 # 📦 MODELS POUR CommandeVente et CommandeAchat
 
-from sqlalchemy import Column, ForeignKey, Integer, Float, String, ForeignKey, Boolean, DateTime
+from sqlalchemy import Column, ForeignKey, Integer, Float, String, ForeignKey, Boolean, DateTime, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
 
 class CommandeVente(Base):
     __tablename__ = "commandes_ventes"
+    __table_args__ = (
+        Index("ix_commandes_ventes_enterprise_date", "enterprise_id", "date_commande"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
@@ -37,6 +40,7 @@ class CommandeVente(Base):
 
 class LigneCommandeVente(Base):
     __tablename__ = "lignes_commandes_ventes"
+    __table_args__ = (Index("ix_lignes_commandes_ventes_commande", "commande_id"),)
 
     id = Column(Integer, primary_key=True, index=True)
     commande_id = Column(Integer, ForeignKey("commandes_ventes.id"), nullable=False)
@@ -58,6 +62,9 @@ class LigneCommandeVente(Base):
 
 class CommandeAchat(Base):
     __tablename__ = "commandes_achats"
+    __table_args__ = (
+        Index("ix_commandes_achats_enterprise_date", "enterprise_id", "date_commande"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     fournisseur_id = Column(Integer, ForeignKey("fournisseurs.id"), nullable=False)
@@ -79,6 +86,7 @@ class CommandeAchat(Base):
 
 class LigneCommandeAchat(Base):
     __tablename__ = "lignes_commandes_achats"
+    __table_args__ = (Index("ix_lignes_commandes_achats_commande", "commande_id"),)
 
     id = Column(Integer, primary_key=True, index=True)
     commande_id = Column(Integer, ForeignKey("commandes_achats.id"), nullable=False)

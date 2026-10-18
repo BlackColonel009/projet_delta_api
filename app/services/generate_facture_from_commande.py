@@ -2,19 +2,16 @@ from io import BytesIO
 from typing import Optional
 from fastapi import Depends
 from sqlalchemy.orm import Session
-import os
 from pathlib import Path
 from jinja2 import Environment, select_autoescape, FileSystemLoader
 from xhtml2pdf import pisa
-from fastapi_mail import FastMail, MessageSchema, MessageType
 from app.models.model_facture import Facture, LigneFacture
 from app.models.model_unite_produit import UniteProduit
 from app.models.model_user import SubUser, User
-from app.config import conf
-from app.utils.public_url import public_url
+from app.utils.public_url import document_asset_url
 from app.utils.color_theme import build_document_palette
 from app.utils.security import get_current_sub_user
-from app.utils.i18n import language_of, translated
+from app.utils.i18n import language_of
 from datetime import datetime
 from app.services.invoice_snapshot_service import (
     invoice_snapshot_values,
@@ -104,46 +101,9 @@ def generate_facture_from_commande(
 
     db.commit()
 
-    tmp_path = generate_facture_pdf(facture, db) if professional_invoice else None
-
-    if (
-        tmp_path
-        and type_enum in [TypeFacture.vente, TypeFacture.proforma]
-        and facture.client
-        and facture.client.email
-    ):
-        fm = FastMail(conf)
-        language = language_of(facture.sub_user or facture.user)
-        document_name = translated(
-            language,
-            type_enum.value.upper(),
-            "QUOTE" if type_enum.value == "devis" else (
-                "PROFORMA INVOICE" if type_enum.value == "proforma" else "INVOICE"
-            ),
-        )
-        message = MessageSchema(
-            subject=translated(
-                language,
-                f"Votre {document_name} #{facture.id}",
-                f"Your {document_name} #{facture.id}",
-            ),
-            recipients=[facture.client.email],
-            body=translated(
-                language,
-                f"Bonjour {facture.client.nom},\n\nVeuillez trouver votre {document_name} #{facture.id} d'un montant total de {facture.total_ttc:.2f} {facture.devise}.\nMerci pour votre confiance.",
-                f"Hello {facture.client.nom},\n\nPlease find your {document_name} #{facture.id}, for a total of {facture.total_ttc:.2f} {facture.devise}.\nThank you for your trust.",
-            ),
-            subtype=MessageType.plain,
-            attachments=[tmp_path]
-        )
-        try:
-            import asyncio
-            asyncio.run(fm.send_message(message))
-        except Exception as e:
-            print(f"Erreur lors de l'envoi de l'email : {e}")
-
-    if tmp_path and os.path.exists(tmp_path):
-        os.remove(tmp_path)
+    # La facture est créée, mais jamais générée ni envoyée automatiquement.
+    # L'utilisateur choisit ensuite explicitement le format et l'envoi depuis
+    # l'application. Cela évite également de bloquer la vente sur SMTP/PDF.
     return facture
 
 from app.utils.amount_in_words import amount_to_words
@@ -153,7 +113,7 @@ def generate_facture_pdf(facture, db: Session ):
     devise = facture.user.devise or "XOF"
     language = language_of(facture.sub_user or facture.user)
     montant_en_lettres = amount_to_words(facture.total_ttc, devise, language)
-    logo_url = public_url(facture.user.logo_entreprise)
+    logo_url = document_asset_url(facture.user.logo_entreprise)
 
     template_directory = Path(__file__).resolve().parent.parent / "template"
     env = Environment(
@@ -164,13 +124,13 @@ def generate_facture_pdf(facture, db: Session ):
     template = env.get_template("facture_template.html")
 
     vendeur = {
-        "nom": facture.issuer_name_snapshot
+        "nom": getattr(facture, "issuer_name_snapshot", None)
         or (
             facture.sub_user.username
             if getattr(facture, "sub_user", None)
             else facture.user.societe_ou_entreprise or facture.user.email
         ),
-        "poste": facture.issuer_role_snapshot
+        "poste": getattr(facture, "issuer_role_snapshot", None)
         or (
             facture.sub_user.role
             if getattr(facture, "sub_user", None)
@@ -198,12 +158,14 @@ def generate_facture_pdf(facture, db: Session ):
             )
 
     palette = build_document_palette(
-        facture.invoice_color_snapshot or facture.user.facture_color,
+        getattr(facture, "invoice_color_snapshot", None)
+        or facture.user.facture_color,
         fallback="#5C6BC0",
     )
 
     template_code = (
-        facture.professional_template_snapshot or "professional_signature"
+        getattr(facture, "professional_template_snapshot", None)
+        or "professional_signature"
     )
     template_definition = TEMPLATES_BY_CODE.get(template_code)
     if not template_definition or template_definition.family != "professional":

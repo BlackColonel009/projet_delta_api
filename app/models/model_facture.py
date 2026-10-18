@@ -1,7 +1,7 @@
 # 📦 MODELES POUR FACTURATION
 # Fichier : app/models/model_facture.py
 
-from sqlalchemy import Column, ForeignKey, Integer, String, Float, DateTime, ForeignKey, Enum, Text
+from sqlalchemy import Column, ForeignKey, Integer, String, Float, DateTime, ForeignKey, Enum, Text, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from enum import Enum as PyEnum
@@ -15,6 +15,9 @@ class TypeFacture(PyEnum):
 
 class Facture(Base):
     __tablename__ = "factures"
+    __table_args__ = (
+        Index("ix_factures_enterprise_date", "enterprise_id", "date_creation"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     type = Column(Enum(TypeFacture), nullable=False)
@@ -62,6 +65,9 @@ class Facture(Base):
 
 class LigneFacture(Base):
     __tablename__ = "lignes_facture"
+    __table_args__ = (
+        Index("ix_lignes_facture_facture_id", "facture_id"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     facture_id = Column(Integer, ForeignKey("factures.id"))

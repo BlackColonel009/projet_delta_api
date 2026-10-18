@@ -3,6 +3,7 @@
 
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
@@ -13,6 +14,7 @@ from app.models.model_commande import CommandeVente
 from app.models.model_depot import Depot
 from app.models.model_facture import Facture, LigneFacture, TypeFacture
 from app.models.model_facture_depot import FactureDepot
+from app.models.model_paiement import Paiement
 from app.models.model_produit import Produit
 from app.models.model_unite_produit import UniteProduit
 from app.routes import depot
@@ -275,6 +277,63 @@ def update_facture_official_date(
         "invoice_date": facture.date_creation,
         "technical_created_at": facture.technical_created_at,
     }
+
+# Liste légère destinée à l'écran Factures. La route historique `/factures/`
+# reste disponible pour les anciens clients qui attendent toutes les lignes.
+@router.get("/summaries", response_model=dict)
+def list_facture_summaries(
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([
+        RoleEnum.admin,
+        RoleEnum.gestionnaire_stock,
+        RoleEnum.commercial,
+        RoleEnum.caissier,
+    ])),
+):
+    payment_totals = (
+        db.query(
+            Paiement.facture_id.label("facture_id"),
+            func.coalesce(func.sum(Paiement.montant), 0.0).label("total_paye"),
+        )
+        .group_by(Paiement.facture_id)
+        .subquery()
+    )
+
+    rows = (
+        db.query(Facture, payment_totals.c.total_paye)
+        .options(
+            joinedload(Facture.client),
+            joinedload(Facture.fournisseur),
+        )
+        .outerjoin(payment_totals, payment_totals.c.facture_id == Facture.id)
+        .filter(enterprise_scope_filter(Facture, current_user))
+        .order_by(Facture.date_creation.desc(), Facture.id.desc())
+        .all()
+    )
+
+    items = []
+    for facture, total_paye in rows:
+        items.append({
+            "id": facture.id,
+            "type": facture.type.value if facture.type else None,
+            "date_creation": facture.date_creation,
+            "statut": facture.statut,
+            "total_ht": facture.total_ht,
+            "total_ttc": facture.total_ttc,
+            "total_paye": float(total_paye or 0.0),
+            "tva": facture.tva,
+            "client": (
+                {"id": facture.client.id, "nom": facture.client.nom}
+                if facture.client else None
+            ),
+            "fournisseur": (
+                {"id": facture.fournisseur.id, "nom": facture.fournisseur.nom}
+                if facture.fournisseur else None
+            ),
+        })
+
+    return {"items": items, "total": len(items)}
+
 
 # 🔍 Lire une facture avec ses lignes
 from fastapi import APIRouter, Depends, HTTPException

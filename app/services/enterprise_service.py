@@ -12,10 +12,14 @@ from app.models.model_enterprise import (
     EnterpriseServiceProfile,
 )
 from app.models.model_user import SubUser, User
+from app.services.business_type_registry import BUSINESS_TYPE_REGISTRY
 
 
 DEFAULT_SERVICE = "gestion_principale"
-SUPPORTED_SERVICES = {DEFAULT_SERVICE, "consigne"}
+SUPPORTED_SERVICES = {
+    configuration["service_code"]
+    for configuration in BUSINESS_TYPE_REGISTRY.values()
+}
 
 
 def actor_owner_id(actor) -> int:
@@ -95,6 +99,7 @@ def create_owner_foundation(db: Session, user: User) -> tuple[EnterpriseGroup, E
         code=unique_enterprise_code(db, group.id, company_name),
         is_primary=True,
         enterprise_type="principale",
+        business_type="commerce",
         address=user.addresse,
         phone=user.telephone,
         email=user.email,

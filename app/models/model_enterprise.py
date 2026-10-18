@@ -55,6 +55,11 @@ class Enterprise(Base):
             "enterprise_type IN ('principale', 'standard', 'consigne')",
             name="ck_enterprises_type",
         ),
+        CheckConstraint(
+            "business_type IN ('commerce', 'laundry', 'vehicle_rental', "
+            "'property_rental', 'legacy_consignment')",
+            name="ck_enterprises_business_type",
+        ),
         Index(
             "uq_enterprises_one_primary_per_group",
             "group_id",
@@ -75,6 +80,7 @@ class Enterprise(Base):
     code = Column(String(80), nullable=False)
     is_primary = Column(Boolean, nullable=False, default=False)
     enterprise_type = Column(String(32), nullable=False, default="standard")
+    business_type = Column(String(40), nullable=False, default="commerce")
     status = Column(String(24), nullable=False, default="active")
     address = Column(String, nullable=True)
     phone = Column(String(40), nullable=True)
@@ -92,6 +98,11 @@ class Enterprise(Base):
     show_invoice_agent = Column(Boolean, nullable=False, default=True)
     currency = Column(String(10), nullable=False, default="XOF")
     timezone = Column(String(64), nullable=False, default="Africa/Lome")
+    automatic_work_report_enabled = Column(Boolean, nullable=False, default=False)
+    automatic_work_report_inherit_time = Column(Boolean, nullable=False, default=True)
+    automatic_work_report_hour = Column(Integer, nullable=False, default=18)
+    automatic_work_report_minute = Column(Integer, nullable=False, default=0)
+    automatic_work_report_config = Column(JSON, nullable=False, default=dict)
     map_position_x = Column(Float, nullable=True)
     map_position_y = Column(Float, nullable=True)
     map_order = Column(Integer, nullable=False, default=0)

@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from app.database import get_db
 from app.models.model_fournisseur import Fournisseur
 from app.schemas.fournisseur_schema import FournisseurCreate, FournisseurOut
@@ -49,13 +49,21 @@ def create_fournisseur(
 # 📋 Lister tous les fournisseurs
 @router.get("/", response_model=List[FournisseurOut])
 def list_fournisseurs(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    search: Optional[str] = Query(None, min_length=1, max_length=120),
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier,  RoleEnum.commercial, RoleEnum.gestionnaire_stock]))
 ):
-    parent_user_id = actor_owner_id(current_user)
-    return db.query(Fournisseur).filter(
+    query = db.query(Fournisseur).filter(
         enterprise_scope_filter(Fournisseur, current_user)
-    ).all()
+    )
+    if search:
+        term = f"%{search.strip()}%"
+        query = query.filter(
+            (Fournisseur.nom.ilike(term)) | (Fournisseur.telephone.ilike(term))
+        )
+    return query.order_by(Fournisseur.id.desc()).offset(offset).limit(limit).all()
 
 # 🔍 Voir un fournisseur par ID
 @router.get("/{fournisseur_id}", response_model=FournisseurOut)

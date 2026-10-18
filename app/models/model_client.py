@@ -1,13 +1,14 @@
 # 📦 MODELE CLIENT SQLALCHEMY
 # Fichier : app/models/model_client.py
 
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, DateTime
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, DateTime, Index
 from datetime import datetime
 from app.database import Base
 from sqlalchemy.orm import relationship
 
 class Client(Base):
     __tablename__ = "clients"
+    __table_args__ = (Index("ix_clients_enterprise_id_desc", "enterprise_id", "id"),)
 
     id = Column(Integer, primary_key=True, index=True)
     nom = Column(String, nullable=False)

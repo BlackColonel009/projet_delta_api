@@ -1,6 +1,6 @@
 import json
-from fastapi import APIRouter, Depends, HTTPException, Body, File, Form, UploadFile
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, Body, File, Form, UploadFile, Query
+from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 from app.database import get_db
 from app.models.model_produit import Produit
@@ -25,7 +25,7 @@ from app.utils.subscription_guard import (
     enforce_subscription_quota,
     require_subscription_feature,
 )
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 import shutil
 import os
 
@@ -239,14 +239,42 @@ def create_produit(
 # 📋 Lister tous les produits actifs
 @router.get("/", response_model=List[ProduitOut])
 def list_produits(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    search: Optional[str] = Query(None, min_length=1, max_length=120),
+    categorie_id: Optional[int] = Query(None, ge=1),
     db: Session = Depends(get_db),
     current_user=Depends(All_required())
 ):
-    parent_user_id = actor_owner_id(current_user)
-    return db.query(Produit).filter(
+    query = db.query(Produit).options(joinedload(Produit.categorie)).filter(
         Produit.date_suppression == None,
         enterprise_scope_filter(Produit, current_user),
-    ).order_by(Produit.date_creation.desc()).all()
+    )
+    if search:
+        query = query.filter(Produit.nom.ilike(f"%{search.strip()}%"))
+    if categorie_id is not None:
+        query = query.filter(Produit.categorie_id == categorie_id)
+    return (
+        query.order_by(Produit.date_creation.desc(), Produit.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+
+@router.get("/stats/count", response_model=dict)
+def product_count_stats(
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    articles, quantity = db.query(
+        func.count(Produit.id),
+        func.coalesce(func.sum(Produit.quantite), 0),
+    ).filter(
+        Produit.date_suppression.is_(None),
+        enterprise_scope_filter(Produit, current_user),
+    ).one()
+    return {"articles": int(articles or 0), "quantite_totale": int(quantity or 0)}
 
 # 🔍 Voir un produit par ID
 @router.get("/{produit_id}", response_model=ProduitOut)

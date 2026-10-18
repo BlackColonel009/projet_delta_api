@@ -1,11 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from typing import List
+from typing import List, Optional
 from app.database import get_db
 from app.models.model_rapport import Rapport
+from app.models.model_enterprise import Enterprise
 from app.models.model_user import User, SubUser
 from app.utils.security import get_current_user, get_current_sub_user
 from app.schemas.rapport_schema import (
+    AutomaticReportSettingsOut,
+    AutomaticReportSettingsUpdate,
     RapportCreate,
     RapportOut,
     RapportSharingOut,
@@ -19,10 +22,36 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from io import BytesIO
 from datetime import datetime, date
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from app.services.enterprise_service import actor_enterprise_id, actor_owner_id, enterprise_scope_filter
+from app.services.automatic_work_report_service import (
+    AUTOMATIC_SOURCE,
+    generate_daily_work_report,
+)
 
 
 router = APIRouter(prefix="/rapports", tags=["Rapports"])
+
+_AUTOMATIC_REPORT_DEFAULTS = {
+    "detail_level": "detailed",
+    "include_amounts": True,
+    "include_sales": True,
+    "include_products": True,
+    "include_product_units": True,
+    "include_interventions": True,
+    "include_consignments": True,
+    "include_payments": True,
+    "include_status_changes": True,
+    "include_maintenance": True,
+    "publish_when_empty": True,
+}
+
+
+def _automatic_report_config(enterprise: Enterprise) -> dict:
+    return {
+        **_AUTOMATIC_REPORT_DEFAULTS,
+        **(enterprise.automatic_work_report_config or {}),
+    }
 
 
 def _company_owner(db: Session, current_user) -> User:
@@ -38,6 +67,13 @@ def _can_manage_sharing(current_user) -> bool:
     return bool(
         getattr(current_user, "is_main_user", False)
         or getattr(current_user, "is_superuser", False)
+    )
+
+
+def _can_manage_automatic_report(current_user) -> bool:
+    return bool(
+        getattr(current_user, "is_main_user", False)
+        or str(getattr(current_user, "role", "")).strip().lower() == "admin"
     )
 
 @router.post("/", response_model=RapportOut)
@@ -79,6 +115,7 @@ def create_rapport(
         "role": "Administrateur",
         "is_mine": True,
         "is_edited": False,
+        "is_automatic": False,
     }
 
 
@@ -121,6 +158,7 @@ def create_rapport_sub(
         "role": current_sub.role,
         "is_mine": True,
         "is_edited": False,
+        "is_automatic": False,
     }
 
 
@@ -128,6 +166,8 @@ def create_rapport_sub(
 
 @router.get("/", response_model=List[RapportOut])
 def list_rapports(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user = Depends(All_required())
 ):
@@ -136,8 +176,11 @@ def list_rapports(
         .options(joinedload(Rapport.user), joinedload(Rapport.sub_user))
         .filter(enterprise_scope_filter(Rapport, current_user))
         .order_by(Rapport.date_creation.desc())
-        .all()
     )
+    if offset:
+        rapports = rapports.offset(offset)
+    rapports = rapports.limit(limit)
+    rapports = rapports.all()
 
     result = []
     for r in rapports:
@@ -146,6 +189,10 @@ def list_rapports(
             avatar_url = r.sub_user.avatar_url
             role = r.sub_user.role
             # print(f"🧪 sub_user_avatar: {avatar_url}")
+        elif r.source == AUTOMATIC_SOURCE:
+            auteur = "Trade Care"
+            avatar_url = None
+            role = "Rapport automatique"
         elif r.user:
             auteur = r.user.username or r.user.email
             avatar_url = r.user.avatar_url
@@ -168,11 +215,15 @@ def list_rapports(
             "avatar_url": avatar_url,
             "role": role,
             "is_mine": (
+                _can_manage_automatic_report(current_user)
+                if r.source == AUTOMATIC_SOURCE else (
                 r.sub_user_id == current_user.id
                 if not current_user.is_main_user
                 else r.sub_user_id is None and r.user_id == current_user.id
             ),
+            ),
             "is_edited": r.date_modification is not None,
+            "is_automatic": r.source == AUTOMATIC_SOURCE,
         })
 
     return result
@@ -208,6 +259,134 @@ def update_report_sharing_settings(
     return {"enabled": bool(owner.report_sharing_enabled), "can_manage": True}
 
 
+def _report_enterprise(db: Session, current_user) -> Enterprise:
+    enterprise = db.query(Enterprise).filter(
+        Enterprise.id == actor_enterprise_id(current_user),
+        Enterprise.status == "active",
+    ).first()
+    if enterprise is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Entreprise active introuvable",
+        )
+    return enterprise
+
+
+@router.get("/automation/settings", response_model=AutomaticReportSettingsOut)
+def get_automatic_report_settings(
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    owner = _company_owner(db, current_user)
+    enterprise = _report_enterprise(db, current_user)
+    hour = (
+        owner.daily_report_reminder_hour
+        if enterprise.automatic_work_report_inherit_time
+        else enterprise.automatic_work_report_hour
+    )
+    minute = (
+        owner.daily_report_reminder_minute
+        if enterprise.automatic_work_report_inherit_time
+        else enterprise.automatic_work_report_minute
+    )
+    return {
+        "enabled": bool(enterprise.automatic_work_report_enabled),
+        "inherit_time": bool(enterprise.automatic_work_report_inherit_time),
+        "hour": hour,
+        "minute": minute,
+        "timezone": enterprise.timezone,
+        "can_manage": _can_manage_automatic_report(current_user),
+        **_automatic_report_config(enterprise),
+    }
+
+
+@router.put("/automation/settings", response_model=AutomaticReportSettingsOut)
+def update_automatic_report_settings(
+    data: AutomaticReportSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    if not _can_manage_automatic_report(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Seuls le compte principal et le rôle admin peuvent configurer le rapport automatique",
+        )
+    owner = _company_owner(db, current_user)
+    enterprise = _report_enterprise(db, current_user)
+    enterprise.automatic_work_report_enabled = data.enabled
+    enterprise.automatic_work_report_inherit_time = data.inherit_time
+    enterprise.automatic_work_report_hour = data.hour
+    enterprise.automatic_work_report_minute = data.minute
+    enterprise.automatic_work_report_config = {
+        "detail_level": data.detail_level,
+        "include_amounts": data.include_amounts,
+        "include_sales": data.include_sales,
+        "include_products": data.include_products,
+        "include_product_units": data.include_product_units,
+        "include_interventions": data.include_interventions,
+        "include_consignments": data.include_consignments,
+        "include_payments": data.include_payments,
+        "include_status_changes": data.include_status_changes,
+        "include_maintenance": data.include_maintenance,
+        "publish_when_empty": data.publish_when_empty,
+    }
+    db.commit()
+    hour = owner.daily_report_reminder_hour if data.inherit_time else data.hour
+    minute = owner.daily_report_reminder_minute if data.inherit_time else data.minute
+    return {
+        "enabled": bool(enterprise.automatic_work_report_enabled),
+        "inherit_time": bool(enterprise.automatic_work_report_inherit_time),
+        "hour": hour,
+        "minute": minute,
+        "timezone": enterprise.timezone,
+        "can_manage": True,
+        **_automatic_report_config(enterprise),
+    }
+
+
+@router.post("/automation/generate-now", response_model=RapportOut)
+def generate_automatic_report_now(
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    """Test contrôlé : génère ou actualise le rapport automatique du jour."""
+    if not _can_manage_automatic_report(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Seuls le compte principal et le rôle admin peuvent lancer le rapport automatique",
+        )
+    enterprise = _report_enterprise(db, current_user)
+    try:
+        report_day = datetime.now(ZoneInfo(enterprise.timezone)).date()
+    except ZoneInfoNotFoundError:
+        report_day = datetime.utcnow().date()
+    report = generate_daily_work_report(
+        db,
+        enterprise,
+        report_day,
+        refresh_existing=False,
+    )
+    if report is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Aucune activité aujourd’hui et la publication des rapports vides est désactivée",
+        )
+    return {
+        "id": report.id,
+        "contenu": report.contenu,
+        "date_creation": report.date_creation,
+        "date_modification": report.date_modification,
+        "user_id": report.user_id,
+        "sub_user_id": None,
+        "auteur": "Trade Care",
+        "avatar_url": None,
+        "role": "Rapport automatique",
+        "is_mine": True,
+        "is_edited": report.date_modification is not None,
+        "is_automatic": True,
+    }
+
+
 @router.put("/{rapport_id}", response_model=RapportOut)
 def update_rapport(
     rapport_id: int,
@@ -223,18 +402,30 @@ def update_rapport(
     if not rapport:
         raise HTTPException(status_code=404, detail="Rapport introuvable")
 
+    is_automatic = rapport.source == AUTOMATIC_SOURCE
     is_owner = (
         rapport.sub_user_id == current_user.id
         if not getattr(current_user, "is_main_user", False)
         else rapport.sub_user_id is None and rapport.user_id == current_user.id
     )
+    if is_automatic:
+        is_owner = _can_manage_automatic_report(current_user)
     if not is_owner:
         raise HTTPException(
             status_code=403,
             detail="Vous ne pouvez modifier que vos propres rapports",
         )
 
-    if rapport.date_creation.date() != datetime.utcnow().date():
+    if is_automatic:
+        enterprise = _report_enterprise(db, current_user)
+        try:
+            today = datetime.now(ZoneInfo(enterprise.timezone)).date()
+        except ZoneInfoNotFoundError:
+            today = datetime.utcnow().date()
+        editable_today = rapport.source_date == today
+    else:
+        editable_today = rapport.date_creation.date() == datetime.utcnow().date()
+    if not editable_today:
         raise HTTPException(
             status_code=403,
             detail="Un rapport ne peut être modifié que le jour de sa publication",
@@ -266,14 +457,15 @@ def update_rapport(
         "date_modification": rapport.date_modification,
         "user_id": rapport.user_id,
         "sub_user_id": rapport.sub_user_id,
-        "auteur": getattr(author, "username", None)
+        "auteur": "Trade Care" if is_automatic else getattr(author, "username", None)
         or getattr(author, "email", None)
         or "Utilisateur",
-        "avatar_url": getattr(author, "avatar_url", None),
-        "role": getattr(author, "role", None)
+        "avatar_url": None if is_automatic else getattr(author, "avatar_url", None),
+        "role": "Rapport automatique" if is_automatic else getattr(author, "role", None)
         or ("Administrateur" if rapport.sub_user_id is None else "Utilisateur"),
         "is_mine": True,
         "is_edited": True,
+        "is_automatic": is_automatic,
     }
 
 
@@ -287,6 +479,12 @@ def delete_rapport(rapport_id: int, db: Session = Depends(get_db), current_user=
 
     if not rapport:
         raise HTTPException(status_code=404, detail="Rapport introuvable")
+
+    if rapport.source == AUTOMATIC_SOURCE:
+        raise HTTPException(
+            status_code=403,
+            detail="Un rapport automatique Trade Care ne peut pas être supprimé",
+        )
 
     if not current_user.is_main_user and rapport.sub_user_id != current_user.id:
         raise HTTPException(

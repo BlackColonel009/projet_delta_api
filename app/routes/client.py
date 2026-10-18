@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from app.database import get_db
 from app.models.model_client import Client
 from app.schemas.client_schema import ClientCreate, ClientOut
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
 from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
@@ -59,13 +60,32 @@ def create_client(
 # 📋 Lister tous les clients liés à l'utilisateur
 @router.get("/", response_model=List[ClientOut])
 def list_clients(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    search: Optional[str] = Query(None, min_length=1, max_length=120),
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial, RoleEnum.secretaire, RoleEnum.technicien] ))
 ):  
-    parent_user_id = actor_owner_id(current_user)
-    return db.query(Client).filter(
+    query = db.query(Client).filter(
         enterprise_scope_filter(Client, current_user)
-    ).all()
+    )
+    if search:
+        term = f"%{search.strip()}%"
+        query = query.filter(
+            (Client.nom.ilike(term)) | (Client.telephone.ilike(term))
+        )
+    return query.order_by(Client.id.desc()).offset(offset).limit(limit).all()
+
+
+@router.get("/stats/count", response_model=dict)
+def client_count_stats(
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial, RoleEnum.secretaire, RoleEnum.technicien])),
+):
+    count = db.query(func.count(Client.id)).filter(
+        enterprise_scope_filter(Client, current_user)
+    ).scalar()
+    return {"count": int(count or 0)}
 
 # @router.get("/", response_model=List[ClientOut])
 # def get_clients(db: Session = Depends(get_db)):

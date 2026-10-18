@@ -14,6 +14,12 @@ class UniteProduit(Base):
             postgresql_where=text("code_barre IS NOT NULL AND enterprise_id IS NOT NULL"),
             sqlite_where=text("code_barre IS NOT NULL AND enterprise_id IS NOT NULL"),
         ),
+        Index(
+            "ix_unites_produit_enterprise_date",
+            "enterprise_id",
+            "date_creation",
+        ),
+        Index("ix_unites_produit_product_date", "produit_id", "date_creation"),
     )
 
     id = Column(Integer, primary_key=True, index=True)

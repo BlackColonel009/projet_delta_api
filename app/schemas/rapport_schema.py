@@ -22,6 +22,30 @@ class RapportSharingUpdate(BaseModel):
 class RapportSharingOut(RapportSharingUpdate):
     can_manage: bool = False
 
+
+class AutomaticReportSettingsUpdate(BaseModel):
+    enabled: bool
+    inherit_time: bool = True
+    hour: int = Field(default=18, ge=0, le=23)
+    minute: int = Field(default=0, ge=0, le=59)
+    detail_level: str = Field(default="detailed", pattern="^(compact|detailed)$")
+    include_amounts: bool = True
+    include_sales: bool = True
+    include_products: bool = True
+    include_product_units: bool = True
+    include_interventions: bool = True
+    include_consignments: bool = True
+    include_payments: bool = True
+    include_status_changes: bool = True
+    include_maintenance: bool = True
+    publish_when_empty: bool = True
+
+
+class AutomaticReportSettingsOut(AutomaticReportSettingsUpdate):
+    timezone: str
+    can_manage: bool = False
+
+
 class RapportOut(BaseModel):
     id: int
     contenu: str
@@ -34,6 +58,7 @@ class RapportOut(BaseModel):
     role: Optional[str] = "Main user"
     is_mine: bool = False
     is_edited: bool = False
+    is_automatic: bool = False
 
     class Config:
         from_attributes = True

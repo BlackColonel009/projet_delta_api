@@ -11,6 +11,8 @@ import os
 
 from app.repo_scheduler.scheduler_ai import run_followup_scheduler
 from app.repo_scheduler.stock_alert_ai import run_stock_alert_scheduler
+from app.services.property_reminder_service import dispatch_property_reminders
+from app.services.automatic_work_report_service import dispatch_scheduled_daily_reports
 from app.config import settings
 import logging
 
@@ -48,8 +50,46 @@ def start_scheduler():
         finally:
             db.close()
 
+    def property_reminder_job():
+        db = SessionLocal()
+        try:
+            asyncio.run(dispatch_property_reminders(db))
+        except Exception:
+            logger.exception("Échec du traitement des relances immobilières")
+            db.rollback()
+        finally:
+            db.close()
+
+    def automatic_work_report_job():
+        db = SessionLocal()
+        try:
+            dispatch_scheduled_daily_reports(db)
+        except Exception:
+            logger.exception("Échec de la génération des rapports journaliers automatiques")
+            db.rollback()
+        finally:
+            db.close()
+
     scheduler.add_job(scheduled_job, "interval", minutes=1)
     scheduler.add_job(stock_alert_job, "interval", days=7)  # ⏰ toute les semaines
+    scheduler.add_job(
+        property_reminder_job,
+        "interval",
+        hours=1,
+        id="property-payment-reminders",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        automatic_work_report_job,
+        "interval",
+        minutes=1,
+        id="automatic-daily-work-reports",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     scheduler.start()
     _scheduler = scheduler
     return scheduler

@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session, selectinload
 from typing import List
 from datetime import datetime
 from math import ceil
+from sqlalchemy import func
 
 from app.database import get_db
 from app.models.model_depot import Depot
@@ -36,6 +37,37 @@ from app.services.enterprise_service import actor_enterprise_id, actor_owner_id,
 from app.services.invoice_snapshot_service import invoice_snapshot_values
 
 router = APIRouter(prefix="/depots", tags=["Dépôt - Dépôts"])
+
+
+@router.get("/stats/summary", response_model=dict)
+def depot_summary(
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])),
+):
+    scoped = db.query(Depot).filter(enterprise_scope_filter(Depot, current_user))
+    status_rows = (
+        db.query(Depot.statut, func.count(Depot.id))
+        .filter(enterprise_scope_filter(Depot, current_user))
+        .group_by(Depot.statut)
+        .all()
+    )
+    statuses = {str(status): int(count or 0) for status, count in status_rows}
+    tracked_value = scoped.filter(Depot.statut != "annule").with_entities(
+        func.coalesce(func.sum(Depot.prix_total), 0)
+    ).scalar()
+    unique_clients = scoped.with_entities(
+        func.count(func.distinct(Depot.client_id))
+    ).scalar()
+    active_statuses = ("en_attente", "recu", "stocke", "pret_retrait")
+    return {
+        "total": sum(statuses.values()),
+        "active": sum(statuses.get(status, 0) for status in active_statuses),
+        "ready": statuses.get("pret_retrait", 0),
+        "paid": statuses.get("paye", 0),
+        "tracked_value": float(tracked_value or 0),
+        "unique_clients": int(unique_clients or 0),
+        "statuses": statuses,
+    }
 
 
 def _owner_id(current_user) -> int:
@@ -197,12 +229,24 @@ def create_depot(
 
 @router.get("/", response_model=List[DepotOut])
 def list_depots(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(30, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    depots = db.query(Depot).filter(
-        enterprise_scope_filter(Depot, current_user)
-    ).order_by(Depot.date_depot.desc()).all()
+    depots = (
+        db.query(Depot)
+        .options(
+            selectinload(Depot.client),
+            selectinload(Depot.facture),
+            selectinload(Depot.tarif_items),
+        )
+        .filter(enterprise_scope_filter(Depot, current_user))
+        .order_by(Depot.date_depot.desc(), Depot.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
     # reste du code identique...
 
@@ -210,12 +254,7 @@ def list_depots(
     result = []
     for depot in depots:
         # 🔎 On cherche la facture de dépôt associée
-        facture_depot = (
-            db.query(FactureDepot)
-            .filter(FactureDepot.depot_id == depot.id)
-            .filter(FactureDepot.enterprise_id == depot.enterprise_id)
-            .first()
-        )
+        facture_depot = depot.facture
 
         # 🆕 Charger tous les tarifs multiples associés à ce dépôt
         tarif_items = []

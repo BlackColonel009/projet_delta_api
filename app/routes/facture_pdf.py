@@ -4,7 +4,6 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from fastapi.responses import FileResponse, StreamingResponse
-from fastapi_mail import FastMail, MessageSchema, MessageType
 from starlette.background import BackgroundTask
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
@@ -15,7 +14,6 @@ from app.models.model_facture import Facture
 from app.models.model_unite_produit import UniteProduit
 from app.utils.permissions import All_required, check_role
 from app.schemas.user_schema import RoleEnum
-from app.config import conf
 from app.models.model_facture import LigneFacture 
 from reportlab.platypus import Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
@@ -28,6 +26,7 @@ from app.services.simple_invoice_renderer import render_simple_invoice
 from app.services.enterprise_service import enterprise_scope_filter
 from app.utils.subscription_guard import enforce_feature_access
 from app.utils.i18n import language_of, translated
+from app.core.mail import send_email_message
 
 router = APIRouter(prefix="/factures", tags=["Facturation"])
 
@@ -324,20 +323,29 @@ async def send_facture_to_client_memory(
         enforce_feature_access(db, current_user, "professional_invoice")
         pdf_path = generate_facture_pdf(facture, db)
         try:
-            message = MessageSchema(
-                subject=tr(f"Votre facture #{facture.id}", f"Your invoice #{facture.id}"),
-                recipients=[facture.client.email],
+            sent = await send_email_message(
+                to_email=facture.client.email,
+                subject=tr(
+                    f"Votre facture #{facture.id}",
+                    f"Your invoice #{facture.id}",
+                ),
                 body=tr(
                     f"Bonjour {facture.client.nom},\n\nVeuillez trouver en pièce jointe votre facture professionnelle #{facture.id}.\n\nMerci pour votre confiance.",
                     f"Hello {facture.client.nom},\n\nPlease find your professional invoice #{facture.id} attached.\n\nThank you for your trust.",
                 ),
-                subtype=MessageType.plain,
                 attachments=[pdf_path],
             )
-            await FastMail(conf).send_message(message)
         finally:
             if os.path.exists(pdf_path):
                 os.remove(pdf_path)
+        if not sent:
+            raise HTTPException(
+                status_code=503,
+                detail=tr(
+                    "Le service e-mail est momentanément indisponible. La facture n'a pas été envoyée ; veuillez réessayer.",
+                    "The email service is temporarily unavailable. The invoice was not sent; please try again.",
+                ),
+            )
         return {
             "message": (
                 f"Facture professionnelle #{facture.id} envoyée à "
@@ -355,23 +363,29 @@ async def send_facture_to_client_memory(
         pdf_file.write(buffer.getvalue())
         pdf_path = pdf_file.name
     try:
-        message = MessageSchema(
+        sent = await send_email_message(
+            to_email=facture.client.email,
             subject=tr(
                 f"Votre facture #{facture.id}",
                 f"Your invoice #{facture.id}",
             ),
-            recipients=[facture.client.email],
             body=tr(
                 f"Bonjour {facture.client.nom},\n\nVeuillez trouver votre facture #{facture.id} en pièce jointe.\n\nMerci pour votre confiance.",
                 f"Hello {facture.client.nom},\n\nPlease find invoice #{facture.id} attached.\n\nThank you for your trust.",
             ),
-            subtype=MessageType.plain,
             attachments=[pdf_path],
         )
-        await FastMail(conf).send_message(message)
     finally:
         if os.path.exists(pdf_path):
             os.remove(pdf_path)
+    if not sent:
+        raise HTTPException(
+            status_code=503,
+            detail=tr(
+                "Le service e-mail est momentanément indisponible. La facture n'a pas été envoyée ; veuillez réessayer.",
+                "The email service is temporarily unavailable. The invoice was not sent; please try again.",
+            ),
+        )
     return {
         "message": f"Facture simple #{facture.id} envoyée à {facture.client.email}"
     }

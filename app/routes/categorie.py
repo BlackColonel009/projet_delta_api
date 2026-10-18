@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
@@ -68,14 +69,24 @@ def create_categorie(
 # 📋 Lister toutes les catégories
 @router.get("/", response_model=List[CategorieOut])
 def list_categories(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=200),
+    search: str | None = Query(None, min_length=1, max_length=120),
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock, RoleEnum.technicien]))
 ):
-    parent_user_id = actor_owner_id(current_user)
-    # 🔐 Ne lister que les catégories appartenant à l'utilisateur connecté
-    return db.query(Categorie).filter(
+    query = db.query(Categorie).filter(
         enterprise_scope_filter(Categorie, current_user)
-    ).all()
+    )
+    if search:
+        pattern = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                Categorie.nom.ilike(pattern),
+                Categorie.description.ilike(pattern),
+            )
+        )
+    return query.order_by(Categorie.id.desc()).offset(offset).limit(limit).all()
 
 # 🔍 Obtenir une catégorie par ID
 @router.get("/{categorie_id}", response_model=CategorieOut)

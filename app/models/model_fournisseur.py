@@ -1,13 +1,16 @@
 # 📦 MODELE FOURNISSEUR SQLALCHEMY
 # Fichier : app/models/model_fournisseur.py
 
-from sqlalchemy import Column, ForeignKey, Integer, String, DateTime
+from sqlalchemy import Column, ForeignKey, Integer, String, DateTime, Index
 from datetime import datetime
 from app.database import Base
 from sqlalchemy.orm import relationship
 
 class Fournisseur(Base):
     __tablename__ = "fournisseurs"
+    __table_args__ = (
+        Index("ix_fournisseurs_enterprise_id_desc", "enterprise_id", "id"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     nom = Column(String, nullable=False)

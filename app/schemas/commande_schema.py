@@ -53,6 +53,7 @@ class CommandeVenteOut(BaseModel):
     tva_appliquee: bool
     statut: str
     lignes: List[LigneCommandeOut]
+    product_summary: Optional[str] = None
 
 
 class CommandeAchatOut(BaseModel):
@@ -65,3 +66,4 @@ class CommandeAchatOut(BaseModel):
     tva_appliquee: bool
     statut: str
     lignes: List[LigneCommandeOut]
+    product_summary: Optional[str] = None

@@ -1,7 +1,8 @@
 # 📦 ROUTES POUR Commande Vente et Achat
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import func, literal
 from datetime import datetime, timedelta
 from typing import Optional
 from app.database import get_db
@@ -14,7 +15,7 @@ from app.models.model_fournisseur import Fournisseur
 from app.models.model_commande import CommandeVente, LigneCommandeVente, CommandeAchat, LigneCommandeAchat
 from app.models.model_unite_produit import UniteProduit
 from app.models.model_user import User
-from app.services.generate_facture_from_commande import generate_facture_from_commande, generate_facture_pdf
+from app.services.generate_facture_from_commande import generate_facture_from_commande
 from app.services.traceability_service import create_generated_unit
 from app.schemas.commande_schema import (
     CommandeAchatCreate,
@@ -35,7 +36,6 @@ from app.services.enterprise_service import (
     actor_owner_id,
     enterprise_scope_filter,
 )
-import os
 
 router_ventes = APIRouter(prefix="/commandes-ventes", tags=["Commandes Ventes"])
 router_achats = APIRouter(prefix="/commandes-achats", tags=["Commandes Achats"])
@@ -56,7 +56,7 @@ def _serialize_ligne_commande(ligne):
     }
 
 
-def _serialize_commande_vente(commande):
+def _serialize_commande_vente(commande, *, product_summary=None, include_lines=True):
     return {
         "id": commande.id,
         "client_id": commande.client_id,
@@ -66,11 +66,16 @@ def _serialize_commande_vente(commande):
         "tva": commande.tva,
         "tva_appliquee": commande.tva_appliquee,
         "statut": commande.statut,
-        "lignes": [_serialize_ligne_commande(ligne) for ligne in commande.lignes],
+        "lignes": (
+            [_serialize_ligne_commande(ligne) for ligne in commande.lignes]
+            if include_lines
+            else []
+        ),
+        "product_summary": product_summary,
     }
 
 
-def _serialize_commande_achat(commande):
+def _serialize_commande_achat(commande, *, product_summary=None, include_lines=True):
     return {
         "id": commande.id,
         "fournisseur_id": commande.fournisseur_id,
@@ -80,8 +85,55 @@ def _serialize_commande_achat(commande):
         "tva": commande.tva,
         "tva_appliquee": commande.tva_appliquee,
         "statut": commande.statut,
-        "lignes": [_serialize_ligne_commande(ligne) for ligne in commande.lignes],
+        "lignes": (
+            [_serialize_ligne_commande(ligne) for ligne in commande.lignes]
+            if include_lines
+            else []
+        ),
+        "product_summary": product_summary,
     }
+
+
+def _sales_product_summaries(db: Session, order_ids: list[int]) -> dict[int, str]:
+    if not order_ids:
+        return {}
+    label = func.concat(
+        LigneCommandeVente.quantite,
+        literal(" × "),
+        func.coalesce(Produit.nom, LigneCommandeVente.description, literal("Produit")),
+    )
+    rows = (
+        db.query(
+            LigneCommandeVente.commande_id,
+            func.string_agg(label, literal(" • ")),
+        )
+        .outerjoin(Produit, Produit.id == LigneCommandeVente.produit_id)
+        .filter(LigneCommandeVente.commande_id.in_(order_ids))
+        .group_by(LigneCommandeVente.commande_id)
+        .all()
+    )
+    return {order_id: summary for order_id, summary in rows}
+
+
+def _purchase_product_summaries(db: Session, order_ids: list[int]) -> dict[int, str]:
+    if not order_ids:
+        return {}
+    label = func.concat(
+        LigneCommandeAchat.quantite,
+        literal(" × "),
+        func.coalesce(Produit.nom, LigneCommandeAchat.description, literal("Produit")),
+    )
+    rows = (
+        db.query(
+            LigneCommandeAchat.commande_id,
+            func.string_agg(label, literal(" • ")),
+        )
+        .outerjoin(Produit, Produit.id == LigneCommandeAchat.produit_id)
+        .filter(LigneCommandeAchat.commande_id.in_(order_ids))
+        .group_by(LigneCommandeAchat.commande_id)
+        .all()
+    )
+    return {order_id: summary for order_id, summary in rows}
 
 # ➕ Créer une commande vente
 @router_ventes.post("/")
@@ -313,16 +365,11 @@ def create_commande_vente(
         current_actor=current_user,
         official_date=data.invoice_date,
     )
-    filename = None
-    if can_use_professional_invoice:
-        tmp_path = generate_facture_pdf(facture, db)
-        filename = os.path.basename(tmp_path)
-
     return {
         "message": "Commande vente creee",
         "commande_id": commande.id,
         "facture_id": facture.id,
-        "facture": filename,
+        "facture": None,
     }
 
 # ➕ Créer une commande achat
@@ -457,17 +504,46 @@ def create_commande_achat(
 @router_ventes.get("/", response_model=list[CommandeVenteOut])
 def get_commandes_ventes(
     start: Optional[str] = None,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(30, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier,  RoleEnum.commercial, RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = actor_owner_id(current_user)
-    query = db.query(CommandeVente).options(
-        selectinload(CommandeVente.lignes).selectinload(LigneCommandeVente.produit)
-    ).filter(enterprise_scope_filter(CommandeVente, current_user))
+    query = db.query(CommandeVente).filter(
+        enterprise_scope_filter(CommandeVente, current_user)
+    )
     if start:
         date_start = datetime.strptime(start, "%Y-%m-%d").date()
         query = query.filter(CommandeVente.date_commande >= date_start)
-    return [_serialize_commande_vente(commande) for commande in query.all()]
+    commandes = query.order_by(
+            CommandeVente.date_commande.desc(), CommandeVente.id.desc()
+        ).offset(offset).limit(limit).all()
+    summaries = _sales_product_summaries(db, [item.id for item in commandes])
+    return [
+        _serialize_commande_vente(
+            commande,
+            product_summary=summaries.get(commande.id),
+            include_lines=False,
+        )
+        for commande in commandes
+    ]
+
+
+@router_ventes.get("/stats/count", response_model=dict)
+def count_commandes_ventes(
+    start: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.caissier, RoleEnum.commercial, RoleEnum.gestionnaire_stock])),
+):
+    query = db.query(func.count(CommandeVente.id)).filter(
+        enterprise_scope_filter(CommandeVente, current_user)
+    )
+    if start:
+        query = query.filter(
+            CommandeVente.date_commande >= datetime.strptime(start, "%Y-%m-%d").date()
+        )
+    return {"count": int(query.scalar() or 0)}
 
 # 🔍 Détail d'une commande vente
 @router_ventes.get("/{commande_id}", response_model=CommandeVenteOut)
@@ -491,17 +567,46 @@ def get_commande_vente(
 @router_achats.get("/", response_model=list[CommandeAchatOut])
 def get_commandes_achats(
     start: Optional[str] = None,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(30, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin,  RoleEnum.gestionnaire_stock]))
 ):  
     parent_user_id = actor_owner_id(current_user)
-    query = db.query(CommandeAchat).options(
-        selectinload(CommandeAchat.lignes).selectinload(LigneCommandeAchat.produit)
-    ).filter(enterprise_scope_filter(CommandeAchat, current_user))
+    query = db.query(CommandeAchat).filter(
+        enterprise_scope_filter(CommandeAchat, current_user)
+    )
     if start:
         date_start = datetime.strptime(start, "%Y-%m-%d").date()
         query = query.filter(CommandeAchat.date_commande >= date_start)
-    return [_serialize_commande_achat(commande) for commande in query.all()]
+    commandes = query.order_by(
+            CommandeAchat.date_commande.desc(), CommandeAchat.id.desc()
+        ).offset(offset).limit(limit).all()
+    summaries = _purchase_product_summaries(db, [item.id for item in commandes])
+    return [
+        _serialize_commande_achat(
+            commande,
+            product_summary=summaries.get(commande.id),
+            include_lines=False,
+        )
+        for commande in commandes
+    ]
+
+
+@router_achats.get("/stats/count", response_model=dict)
+def count_commandes_achats(
+    start: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])),
+):
+    query = db.query(func.count(CommandeAchat.id)).filter(
+        enterprise_scope_filter(CommandeAchat, current_user)
+    )
+    if start:
+        query = query.filter(
+            CommandeAchat.date_commande >= datetime.strptime(start, "%Y-%m-%d").date()
+        )
+    return {"count": int(query.scalar() or 0)}
 
 # 🔍 Détail d'une commande achat
 @router_achats.get("/{commande_id}", response_model=CommandeAchatOut)

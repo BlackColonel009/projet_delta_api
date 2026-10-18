@@ -4,8 +4,20 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-ServiceCode = Literal["gestion_principale", "consigne"]
+ServiceCode = Literal[
+    "gestion_principale",
+    "consigne",
+    "laundry",
+    "vehicle_rental",
+    "property_rental",
+]
 EnterpriseType = Literal["standard", "consigne"]
+BusinessType = Literal[
+    "commerce",
+    "laundry",
+    "vehicle_rental",
+    "property_rental",
+]
 
 
 class EnterpriseServiceCreate(BaseModel):
@@ -18,6 +30,7 @@ class EnterpriseCreate(BaseModel):
     name: str = Field(min_length=2, max_length=160)
     code: str | None = Field(default=None, max_length=80)
     enterprise_type: EnterpriseType | None = None
+    business_type: BusinessType = "commerce"
     # Compatibilite temporaire avec les premiers clients de l'API. Le type
     # d'entreprise est desormais le choix fonctionnel officiel.
     service_codes: list[ServiceCode] | None = None
@@ -34,9 +47,9 @@ class EnterpriseCreate(BaseModel):
         normalized = list(dict.fromkeys(value))
         if not normalized:
             raise ValueError("Choisissez un type d'entreprise")
-        if set(normalized) not in ({"gestion_principale"}, {"consigne"}):
+        if len(normalized) != 1:
             raise ValueError(
-                "Une entreprise liee doit etre standard ou consigne, pas hybride"
+                "Une entreprise liée doit utiliser un seul profil métier"
             )
         return normalized
 
@@ -62,6 +75,7 @@ class EnterpriseOut(BaseModel):
     code: str
     is_primary: bool
     enterprise_type: str
+    business_type: str
     status: str
     address: str | None
     phone: str | None

@@ -7,7 +7,7 @@ class Paiement(Base):
     __tablename__ = "paiements"
 
     id = Column(Integer, primary_key=True)
-    facture_id = Column(Integer, ForeignKey("factures.id"), nullable=False)
+    facture_id = Column(Integer, ForeignKey("factures.id"), nullable=False, index=True)
     montant = Column(Float, nullable=False)
     date_paiement = Column(DateTime, default=datetime.utcnow)
     moyen_paiement = Column(String, default="espèces")  # espèces, virement, mobile money, etc.

@@ -28,10 +28,18 @@ from app.schemas.enterprise_schema import (
 from app.services.enterprise_service import (
     SUPPORTED_SERVICES,
     accessible_enterprises,
+    actor_enterprise_id,
     resolve_active_enterprise,
     resolve_default_enterprise,
     resolve_membership,
     unique_enterprise_code,
+)
+from app.services.enterprise_finance_service import enterprise_finance_summary
+from app.services.business_type_registry import (
+    BUSINESS_TYPE_REGISTRY,
+    CREATABLE_BUSINESS_TYPES,
+    business_type_catalog,
+    service_for_business_type,
 )
 from app.services.report_design import ReportDesign, company_owner, money
 from app.utils.security import get_active_user, require_main_user
@@ -42,6 +50,12 @@ from app.utils.subscription_guard import (
 
 
 router = APIRouter(prefix="/enterprises", tags=["Multi-entreprises"])
+
+
+@router.get("/business-types", response_model=list[dict])
+def list_business_types(current_user=Depends(get_active_user)):
+    """Expose le catalogue sans dupliquer ses règles dans les clients."""
+    return business_type_catalog()
 
 
 def _require_group_scope(db: Session, actor) -> EnterpriseMembership:
@@ -103,6 +117,7 @@ def select_enterprise_context(
 
 @router.get("/group-dashboard")
 def get_group_dashboard(
+    year: int | None = Query(default=None, ge=2000, le=2100),
     current_user=Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
@@ -116,6 +131,7 @@ def get_group_dashboard(
 
     rows = []
     for enterprise in enterprises:
+        finance = enterprise_finance_summary(db, enterprise, year)
         product_count, stock_quantity = db.query(
             func.count(Produit.id),
             func.coalesce(func.sum(Produit.quantite), 0),
@@ -180,6 +196,7 @@ def get_group_dashboard(
                 "active_deposit_count": int(deposit_count or 0),
                 "out_of_stock_count": int(out_of_stock_count or 0),
                 "low_stock_count": int(low_stock_count or 0),
+                "finance": finance,
             }
         )
 
@@ -201,19 +218,127 @@ def get_group_dashboard(
                 row["out_of_stock_count"] for row in rows
             ),
             "low_stock_count": sum(row["low_stock_count"] for row in rows),
+            "invoiced_revenue": sum(row["finance"]["invoiced_revenue"] for row in rows),
+            "collected_revenue": sum(row["finance"]["collected_revenue"] for row in rows),
+            "expenses": sum(row["finance"]["expenses"] for row in rows),
+            "receivables": sum(row["finance"]["receivables"] for row in rows),
+            "net_cash_flow": sum(row["finance"]["net_cash_flow"] for row in rows),
+            "deposits_held": sum(row["finance"]["deposits_held"] for row in rows),
         },
         "enterprises": rows,
     }
 
 
+@router.get("/finance-dashboard")
+def get_active_enterprise_finance(
+    year: int | None = Query(default=None, ge=2000, le=2100),
+    current_user=Depends(get_active_user),
+    db: Session = Depends(get_db),
+):
+    """Dashboard financier strictement limité à l'entreprise active."""
+    enterprise = db.query(Enterprise).filter(
+        Enterprise.id == actor_enterprise_id(current_user),
+        Enterprise.status == "active",
+    ).first()
+    if enterprise is None:
+        raise HTTPException(status_code=404, detail="Entreprise active introuvable")
+    return enterprise_finance_summary(db, enterprise, year)
+
+
+@router.get("/{enterprise_id}/finance-dashboard")
+def get_enterprise_finance_for_group(
+    enterprise_id: int,
+    year: int | None = Query(default=None, ge=2000, le=2100),
+    current_user=Depends(get_active_user),
+    db: Session = Depends(get_db),
+):
+    membership = _require_group_scope(db, current_user)
+    enterprise = db.query(Enterprise).filter(
+        Enterprise.id == enterprise_id,
+        Enterprise.group_id == membership.group_id,
+        Enterprise.status == "active",
+    ).first()
+    if enterprise is None:
+        raise HTTPException(status_code=404, detail="Entreprise introuvable")
+    return enterprise_finance_summary(db, enterprise, year)
+
+
+@router.get("/{enterprise_id}/finance-report")
+def export_enterprise_finance_report(
+    enterprise_id: int,
+    year: int | None = Query(default=None, ge=2000, le=2100),
+    current_user=Depends(get_active_user),
+    db: Session = Depends(get_db),
+):
+    """Rapport individuel d'une annexe, accessible au pilotage du groupe."""
+    membership = _require_group_scope(db, current_user)
+    enforce_feature_access(db, current_user, "advanced_exports")
+    enterprise = db.query(Enterprise).filter(
+        Enterprise.id == enterprise_id,
+        Enterprise.group_id == membership.group_id,
+        Enterprise.status == "active",
+    ).first()
+    if enterprise is None:
+        raise HTTPException(status_code=404, detail="Entreprise introuvable")
+    summary = enterprise_finance_summary(db, enterprise, year)
+    owner = company_owner(db, current_user)
+    design = ReportDesign(owner)
+    currency = summary["currency"]
+    story = design.cover(
+        f"Rapport financier — {enterprise.name}",
+        f"Exercice {summary['year']} · {enterprise.business_type}",
+    )
+    story += [
+        design.p("Synthèse financière", "Heading1"),
+        design.table(
+            ["Indicateur", "Montant"],
+            [
+                ["Chiffre d’affaires facturé", money(summary["invoiced_revenue"], currency)],
+                ["Encaissements réels", money(summary["collected_revenue"], currency)],
+                ["Dépenses", money(summary["expenses"], currency)],
+                ["Créances", money(summary["receivables"], currency)],
+                ["Trésorerie nette", money(summary["net_cash_flow"], currency)],
+                ["Cautions détenues (hors chiffre d’affaires)", money(summary["deposits_held"], currency)],
+            ],
+        ),
+        Spacer(1, 18),
+        design.p("Détail mensuel", "Heading1"),
+        design.table(
+            ["Mois", "Facturé", "Encaissé", "Dépenses"],
+            [
+                [
+                    row["label"],
+                    money(row["invoiced"], currency),
+                    money(row["collected"], currency),
+                    money(row["expenses"], currency),
+                ]
+                for row in summary["monthly"]
+            ],
+            widths=[90, 120, 120, 120],
+        ),
+    ]
+    buffer = BytesIO()
+    design.build(buffer, story)
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="rapport-financier-{enterprise.code}-{summary["year"]}.pdf"'
+            )
+        },
+    )
+
+
 @router.get("/group-dashboard/export")
 def export_group_dashboard(
+    year: int | None = Query(default=None, ge=2000, le=2100),
     current_user=Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
     """Rapport PDF consolidé, toujours ventilé par entreprise."""
     enforce_feature_access(db, current_user, "advanced_exports")
-    data = get_group_dashboard(current_user=current_user, db=db)
+    data = get_group_dashboard(year=year, current_user=current_user, db=db)
     owner = company_owner(db, current_user)
     design = ReportDesign(owner)
     currency = next(
@@ -237,9 +362,12 @@ def export_group_dashboard(
                 ["Stock total", totals["stock_quantity"]],
                 ["Produits actifs", totals["product_count"]],
                 ["Clients", totals["client_count"]],
-                ["Ventes cumulées", money(totals["sales_total"], currency)],
-                ["Achats cumulés", money(totals["purchases_total"], currency)],
-                ["Dépenses", money(totals["expenses_total"], currency)],
+                ["Chiffre d’affaires facturé", money(totals["invoiced_revenue"], currency)],
+                ["Encaissements réels", money(totals["collected_revenue"], currency)],
+                ["Dépenses", money(totals["expenses"], currency)],
+                ["Créances", money(totals["receivables"], currency)],
+                ["Trésorerie nette", money(totals["net_cash_flow"], currency)],
+                ["Cautions détenues (hors CA)", money(totals["deposits_held"], currency)],
                 ["Factures ouvertes", totals["open_invoice_count"]],
                 ["Consignes actives", totals["active_deposit_count"]],
                 ["Produits en rupture", totals["out_of_stock_count"]],
@@ -258,24 +386,24 @@ def export_group_dashboard(
                 "Entreprise",
                 "Type",
                 "Stock",
-                "Ventes",
-                "Achats",
-                "Factures",
-                "Alertes stock",
+                "Facturé",
+                "Encaissé",
+                "À recevoir",
+                "Trésorerie nette",
             ],
             [
                 [
                     row["enterprise_name"],
                     row["enterprise_type"],
                     row["stock_quantity"],
-                    money(row["sales_total"], row["currency"]),
-                    money(row["purchases_total"], row["currency"]),
-                    row["open_invoice_count"],
-                    row["out_of_stock_count"] + row["low_stock_count"],
+                    money(row["finance"]["invoiced_revenue"], row["currency"]),
+                    money(row["finance"]["collected_revenue"], row["currency"]),
+                    money(row["finance"]["receivables"], row["currency"]),
+                    money(row["finance"]["net_cash_flow"], row["currency"]),
                 ]
                 for row in data["enterprises"]
             ],
-            widths=[104, 54, 43, 78, 78, 54, 72],
+            widths=[104, 60, 48, 82, 82, 82, 82],
         ),
     ]
     buffer = BytesIO()
@@ -350,13 +478,21 @@ def create_annex(
         "entreprises et annexes",
     )
 
+    requested_business_type = data.business_type
     requested_type = data.enterprise_type
     if data.service_codes:
-        legacy_type = (
-            "consigne"
-            if set(data.service_codes) == {"consigne"}
-            else "standard"
+        requested_service = data.service_codes[0]
+        matched_business_type = next(
+            (
+                code
+                for code, configuration in BUSINESS_TYPE_REGISTRY.items()
+                if configuration["service_code"] == requested_service
+            ),
+            None,
         )
+        if matched_business_type:
+            requested_business_type = matched_business_type
+        legacy_type = "consigne" if requested_service == "consigne" else "standard"
         if requested_type and requested_type != legacy_type:
             raise HTTPException(
                 status_code=422,
@@ -364,9 +500,11 @@ def create_annex(
             )
         requested_type = legacy_type
     requested_type = requested_type or "standard"
-    services = {
-        "consigne" if requested_type == "consigne" else "gestion_principale"
-    }
+    if requested_type == "consigne":
+        requested_business_type = "legacy_consignment"
+    if requested_business_type not in CREATABLE_BUSINESS_TYPES:
+        raise HTTPException(status_code=422, detail="Type d'entreprise non créable")
+    services = {service_for_business_type(requested_business_type)}
     unsupported = services - SUPPORTED_SERVICES
     if unsupported:
         raise HTTPException(status_code=422, detail="Profil de service non pris en charge")
@@ -389,6 +527,7 @@ def create_annex(
         code=unique_enterprise_code(db, membership.group_id, data.code or data.name),
         is_primary=False,
         enterprise_type=requested_type,
+        business_type=requested_business_type,
         address=data.address,
         phone=data.phone,
         email=data.email,
