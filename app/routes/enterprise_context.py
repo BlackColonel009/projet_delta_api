@@ -42,6 +42,7 @@ from app.services.business_type_registry import (
     service_for_business_type,
 )
 from app.services.report_design import ReportDesign, company_owner, money
+from app.utils.permissions import All_required
 from app.utils.security import get_active_user, require_main_user
 from app.utils.subscription_guard import (
     enforce_feature_access,
@@ -232,7 +233,7 @@ def get_group_dashboard(
 @router.get("/finance-dashboard")
 def get_active_enterprise_finance(
     year: int | None = Query(default=None, ge=2000, le=2100),
-    current_user=Depends(get_active_user),
+    current_user=Depends(All_required()),
     db: Session = Depends(get_db),
 ):
     """Dashboard financier strictement limité à l'entreprise active."""

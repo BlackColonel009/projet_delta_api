@@ -76,6 +76,15 @@ def _can_manage_automatic_report(current_user) -> bool:
         or str(getattr(current_user, "role", "")).strip().lower() == "admin"
     )
 
+
+def _report_is_mine(rapport: Rapport, current_user) -> bool:
+    """Retourne toujours un booléen sérialisable par RapportOut."""
+    if rapport.source == AUTOMATIC_SOURCE:
+        return bool(_can_manage_automatic_report(current_user))
+    if not getattr(current_user, "is_main_user", False):
+        return rapport.sub_user_id == current_user.id
+    return rapport.sub_user_id is None and rapport.user_id == current_user.id
+
 @router.post("/", response_model=RapportOut)
 def create_rapport(
     data: RapportCreate, 
@@ -214,14 +223,7 @@ def list_rapports(
             "auteur": auteur,
             "avatar_url": avatar_url,
             "role": role,
-            "is_mine": (
-                _can_manage_automatic_report(current_user)
-                if r.source == AUTOMATIC_SOURCE else (
-                r.sub_user_id == current_user.id
-                if not current_user.is_main_user
-                else r.sub_user_id is None and r.user_id == current_user.id
-            ),
-            ),
+            "is_mine": _report_is_mine(r, current_user),
             "is_edited": r.date_modification is not None,
             "is_automatic": r.source == AUTOMATIC_SOURCE,
         })

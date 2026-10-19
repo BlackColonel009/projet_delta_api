@@ -6,6 +6,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from app.routes.rapport import (
+    _report_is_mine,
     delete_rapport,
     get_report_sharing_settings,
     update_rapport,
@@ -64,8 +65,21 @@ class RapportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             RapportCreate(contenu="   ")
 
+    def test_report_ownership_is_a_boolean(self):
+        report = SimpleNamespace(
+            source="manual",
+            user_id=42,
+            sub_user_id=None,
+        )
+        admin = SimpleNamespace(id=42, is_main_user=True)
+
+        ownership = _report_is_mine(report, admin)
+
+        self.assertIsInstance(ownership, bool)
+        self.assertTrue(ownership)
+
     def test_subuser_cannot_delete_another_subusers_report(self):
-        report = SimpleNamespace(id=9, user_id=42, sub_user_id=7)
+        report = SimpleNamespace(id=9, user_id=42, sub_user_id=7, source="manual")
         db = _FakeDb(report)
         current_subuser = SimpleNamespace(
             id=5,
@@ -83,7 +97,7 @@ class RapportTests(unittest.TestCase):
         self.assertEqual(db.commits, 0)
 
     def test_subuser_can_delete_own_report(self):
-        report = SimpleNamespace(id=9, user_id=42, sub_user_id=5)
+        report = SimpleNamespace(id=9, user_id=42, sub_user_id=5, source="manual")
         db = _FakeDb(report)
         current_subuser = SimpleNamespace(
             id=5,
@@ -100,7 +114,7 @@ class RapportTests(unittest.TestCase):
         self.assertEqual(db.commits, 1)
 
     def test_main_user_can_moderate_company_report(self):
-        report = SimpleNamespace(id=9, user_id=42, sub_user_id=5)
+        report = SimpleNamespace(id=9, user_id=42, sub_user_id=5, source="manual")
         db = _FakeDb(report)
         admin = SimpleNamespace(id=42, is_main_user=True, active_enterprise_id=1, active_enterprise_is_primary=True)
 
@@ -119,6 +133,7 @@ class RapportTests(unittest.TestCase):
             date_modification=None,
             user=None,
             sub_user=None,
+            source="manual",
         )
         db = _FakeDb(report)
         admin = SimpleNamespace(
@@ -164,6 +179,7 @@ class RapportTests(unittest.TestCase):
             date_modification=None,
             user=admin,
             sub_user=None,
+            source="manual",
         )
         db = _FakeDb(report)
 
