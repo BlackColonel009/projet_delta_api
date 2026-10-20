@@ -29,6 +29,10 @@ class AutomaticReportSettingsUpdate(BaseModel):
     hour: int = Field(default=18, ge=0, le=23)
     minute: int = Field(default=0, ge=0, le=59)
     detail_level: str = Field(default="detailed", pattern="^(compact|detailed)$")
+    list_style: str = Field(
+        default="numbered",
+        pattern="^(numbered|dash|dot|bullet|arrow|check|plain)$",
+    )
     include_amounts: bool = True
     include_sales: bool = True
     include_products: bool = True

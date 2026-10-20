@@ -11,6 +11,7 @@ from app.services.automatic_work_report_service import (
     _utc_bounds,
 )
 from app.routes.rapport import _can_manage_automatic_report
+from app.services.work_report_formatting import format_work_report
 
 
 class AutomaticWorkReportTests(unittest.TestCase):
@@ -52,9 +53,25 @@ class AutomaticWorkReportTests(unittest.TestCase):
         self.assertTrue(_can_manage_automatic_report(
             SimpleNamespace(is_main_user=False, role="admin")
         ))
+        self.assertTrue(_can_manage_automatic_report(
+            SimpleNamespace(is_main_user=False, role="Directeur")
+        ))
         self.assertFalse(_can_manage_automatic_report(
             SimpleNamespace(is_main_user=False, role="caissier")
         ))
+
+    def test_report_lines_are_numbered_without_duplicate_prefixes(self):
+        content = "Produit vendu\n- Consigne enregistrée\n3) Paiement reçu"
+        self.assertEqual(
+            format_work_report(content, "numbered"),
+            "1 - Produit vendu\n2 - Consigne enregistrée\n3 - Paiement reçu",
+        )
+
+    def test_report_list_style_can_be_changed(self):
+        self.assertEqual(
+            format_work_report("Produit vendu\nPaiement reçu", "bullet"),
+            "• Produit vendu\n• Paiement reçu",
+        )
 
 
 if __name__ == "__main__":

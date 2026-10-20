@@ -22,6 +22,7 @@ from app.models.model_vehicle_rental import (
     VehicleRentalEvent,
     VehicleRentalPayment,
 )
+from app.services.work_report_formatting import format_work_report
 from app.models.model_property_rental import (
     PropertyInspection,
     PropertyMaintenance,
@@ -38,6 +39,7 @@ EMPTY_MESSAGE = "Aucun rapport disponible signalé par Trade Care aujourd’hui.
 
 DEFAULT_CONFIG = {
     "detail_level": "detailed",
+    "list_style": "numbered",
     "include_amounts": True,
     "include_sales": True,
     "include_products": True,
@@ -564,9 +566,11 @@ def generate_daily_work_report(
         Rapport.source == AUTOMATIC_SOURCE,
         Rapport.source_date == report_day,
     ).first()
-    content = build_daily_work_report(db, enterprise, report_day)
-    if content == EMPTY_MESSAGE and not _config(enterprise)["publish_when_empty"]:
+    raw_content = build_daily_work_report(db, enterprise, report_day)
+    config = _config(enterprise)
+    if raw_content == EMPTY_MESSAGE and not config["publish_when_empty"]:
         return existing
+    content = format_work_report(raw_content, config.get("list_style"))
     if existing:
         if refresh_existing:
             existing.contenu = content

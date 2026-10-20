@@ -28,12 +28,14 @@ from app.services.automatic_work_report_service import (
     AUTOMATIC_SOURCE,
     generate_daily_work_report,
 )
+from app.services.work_report_formatting import format_work_report
 
 
 router = APIRouter(prefix="/rapports", tags=["Rapports"])
 
 _AUTOMATIC_REPORT_DEFAULTS = {
     "detail_level": "detailed",
+    "list_style": "numbered",
     "include_amounts": True,
     "include_sales": True,
     "include_products": True,
@@ -73,7 +75,8 @@ def _can_manage_sharing(current_user) -> bool:
 def _can_manage_automatic_report(current_user) -> bool:
     return bool(
         getattr(current_user, "is_main_user", False)
-        or str(getattr(current_user, "role", "")).strip().lower() == "admin"
+        or str(getattr(current_user, "role", "")).strip().lower()
+        in {"admin", "directeur"}
     )
 
 
@@ -92,9 +95,14 @@ def create_rapport(
     current_user = Depends(All_required())
 ):
     parent_user_id = actor_owner_id(current_user)
+    enterprise = _report_enterprise(db, current_user)
+    content = format_work_report(
+        data.contenu,
+        _automatic_report_config(enterprise)["list_style"],
+    )
 
     rapport = Rapport(
-        contenu=data.contenu,
+        contenu=content,
         user_id=parent_user_id,
         enterprise_id=actor_enterprise_id(current_user),
     )
@@ -135,8 +143,13 @@ def create_rapport_sub(
     current_sub: SubUser = Depends(get_current_sub_user),
     current_user = Depends(All_required())
 ):
+    enterprise = _report_enterprise(db, current_user)
+    content = format_work_report(
+        data.contenu,
+        _automatic_report_config(enterprise)["list_style"],
+    )
     rapport = Rapport(
-        contenu=data.contenu,
+        contenu=content,
         sub_user_id=current_sub.id,
         user_id=current_sub.parent_user_id,
         enterprise_id=actor_enterprise_id(current_user),
@@ -311,7 +324,7 @@ def update_automatic_report_settings(
     if not _can_manage_automatic_report(current_user):
         raise HTTPException(
             status_code=403,
-            detail="Seuls le compte principal et le rôle admin peuvent configurer le rapport automatique",
+            detail="Seuls le compte principal, le Directeur et le rôle admin peuvent configurer les rapports",
         )
     owner = _company_owner(db, current_user)
     enterprise = _report_enterprise(db, current_user)
@@ -321,6 +334,7 @@ def update_automatic_report_settings(
     enterprise.automatic_work_report_minute = data.minute
     enterprise.automatic_work_report_config = {
         "detail_level": data.detail_level,
+        "list_style": data.list_style,
         "include_amounts": data.include_amounts,
         "include_sales": data.include_sales,
         "include_products": data.include_products,
@@ -355,7 +369,7 @@ def generate_automatic_report_now(
     if not _can_manage_automatic_report(current_user):
         raise HTTPException(
             status_code=403,
-            detail="Seuls le compte principal et le rôle admin peuvent lancer le rapport automatique",
+            detail="Seuls le compte principal, le Directeur et le rôle admin peuvent lancer le rapport automatique",
         )
     enterprise = _report_enterprise(db, current_user)
     try:
@@ -434,7 +448,11 @@ def update_rapport(
         )
 
     previous_content = rapport.contenu
-    rapport.contenu = data.contenu
+    enterprise = _report_enterprise(db, current_user)
+    rapport.contenu = format_work_report(
+        data.contenu,
+        _automatic_report_config(enterprise)["list_style"],
+    )
     rapport.date_modification = datetime.utcnow()
     db.commit()
     db.refresh(rapport)
