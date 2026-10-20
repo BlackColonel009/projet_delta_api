@@ -42,6 +42,7 @@ class AutomaticReportSettingsUpdate(BaseModel):
     include_payments: bool = True
     include_status_changes: bool = True
     include_maintenance: bool = True
+    include_next_steps: bool = True
     publish_when_empty: bool = True
 
 

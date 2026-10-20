@@ -45,6 +45,7 @@ _AUTOMATIC_REPORT_DEFAULTS = {
     "include_payments": True,
     "include_status_changes": True,
     "include_maintenance": True,
+    "include_next_steps": True,
     "publish_when_empty": True,
 }
 
@@ -344,6 +345,7 @@ def update_automatic_report_settings(
         "include_payments": data.include_payments,
         "include_status_changes": data.include_status_changes,
         "include_maintenance": data.include_maintenance,
+        "include_next_steps": data.include_next_steps,
         "publish_when_empty": data.publish_when_empty,
     }
     db.commit()

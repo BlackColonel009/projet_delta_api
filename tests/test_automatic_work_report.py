@@ -6,7 +6,10 @@ from app.services.automatic_work_report_service import (
     DEFAULT_CONFIG,
     EMPTY_MESSAGE,
     _config,
+    _commerce_next_steps,
     _deposit_invoice_state,
+    _intervention_next_step,
+    _invoice_next_step,
     _invoice_state,
     _utc_bounds,
 )
@@ -30,6 +33,35 @@ class AutomaticWorkReportTests(unittest.TestCase):
         self.assertEqual(_deposit_invoice_state(paid), "soldée")
         self.assertEqual(_deposit_invoice_state(pending), "non soldée")
 
+    def test_open_intervention_generates_a_clear_next_step(self):
+        intervention = SimpleNamespace(
+            id=8,
+            client=SimpleNamespace(nom="Entreprise Kossi"),
+            description="Réparer le climatiseur",
+            produit_ex=None,
+            statut="en cours",
+        )
+        result = _intervention_next_step(intervention)
+        self.assertIn("Terminer l’intervention", result)
+        self.assertIn("Réparer le climatiseur", result)
+        self.assertIn("Entreprise Kossi", result)
+
+    def test_unpaid_invoice_next_step_distinguishes_unpaid_and_partial(self):
+        invoice = SimpleNamespace(
+            id=15,
+            client=SimpleNamespace(nom="Client Delta"),
+            total_ttc=100_000,
+        )
+        unpaid = _invoice_next_step(
+            invoice, 0, "XOF", include_amounts=True
+        )
+        partial = _invoice_next_step(
+            invoice, 40_000, "XOF", include_amounts=True
+        )
+        self.assertIn("nous doit toujours", unpaid)
+        self.assertIn("100 000 XOF", unpaid)
+        self.assertIn("reste à payer 60 000 XOF", partial)
+
     def test_lome_day_is_converted_to_utc_bounds(self):
         start, end = _utc_bounds(date(2026, 10, 18), "Africa/Lome")
         self.assertEqual(start.date(), date(2026, 10, 18))
@@ -47,6 +79,17 @@ class AutomaticWorkReportTests(unittest.TestCase):
         self.assertFalse(config["include_amounts"])
         self.assertEqual(config["include_products"], DEFAULT_CONFIG["include_products"])
         self.assertTrue(config["include_product_units"])
+        self.assertTrue(config["include_next_steps"])
+
+    def test_disabled_next_steps_do_not_query_or_generate_any_suggestion(self):
+        self.assertEqual(
+            _commerce_next_steps(
+                None,
+                SimpleNamespace(),
+                {"include_next_steps": False},
+            ),
+            [],
+        )
 
     def test_main_user_and_admin_can_manage_automatic_report(self):
         self.assertTrue(_can_manage_automatic_report(SimpleNamespace(is_main_user=True)))

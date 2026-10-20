@@ -1,7 +1,7 @@
 from datetime import date, datetime, time, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -9,7 +9,7 @@ from app.models.model_commande import CommandeVente, LigneCommandeVente
 from app.models.model_client import Client
 from app.models.model_depot import Depot
 from app.models.model_enterprise import Enterprise, EnterpriseGroup
-from app.models.model_facture import Facture
+from app.models.model_facture import Facture, TypeFacture
 from app.models.model_intervention import Intervention
 from app.models.model_notification import Notification
 from app.models.model_paiement import Paiement
@@ -36,6 +36,14 @@ from app.models.model_user import User
 
 AUTOMATIC_SOURCE = "tradecare_daily"
 EMPTY_MESSAGE = "Aucun rapport disponible signalé par Trade Care aujourd’hui."
+_COMPLETED_INTERVENTION_STATUSES = {
+    "termine", "terminé", "terminee", "terminée", "completed", "done",
+    "cloture", "clôturé", "cloturee", "clôturée",
+}
+_CANCELLED_STATUSES = {
+    "cancelled", "canceled", "annule", "annulé", "annulee", "annulée",
+}
+_MAX_NEXT_STEPS_PER_KIND = 10
 
 DEFAULT_CONFIG = {
     "detail_level": "detailed",
@@ -49,6 +57,7 @@ DEFAULT_CONFIG = {
     "include_payments": True,
     "include_status_changes": True,
     "include_maintenance": True,
+    "include_next_steps": True,
     "publish_when_empty": True,
 }
 
@@ -101,6 +110,125 @@ def _deposit_invoice_state(invoice) -> str:
     }:
         return "soldée"
     return "non soldée"
+
+
+def _intervention_next_step(intervention: Intervention) -> str:
+    client_name = intervention.client.nom if intervention.client else "client non renseigné"
+    subject = (
+        intervention.description
+        or intervention.produit_ex
+        or f"intervention n°{intervention.id}"
+    )
+    status = intervention.statut or "non renseigné"
+    return (
+        f"Terminer l’intervention « {subject} » pour {client_name} "
+        f"(statut actuel : {status})."
+    )
+
+
+def _invoice_next_step(
+    invoice: Facture,
+    paid: float,
+    currency: str,
+    *,
+    include_amounts: bool,
+) -> str:
+    client_name = invoice.client.nom if invoice.client else "client non renseigné"
+    total = float(invoice.total_ttc or 0)
+    remaining = max(total - float(paid or 0), 0)
+    reference = f"facture n°{invoice.id}"
+    if not include_amounts:
+        return f"Relancer {client_name} : la {reference} n’est pas encore soldée."
+    if paid <= 0:
+        return (
+            f"Le client {client_name} nous doit toujours une somme de "
+            f"{_money(remaining, currency)} sur la {reference}."
+        )
+    return (
+        f"Le client {client_name} a déjà réglé {_money(paid, currency)} ; "
+        f"il lui reste à payer {_money(remaining, currency)} sur la {reference}."
+    )
+
+
+def _commerce_next_steps(
+    db: Session,
+    enterprise: Enterprise,
+    config: dict,
+) -> list[str]:
+    if not config["include_next_steps"]:
+        return []
+    steps: list[str] = []
+
+    if config["include_interventions"]:
+        terminal_statuses = tuple(
+            _COMPLETED_INTERVENTION_STATUSES | _CANCELLED_STATUSES
+        )
+        open_interventions = (
+            db.query(Intervention)
+            .options(joinedload(Intervention.client))
+            .filter(
+                Intervention.enterprise_id == enterprise.id,
+                or_(
+                    Intervention.statut.is_(None),
+                    func.lower(Intervention.statut).notin_(terminal_statuses),
+                ),
+            )
+            .order_by(Intervention.date_intervention, Intervention.id)
+            .limit(_MAX_NEXT_STEPS_PER_KIND + 1)
+            .all()
+        )
+        for intervention in open_interventions[:_MAX_NEXT_STEPS_PER_KIND]:
+            steps.append(_intervention_next_step(intervention))
+        if len(open_interventions) > _MAX_NEXT_STEPS_PER_KIND:
+            steps.append("D’autres interventions restent également à terminer.")
+
+    if config["include_sales"]:
+        payment_totals = (
+            db.query(
+                Paiement.facture_id.label("facture_id"),
+                func.coalesce(func.sum(Paiement.montant), 0).label("paid"),
+            )
+            .group_by(Paiement.facture_id)
+            .subquery()
+        )
+        paid_amount = func.coalesce(payment_totals.c.paid, 0)
+        unpaid_rows = (
+            db.query(Facture, paid_amount)
+            .options(joinedload(Facture.client))
+            .outerjoin(payment_totals, payment_totals.c.facture_id == Facture.id)
+            .filter(
+                Facture.enterprise_id == enterprise.id,
+                Facture.type == TypeFacture.vente,
+                or_(
+                    Facture.statut.is_(None),
+                    func.lower(Facture.statut).notin_(tuple(_CANCELLED_STATUSES)),
+                ),
+                func.coalesce(Facture.total_ttc, 0) > paid_amount,
+            )
+            .order_by(Facture.date_creation, Facture.id)
+            .limit(_MAX_NEXT_STEPS_PER_KIND + 1)
+            .all()
+        )
+        for invoice, paid in unpaid_rows[:_MAX_NEXT_STEPS_PER_KIND]:
+            steps.append(
+                _invoice_next_step(
+                    invoice,
+                    float(paid or 0),
+                    enterprise.currency or invoice.devise or "XOF",
+                    include_amounts=config["include_amounts"],
+                )
+            )
+        if len(unpaid_rows) > _MAX_NEXT_STEPS_PER_KIND:
+            steps.append("D’autres factures clients restent également à recouvrer.")
+
+    return steps
+
+
+def _append_next_steps(lines: list[str], steps: list[str]) -> None:
+    if not steps:
+        return
+    lines.extend(["", "PROCHAINES ÉTAPES PROPOSÉES"])
+    lines.extend(f"• {step}" for step in steps)
 
 
 def _config(enterprise: Enterprise) -> dict:
@@ -232,8 +360,16 @@ def _build_commerce_report(
         .order_by(Depot.date_depot)
         .all()
     )
+    next_steps = _commerce_next_steps(db, enterprise, config)
 
-    if not sales and not products and not added_units and not interventions and not deposits:
+    if (
+        not sales
+        and not products
+        and not added_units
+        and not interventions
+        and not deposits
+        and not next_steps
+    ):
         return EMPTY_MESSAGE
 
     lines = _header(enterprise, report_day, [
@@ -242,9 +378,11 @@ def _build_commerce_report(
         f"• Ajouts d’unités au stock : {sum(int(row[1]) for row in added_units)}",
         f"• Interventions enregistrées : {len(interventions)}",
         f"• Consignes enregistrées : {len(deposits)}",
+        f"• Actions de suivi proposées : {len(next_steps)}",
     ])
 
     if config["detail_level"] == "compact":
+        _append_next_steps(lines, next_steps)
         return _finish(lines)
 
     if sales:
@@ -308,6 +446,8 @@ def _build_commerce_report(
                 f"Service : {item.service.nom if item.service else 'Non renseigné'} — "
                 f"Statut : {item.statut} — Facture {invoice_state}."
             )
+
+    _append_next_steps(lines, next_steps)
 
     return _finish(lines)
 
