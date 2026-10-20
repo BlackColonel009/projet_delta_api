@@ -193,14 +193,14 @@ class RapportTests(unittest.TestCase):
                 current_user=admin,
             )
 
-        self.assertEqual(result["contenu"], "1 - Nouveau contenu")
+        self.assertEqual(result["contenu"], "Nouveau contenu")
         self.assertTrue(result["is_edited"])
         self.assertIsNotNone(report.date_modification)
         self.assertEqual(db.commits, 1)
         history_log.assert_called_once()
         details = history_log.call_args.kwargs["details"]
         self.assertIn("Ancien contenu", details)
-        self.assertIn("1 - Nouveau contenu", details)
+        self.assertIn("Nouveau contenu", details)
 
     def test_main_user_controls_company_report_sharing(self):
         owner = SimpleNamespace(

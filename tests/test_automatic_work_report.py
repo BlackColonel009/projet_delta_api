@@ -61,16 +61,59 @@ class AutomaticWorkReportTests(unittest.TestCase):
         ))
 
     def test_report_lines_are_numbered_without_duplicate_prefixes(self):
-        content = "Produit vendu\n- Consigne enregistrée\n3) Paiement reçu"
+        content = "Objet du rapport\n\nTravail effectué\nProduit vendu\n- Consigne enregistrée\n3) Paiement reçu"
         self.assertEqual(
             format_work_report(content, "numbered"),
-            "1 - Produit vendu\n2 - Consigne enregistrée\n3 - Paiement reçu",
+            "Objet du rapport\n\nTravail effectué\n1 - Produit vendu\n2 - Consigne enregistrée\n3 - Paiement reçu",
         )
 
     def test_report_list_style_can_be_changed(self):
         self.assertEqual(
-            format_work_report("Produit vendu\nPaiement reçu", "bullet"),
-            "• Produit vendu\n• Paiement reçu",
+            format_work_report(
+                "Objet\n\nRésultats obtenus\nProduit vendu\nPaiement reçu",
+                "bullet",
+            ),
+            "Objet\n\nRésultats obtenus\n• Produit vendu\n• Paiement reçu",
+        )
+
+    def test_free_form_report_is_not_numbered(self):
+        self.assertEqual(
+            format_work_report("Rapport libre\nDeuxième ligne", "numbered"),
+            "Rapport libre\nDeuxième ligne",
+        )
+
+    def test_structured_report_preserves_subject_and_restarts_each_section(self):
+        content = """📌 Rapport boutique
+
+Travail effectué
+Produit vendu
+Stock vérifié
+
+Résultats obtenus
+Facture soldée
+
+Difficultés rencontrées
+Aucune
+
+Prochaines étapes
+Contacter le client"""
+
+        self.assertEqual(
+            format_work_report(content, "numbered"),
+            """📌 Rapport boutique
+
+Travail effectué
+1 - Produit vendu
+2 - Stock vérifié
+
+Résultats obtenus
+1 - Facture soldée
+
+Difficultés rencontrées
+1 - Aucune
+
+Prochaines étapes
+1 - Contacter le client""",
         )
 
 
