@@ -38,6 +38,9 @@ class Produit(Base):
     image_url = Column(String, nullable=True)
     stock_min = Column(Integer, default=0)
     a_des_barcodes = Column(Boolean, default=False)
+    # Identifiant stable partagé par les copies d'une même fiche dans les
+    # différentes entreprises commerce d'un groupe.
+    catalog_key = Column(String(36), nullable=True, index=True)
 
     
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)

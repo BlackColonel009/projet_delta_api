@@ -19,7 +19,8 @@ from app.models import (
     model_historique_general, model_facture, model_paiement, model_depense, model_rapport, 
     model_unite_produit, model_notification, model_reset_token, model_galerie, model_client_produit,
     model_tutoriel,model_clientfollowup, model_depot, model_depot_service, model_depot_tarif, model_facture_depot, model_enterprise,
-    model_depot_tarif_items, model_souscription, model_subscription_plan, model_subscription_request
+    model_depot_tarif_items, model_souscription, model_subscription_plan, model_subscription_request,
+    model_stock_arrival
 )
 
 # Config Alembic

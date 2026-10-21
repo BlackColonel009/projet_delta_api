@@ -9,7 +9,7 @@ from jose import JWTError
 import jwt
 from app.repo_scheduler.scheduler import start_scheduler
 from app.utils.policy import afficher_banner
-from app.routes import admin_subscription, auth, client_produit, depot, depot_service, depot_tarif, enterprise_context, facture_depot, followup, galerie, laundry, legacy_migration, property_rental, rapport_financier, subscription_plan, subscription_request, tutoriel, vehicle_rental  # Tu ajouteras d'autres routes ici
+from app.routes import admin_subscription, auth, client_produit, depot, depot_service, depot_tarif, enterprise_context, facture_depot, followup, galerie, laundry, legacy_migration, property_rental, rapport_financier, stock_arrival, subscription_plan, subscription_request, tutoriel, vehicle_rental  # Tu ajouteras d'autres routes ici
 from app.config import settings
 from app.routes import client
 from app.routes import produit
@@ -138,6 +138,7 @@ app.include_router(laundry.router)
 app.include_router(vehicle_rental.router)
 app.include_router(property_rental.router)
 app.include_router(legacy_migration.router)
+app.include_router(stock_arrival.router)
 
 app.include_router(
     scanqr.router,
