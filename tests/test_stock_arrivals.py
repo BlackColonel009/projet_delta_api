@@ -1,5 +1,6 @@
 import unittest
 
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -11,7 +12,12 @@ from app.models.model_produit import Produit
 from app.models.model_stock_arrival import StockArrival, StockArrivalLine
 from app.models.model_unite_produit import UniteProduit
 from app.models.model_user import User
-from app.routes.stock_arrival import transfer_stock, validate_arrival
+from app.routes.stock_arrival import (
+    product_arrival_units,
+    transfer_stock,
+    validate_arrival,
+)
+from app.routes.produit import _with_available_quantities
 from app.schemas.stock_arrival_schema import StockTransferCreate, StockTransferItem
 from app.services.enterprise_service import create_owner_foundation
 
@@ -134,6 +140,70 @@ class StockArrivalWorkflowTests(unittest.TestCase):
         self.assertEqual(destination_count, 1)
         self.assertEqual(self.product.quantite, 1)
         self.assertEqual(destination_product.quantite, 1)
+
+    def test_arrival_units_follow_sale_in_receiving_enterprise(self):
+        validate_arrival(self.arrival.id, self.db, self.owner)
+        transfer_stock(
+            StockTransferCreate(
+                destination_enterprise_id=self.annex.id,
+                items=[StockTransferItem(product_id=self.product.id, quantity=1)],
+                source_arrival_id=self.arrival.id,
+            ),
+            self.db,
+            self.owner,
+        )
+        transferred_unit = self.db.query(UniteProduit).filter(
+            UniteProduit.enterprise_id == self.annex.id,
+        ).one()
+        transferred_unit.statut = "vendu"
+        self.db.commit()
+
+        groups = product_arrival_units(self.product.id, self.db, self.owner)
+        sold = next(
+            unit
+            for group in groups
+            for unit in group["units"]
+            if unit["id"] == transferred_unit.id
+        )
+        self.assertEqual(sold["status"], "vendu")
+        self.assertTrue(sold["transferred"])
+        self.assertEqual(sold["current_enterprise_name"], self.annex.name)
+
+    def test_sold_unit_cannot_be_transferred(self):
+        validate_arrival(self.arrival.id, self.db, self.owner)
+        for unit in self.db.query(UniteProduit).filter(
+            UniteProduit.produit_id == self.product.id,
+        ):
+            unit.statut = "vendu"
+        self.db.commit()
+
+        with self.assertRaises(HTTPException) as raised:
+            transfer_stock(
+                StockTransferCreate(
+                    destination_enterprise_id=self.annex.id,
+                    items=[StockTransferItem(
+                        product_id=self.product.id,
+                        quantity=1,
+                    )],
+                    source_arrival_id=self.arrival.id,
+                ),
+                self.db,
+                self.owner,
+            )
+        self.assertEqual(raised.exception.status_code, 409)
+
+    def test_product_badge_uses_available_units_not_stale_quantity(self):
+        validate_arrival(self.arrival.id, self.db, self.owner)
+        for unit in self.db.query(UniteProduit).filter(
+            UniteProduit.produit_id == self.product.id,
+        ):
+            unit.statut = "vendu"
+        # Simule l'ancienne valeur qui produisait « Stock faible » à tort.
+        self.product.quantite = 1
+        self.db.flush()
+
+        result = _with_available_quantities(self.db, [self.product])
+        self.assertEqual(result[0].quantite, 0)
 
 
 if __name__ == "__main__":

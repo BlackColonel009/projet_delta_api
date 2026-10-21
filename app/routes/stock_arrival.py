@@ -83,12 +83,18 @@ def _assert_draft(arrival: StockArrival):
 
 def _serialize_unit(link: StockArrivalUnit) -> dict:
     unit = link.unit
+    current_enterprise = unit.enterprise
     return {
         "id": unit.id,
         "traceability": link.traceability_snapshot,
         "barcode": link.barcode_snapshot,
         "status": unit.statut,
         "created_at": unit.date_creation,
+        "current_enterprise_id": unit.enterprise_id,
+        "current_enterprise_name": current_enterprise.name if current_enterprise else None,
+        "current_product_id": unit.produit_id,
+        "current_product_name": unit.produit.nom if unit.produit else None,
+        "transferred": unit.enterprise_id != link.line.enterprise_id,
     }
 
 
@@ -673,3 +679,70 @@ def product_movements(
         })
     events.sort(key=lambda event: event["date"] or datetime.min, reverse=True)
     return events[:limit]
+
+
+@router.get("/products/{product_id}/arrival-units")
+def product_arrival_units(
+    product_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])),
+):
+    """Suit les unités d'une fiche depuis leur arrivage, même après transfert."""
+    enterprise_id = actor_enterprise_id(current_user)
+    product = db.query(Produit).filter(
+        Produit.id == product_id,
+        Produit.enterprise_id == enterprise_id,
+        Produit.date_suppression.is_(None),
+    ).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Produit introuvable")
+
+    enterprise = db.query(Enterprise).filter(Enterprise.id == enterprise_id).first()
+    product_ids = [product.id]
+    if product.catalog_key and enterprise:
+        product_ids = [row[0] for row in (
+            db.query(Produit.id)
+            .join(Enterprise, Enterprise.id == Produit.enterprise_id)
+            .filter(
+                Produit.catalog_key == product.catalog_key,
+                Produit.date_suppression.is_(None),
+                Enterprise.group_id == enterprise.group_id,
+            )
+            .all()
+        )]
+
+    lines = (
+        db.query(StockArrivalLine)
+        .options(
+            joinedload(StockArrivalLine.arrival).joinedload(StockArrival.enterprise),
+            selectinload(StockArrivalLine.units)
+            .joinedload(StockArrivalUnit.unit)
+            .joinedload(UniteProduit.enterprise),
+            selectinload(StockArrivalLine.units)
+            .joinedload(StockArrivalUnit.unit)
+            .joinedload(UniteProduit.produit),
+        )
+        .filter(StockArrivalLine.product_id.in_(product_ids))
+        .order_by(StockArrivalLine.created_at.desc(), StockArrivalLine.id.desc())
+        .all()
+    )
+
+    result = []
+    for line in lines:
+        units = [_serialize_unit(link) for link in line.units]
+        counts = {}
+        for unit in units:
+            normalized = (unit.get("status") or "inconnu").strip().lower().replace("_", " ")
+            counts[normalized] = counts.get(normalized, 0) + 1
+        result.append({
+            "arrival_id": line.arrival_id,
+            "arrival_name": line.arrival.name,
+            "arrival_reference": line.arrival.reference,
+            "source_enterprise_id": line.enterprise_id,
+            "source_enterprise_name": line.arrival.enterprise.name,
+            "received_quantity": line.quantity,
+            "created_at": line.arrival.validated_at or line.created_at,
+            "status_counts": counts,
+            "units": units,
+        })
+    return result

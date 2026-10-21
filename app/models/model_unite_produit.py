@@ -47,6 +47,7 @@ class UniteProduit(Base):
 
 
     produit = relationship("Produit", back_populates="unites")
+    enterprise = relationship("Enterprise")
     
 
 

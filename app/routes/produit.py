@@ -1,6 +1,7 @@
 import json
 from fastapi import APIRouter, Depends, HTTPException, Body, File, Form, UploadFile, Query
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm.attributes import set_committed_value
 from typing import List, Optional
 from app.database import get_db
 from app.models.model_produit import Produit
@@ -30,6 +31,26 @@ import shutil
 import os
 
 router = APIRouter(prefix="/produits", tags=["Produits"])
+
+
+def _with_available_quantities(db: Session, products: list[Produit]):
+    """Expose toujours le stock réellement disponible, jamais le stock historique vendu."""
+    if not products:
+        return products
+    product_ids = [product.id for product in products]
+    available = dict(
+        db.query(UniteProduit.produit_id, func.count(UniteProduit.id))
+        .filter(
+            UniteProduit.produit_id.in_(product_ids),
+            func.lower(UniteProduit.statut) == "disponible",
+        )
+        .group_by(UniteProduit.produit_id)
+        .all()
+    )
+    for product in products:
+        # set_committed_value évite de marquer l'objet comme modifié durant ce GET.
+        set_committed_value(product, "quantite", int(available.get(product.id, 0)))
+    return products
 
 @router.post("/", response_model=dict)
 def create_produit(
@@ -254,12 +275,13 @@ def list_produits(
         query = query.filter(Produit.nom.ilike(f"%{search.strip()}%"))
     if categorie_id is not None:
         query = query.filter(Produit.categorie_id == categorie_id)
-    return (
+    products = (
         query.order_by(Produit.date_creation.desc(), Produit.id.desc())
         .offset(offset)
         .limit(limit)
         .all()
     )
+    return _with_available_quantities(db, products)
 
 
 @router.get("/stats/count", response_model=dict)
@@ -293,7 +315,7 @@ def get_produit(
     if not produit:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
     
-    return produit
+    return _with_available_quantities(db, [produit])[0]
 
 
 
@@ -561,7 +583,7 @@ def get_stock_disponible(
     ).count()
     en_cours = db.query(UniteProduit).filter(
         UniteProduit.produit_id == produit_id,
-        UniteProduit.statut == "en_cours"
+        func.lower(UniteProduit.statut).in_(["en_cours", "en cours"])
     ).count()
     return {"stock_total": total, "stock_reel": disponible, "stock_en_attente": en_cours}
 
