@@ -298,7 +298,16 @@ def product_count_stats(
         Produit.date_suppression.is_(None),
         enterprise_scope_filter(Produit, current_user),
     ).one()
-    return {"articles": int(articles or 0), "quantite_totale": int(quantity or 0)}
+    ruptures = db.query(func.count(Produit.id)).filter(
+        Produit.date_suppression.is_(None),
+        Produit.quantite <= 0,
+        enterprise_scope_filter(Produit, current_user),
+    ).scalar()
+    return {
+        "articles": int(articles or 0),
+        "quantite_totale": int(quantity or 0),
+        "ruptures": int(ruptures or 0),
+    }
 
 
 @router.get("/characteristics/suggestions", response_model=List[str])
