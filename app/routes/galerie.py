@@ -66,7 +66,7 @@ def update_image_galerie(
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     image = db.query(GaleriePhoto).join(GaleriePhoto.produit).filter(
         GaleriePhoto.id == image_id,
-        enterprise_scope_filter(GaleriePhoto, current_user),
+        enterprise_scope_filter(Produit, current_user),
     ).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image non trouvée")
@@ -100,7 +100,7 @@ def delete_image_galerie(
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     image = db.query(GaleriePhoto).join(GaleriePhoto.produit).filter(
         GaleriePhoto.id == image_id,
-        enterprise_scope_filter(GaleriePhoto, current_user),
+        enterprise_scope_filter(Produit, current_user),
     ).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image non trouvée")
@@ -133,6 +133,6 @@ def get_galerie_by_produit(
     parent_user_id = current_user.parent_user_id if not current_user.is_main_user else current_user.id
     images = db.query(GaleriePhoto).join(GaleriePhoto.produit).filter(
         GaleriePhoto.produit_id == produit_id,
-        enterprise_scope_filter(GaleriePhoto, current_user),
+        enterprise_scope_filter(Produit, current_user),
     ).order_by(GaleriePhoto.date_ajout.desc()).all()
     return images
