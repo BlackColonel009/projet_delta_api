@@ -4,6 +4,7 @@ from typing import Optional
 
 class RapportCreate(BaseModel):
     contenu: str = Field(min_length=1, max_length=5000)
+    client_reference: Optional[str] = Field(default=None, min_length=8, max_length=64)
 
     @field_validator("contenu")
     @classmethod
@@ -37,6 +38,7 @@ class AutomaticReportSettingsUpdate(BaseModel):
     include_sales: bool = True
     include_products: bool = True
     include_product_units: bool = True
+    include_arrivals: bool = True
     include_interventions: bool = True
     include_consignments: bool = True
     include_payments: bool = True
@@ -64,6 +66,7 @@ class RapportOut(BaseModel):
     is_mine: bool = False
     is_edited: bool = False
     is_automatic: bool = False
+    client_reference: Optional[str] = None
 
     class Config:
         from_attributes = True

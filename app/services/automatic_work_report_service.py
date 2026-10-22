@@ -14,6 +14,7 @@ from app.models.model_intervention import Intervention
 from app.models.model_notification import Notification
 from app.models.model_paiement import Paiement
 from app.models.model_produit import Produit
+from app.models.model_stock_arrival import StockArrival, StockArrivalLine
 from app.models.model_unite_produit import UniteProduit
 from app.models.model_laundry import LaundryOrder, LaundryOrderEvent, LaundryPayment
 from app.models.model_vehicle_rental import (
@@ -52,6 +53,7 @@ DEFAULT_CONFIG = {
     "include_sales": True,
     "include_products": True,
     "include_product_units": True,
+    "include_arrivals": True,
     "include_interventions": True,
     "include_consignments": True,
     "include_payments": True,
@@ -254,6 +256,23 @@ def _header(enterprise: Enterprise, report_day: date, summary: list[str]) -> lis
     ]
 
 
+def _arrival_report_line(arrival: StockArrival) -> str:
+    products = ", ".join(
+        f"{line.product.nom if line.product else 'Produit'} ×{line.quantity}"
+        for line in arrival.lines
+    ) or "Aucun produit renseigné"
+    reference = f" — Référence : {arrival.reference}" if arrival.reference else ""
+    author = (
+        f" — Enregistré par : {arrival.created_by_name}"
+        if arrival.created_by_name
+        else ""
+    )
+    return (
+        f"• {arrival.created_at.strftime('%H:%M')} — {arrival.name}{reference} — "
+        f"{products} — Statut : {arrival.status}{author}."
+    )
+
+
 def _build_commerce_report(
     db: Session,
     enterprise: Enterprise,
@@ -334,6 +353,21 @@ def _build_commerce_report(
             .all()
         )
 
+    arrivals = [] if not config["include_arrivals"] else (
+        db.query(StockArrival)
+        .options(
+            selectinload(StockArrival.lines).joinedload(StockArrivalLine.product),
+        )
+        .filter(
+            StockArrival.enterprise_id == enterprise.id,
+            StockArrival.created_at >= start,
+            StockArrival.created_at <= end,
+            StockArrival.status != "cancelled",
+        )
+        .order_by(StockArrival.created_at)
+        .all()
+    )
+
     interventions = [] if not config["include_interventions"] else (
         db.query(Intervention)
         .options(joinedload(Intervention.client), selectinload(Intervention.produits))
@@ -366,6 +400,7 @@ def _build_commerce_report(
         not sales
         and not products
         and not added_units
+        and not arrivals
         and not interventions
         and not deposits
         and not next_steps
@@ -376,6 +411,7 @@ def _build_commerce_report(
         f"• Ventes enregistrées : {len(sales)}",
         f"• Produits enregistrés : {len(products)}",
         f"• Ajouts d’unités au stock : {sum(int(row[1]) for row in added_units)}",
+        f"• Nouveaux arrivages : {len(arrivals)}",
         f"• Interventions enregistrées : {len(interventions)}",
         f"• Consignes enregistrées : {len(deposits)}",
         f"• Actions de suivi proposées : {len(next_steps)}",
@@ -420,6 +456,10 @@ def _build_commerce_report(
                 f"{added_product_names.get(product_id, 'Produit')} — "
                 f"{int(quantity)} nouvelle(s) unité(s) ajoutée(s)."
             )
+
+    if arrivals:
+        lines.extend(["", "NOUVEAUX ARRIVAGES"])
+        lines.extend(_arrival_report_line(arrival) for arrival in arrivals)
 
     if interventions:
         lines.extend(["", "INTERVENTIONS"])

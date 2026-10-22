@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -201,6 +201,96 @@ class RapportTests(unittest.TestCase):
         details = history_log.call_args.kwargs["details"]
         self.assertIn("Ancien contenu", details)
         self.assertIn("Nouveau contenu", details)
+
+    def test_admin_can_edit_todays_automatic_report(self):
+        report = SimpleNamespace(
+            id=12,
+            user_id=42,
+            sub_user_id=None,
+            contenu="Rapport automatique initial",
+            date_creation=datetime.utcnow(),
+            date_modification=None,
+            source="tradecare_daily",
+            source_date=date.today(),
+            user=None,
+            sub_user=None,
+        )
+        db = _FakeDb(report)
+        admin = SimpleNamespace(
+            id=7,
+            parent_user_id=42,
+            username="Admin annexe",
+            email="admin@example.com",
+            avatar_url=None,
+            role="admin",
+            is_main_user=False,
+            is_superuser=False,
+            active_enterprise_id=1,
+            active_enterprise_is_primary=False,
+        )
+        enterprise = SimpleNamespace(
+            timezone="Africa/Lome",
+            automatic_work_report_config={"list_style": "numbered"},
+        )
+
+        with (
+            patch("app.routes.rapport._company_owner"),
+            patch("app.routes.rapport._report_enterprise", return_value=enterprise),
+            patch("app.routes.rapport.log_action"),
+        ):
+            result = update_rapport(
+                12,
+                RapportUpdate(contenu="Rapport automatique corrigé"),
+                db=db,
+                current_user=admin,
+            )
+
+        self.assertEqual(result["contenu"], "Rapport automatique corrigé")
+        self.assertTrue(result["is_automatic"])
+        self.assertEqual(db.commits, 1)
+
+    def test_automatic_report_cannot_be_edited_after_midnight(self):
+        report = SimpleNamespace(
+            id=13,
+            user_id=42,
+            sub_user_id=None,
+            contenu="Rapport automatique clôturé",
+            date_creation=datetime.utcnow() - timedelta(days=1),
+            date_modification=None,
+            source="tradecare_daily",
+            source_date=date.today() - timedelta(days=1),
+            user=None,
+            sub_user=None,
+        )
+        db = _FakeDb(report)
+        admin = SimpleNamespace(
+            id=7,
+            parent_user_id=42,
+            role="admin",
+            is_main_user=False,
+            is_superuser=False,
+            active_enterprise_id=1,
+            active_enterprise_is_primary=False,
+        )
+        enterprise = SimpleNamespace(
+            timezone="Africa/Lome",
+            automatic_work_report_config={"list_style": "numbered"},
+        )
+
+        with (
+            patch("app.routes.rapport._company_owner"),
+            patch("app.routes.rapport._report_enterprise", return_value=enterprise),
+        ):
+            with self.assertRaises(HTTPException) as caught:
+                update_rapport(
+                    13,
+                    RapportUpdate(contenu="Modification tardive"),
+                    db=db,
+                    current_user=admin,
+                )
+
+        self.assertEqual(caught.exception.status_code, 403)
+        self.assertEqual(db.commits, 0)
 
     def test_main_user_controls_company_report_sharing(self):
         owner = SimpleNamespace(

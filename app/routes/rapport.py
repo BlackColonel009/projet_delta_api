@@ -40,6 +40,7 @@ _AUTOMATIC_REPORT_DEFAULTS = {
     "include_sales": True,
     "include_products": True,
     "include_product_units": True,
+    "include_arrivals": True,
     "include_interventions": True,
     "include_consignments": True,
     "include_payments": True,
@@ -76,6 +77,7 @@ def _can_manage_sharing(current_user) -> bool:
 def _can_manage_automatic_report(current_user) -> bool:
     return bool(
         getattr(current_user, "is_main_user", False)
+        or getattr(current_user, "is_superuser", False)
         or str(getattr(current_user, "role", "")).strip().lower()
         in {"admin", "directeur"}
     )
@@ -102,10 +104,33 @@ def create_rapport(
         _automatic_report_config(enterprise)["list_style"],
     )
 
+    if data.client_reference:
+        existing = db.query(Rapport).filter(
+            Rapport.enterprise_id == actor_enterprise_id(current_user),
+            Rapport.client_reference == data.client_reference,
+        ).first()
+        if existing:
+            return {
+                "id": existing.id,
+                "contenu": existing.contenu,
+                "date_creation": existing.date_creation,
+                "date_modification": existing.date_modification,
+                "user_id": existing.user_id,
+                "sub_user_id": existing.sub_user_id,
+                "auteur": current_user.username or current_user.email,
+                "avatar_url": current_user.avatar_url,
+                "role": "Administrateur",
+                "is_mine": True,
+                "is_edited": existing.date_modification is not None,
+                "is_automatic": False,
+                "client_reference": existing.client_reference,
+            }
+
     rapport = Rapport(
         contenu=content,
         user_id=parent_user_id,
         enterprise_id=actor_enterprise_id(current_user),
+        client_reference=data.client_reference,
     )
 
     db.add(rapport)
@@ -134,6 +159,7 @@ def create_rapport(
         "is_mine": True,
         "is_edited": False,
         "is_automatic": False,
+        "client_reference": rapport.client_reference,
     }
 
 
@@ -149,11 +175,33 @@ def create_rapport_sub(
         data.contenu,
         _automatic_report_config(enterprise)["list_style"],
     )
+    if data.client_reference:
+        existing = db.query(Rapport).filter(
+            Rapport.enterprise_id == actor_enterprise_id(current_user),
+            Rapport.client_reference == data.client_reference,
+        ).first()
+        if existing:
+            return {
+                "id": existing.id,
+                "contenu": existing.contenu,
+                "date_creation": existing.date_creation,
+                "date_modification": existing.date_modification,
+                "user_id": existing.user_id,
+                "sub_user_id": existing.sub_user_id,
+                "auteur": current_sub.username,
+                "avatar_url": current_sub.avatar_url,
+                "role": current_sub.role,
+                "is_mine": True,
+                "is_edited": existing.date_modification is not None,
+                "is_automatic": False,
+                "client_reference": existing.client_reference,
+            }
     rapport = Rapport(
         contenu=content,
         sub_user_id=current_sub.id,
         user_id=current_sub.parent_user_id,
         enterprise_id=actor_enterprise_id(current_user),
+        client_reference=data.client_reference,
     )
 
     db.add(rapport)
@@ -182,6 +230,7 @@ def create_rapport_sub(
         "is_mine": True,
         "is_edited": False,
         "is_automatic": False,
+        "client_reference": rapport.client_reference,
     }
 
 
@@ -340,6 +389,7 @@ def update_automatic_report_settings(
         "include_sales": data.include_sales,
         "include_products": data.include_products,
         "include_product_units": data.include_product_units,
+        "include_arrivals": data.include_arrivals,
         "include_interventions": data.include_interventions,
         "include_consignments": data.include_consignments,
         "include_payments": data.include_payments,

@@ -14,6 +14,10 @@ class Rapport(Base):
             "enterprise_id", "source", "source_date",
             name="uq_rapports_enterprise_source_date",
         ),
+        UniqueConstraint(
+            "enterprise_id", "client_reference",
+            name="uq_rapports_enterprise_client_reference",
+        ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -23,6 +27,7 @@ class Rapport(Base):
     date_modification = Column(DateTime, nullable=True)
     source = Column(String(32), nullable=False, default="manual")
     source_date = Column(Date, nullable=True)
+    client_reference = Column(String(64), nullable=True)
 
     user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     enterprise_id = Column(Integer, ForeignKey("enterprises.id"), nullable=True, index=True)

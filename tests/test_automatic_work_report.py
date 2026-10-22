@@ -1,11 +1,12 @@
 import unittest
-from datetime import date
+from datetime import date, datetime
 from types import SimpleNamespace
 
 from app.services.automatic_work_report_service import (
     DEFAULT_CONFIG,
     EMPTY_MESSAGE,
     _config,
+    _arrival_report_line,
     _commerce_next_steps,
     _deposit_invoice_state,
     _intervention_next_step,
@@ -79,7 +80,34 @@ class AutomaticWorkReportTests(unittest.TestCase):
         self.assertFalse(config["include_amounts"])
         self.assertEqual(config["include_products"], DEFAULT_CONFIG["include_products"])
         self.assertTrue(config["include_product_units"])
+        self.assertTrue(config["include_arrivals"])
         self.assertTrue(config["include_next_steps"])
+
+    def test_arrival_line_lists_products_quantities_and_author(self):
+        arrival = SimpleNamespace(
+            created_at=datetime(2026, 10, 22, 14, 35),
+            name="Livraison octobre",
+            reference="ARR-1022",
+            status="validated",
+            created_by_name="Afi",
+            lines=[
+                SimpleNamespace(
+                    product=SimpleNamespace(nom="Téléviseur"),
+                    quantity=4,
+                ),
+                SimpleNamespace(
+                    product=SimpleNamespace(nom="Ventilateur"),
+                    quantity=2,
+                ),
+            ],
+        )
+
+        result = _arrival_report_line(arrival)
+
+        self.assertIn("Livraison octobre", result)
+        self.assertIn("Téléviseur ×4", result)
+        self.assertIn("Ventilateur ×2", result)
+        self.assertIn("Afi", result)
 
     def test_disabled_next_steps_do_not_query_or_generate_any_suggestion(self):
         self.assertEqual(
@@ -98,6 +126,9 @@ class AutomaticWorkReportTests(unittest.TestCase):
         ))
         self.assertTrue(_can_manage_automatic_report(
             SimpleNamespace(is_main_user=False, role="Directeur")
+        ))
+        self.assertTrue(_can_manage_automatic_report(
+            SimpleNamespace(is_main_user=False, is_superuser=True, role="")
         ))
         self.assertFalse(_can_manage_automatic_report(
             SimpleNamespace(is_main_user=False, role="caissier")
