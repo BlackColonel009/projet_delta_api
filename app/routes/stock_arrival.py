@@ -1,7 +1,12 @@
 from datetime import datetime
+from io import BytesIO
+from types import SimpleNamespace
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import PageBreak, Spacer
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -29,12 +34,27 @@ from app.schemas.stock_arrival_schema import (
 )
 from app.schemas.user_schema import RoleEnum
 from app.services.enterprise_service import actor_enterprise_id, actor_owner_id
+from app.services.report_design import ReportDesign, company_owner
 from app.services.traceability_service import create_generated_unit
 from app.utils.logger import log_action
 from app.utils.permissions import check_role
 
 
 router = APIRouter(prefix="/stock-arrivals", tags=["Nouveaux arrivages"])
+
+
+def _report_company(db: Session, actor, enterprise: Enterprise):
+    owner = company_owner(db, actor)
+    return SimpleNamespace(
+        societe_ou_entreprise=enterprise.name,
+        app_theme=enterprise.app_theme or getattr(owner, "app_theme", "tradecare"),
+        logo_entreprise=enterprise.logo_url or getattr(owner, "logo_entreprise", None),
+        addresse=enterprise.address or getattr(owner, "addresse", None),
+    )
+
+
+def _status_key(value: str | None) -> str:
+    return (value or "inconnu").strip().lower().replace("_", " ")
 
 
 def _agent_name(actor) -> str:
@@ -164,6 +184,155 @@ def list_arrivals(
         query = query.filter(StockArrival.status == status_filter)
     rows = query.order_by(StockArrival.created_at.desc(), StockArrival.id.desc()).offset(offset).limit(limit).all()
     return [_serialize_arrival(row) for row in rows]
+
+
+@router.get("/exports/report.pdf")
+def export_arrivals_report(
+    status_filter: str | None = Query(None, alias="status", pattern="^(draft|validated|cancelled)$"),
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])),
+):
+    enterprise_id = actor_enterprise_id(current_user)
+    enterprise = _require_commerce(db, enterprise_id)
+    query = (
+        db.query(StockArrival)
+        .options(
+            joinedload(StockArrival.supplier),
+            selectinload(StockArrival.lines)
+            .joinedload(StockArrivalLine.product)
+            .joinedload(Produit.categorie),
+            selectinload(StockArrival.lines)
+            .selectinload(StockArrivalLine.units)
+            .joinedload(StockArrivalUnit.unit),
+        )
+        .filter(StockArrival.enterprise_id == enterprise_id)
+    )
+    if status_filter:
+        query = query.filter(StockArrival.status == status_filter)
+    arrivals = query.order_by(StockArrival.created_at.desc(), StockArrival.id.desc()).all()
+
+    language = str(getattr(current_user, "interface_language", "fr") or "fr").lower()
+    is_english = language.startswith("en")
+    tr = lambda fr, en: en if is_english else fr
+    status_labels = {
+        "draft": tr("Brouillon", "Draft"),
+        "validated": tr("Valide", "Validated"),
+        "cancelled": tr("Annule", "Cancelled"),
+    }
+    filter_label = status_labels.get(status_filter, tr("Tous les statuts", "All statuses"))
+    company = _report_company(db, current_user, enterprise)
+    design = ReportDesign(company)
+    generated_at = datetime.now()
+    buffer = BytesIO()
+
+    total_products = sum(len(arrival.lines) for arrival in arrivals)
+    total_units = sum(line.quantity for arrival in arrivals for line in arrival.lines)
+    validated_count = sum(arrival.status == "validated" for arrival in arrivals)
+    draft_count = sum(arrival.status == "draft" for arrival in arrivals)
+    story = design.cover(
+        tr("Rapport des nouveaux arrivages", "New arrivals report"),
+        tr(f"Filtre : {filter_label}", f"Filter: {filter_label}"),
+    )
+    story += [
+        design.p(tr("Synthese", "Summary"), "Heading1"),
+        design.table(
+            [tr("Indicateur", "Indicator"), tr("Valeur", "Value")],
+            [
+                (tr("Dossiers", "Folders"), len(arrivals)),
+                (tr("Dossiers valides", "Validated folders"), validated_count),
+                (tr("Brouillons", "Drafts"), draft_count),
+                (tr("Fiches produits", "Product records"), total_products),
+                (tr("Unites recues", "Units received"), total_units),
+            ],
+            widths=[330, 153],
+        ),
+        Spacer(1, 18),
+        design.p(tr("Vue generale", "Overview"), "Heading1"),
+        design.table(
+            [
+                tr("Date", "Date"),
+                tr("Arrivage", "Arrival"),
+                tr("Reference", "Reference"),
+                tr("Statut", "Status"),
+                tr("Produits", "Products"),
+                tr("Unites", "Units"),
+                tr("Agent", "Agent"),
+            ],
+            [
+                [
+                    arrival.created_at.strftime("%d/%m/%Y"),
+                    arrival.name,
+                    arrival.reference or "-",
+                    status_labels.get(arrival.status, arrival.status),
+                    len(arrival.lines),
+                    sum(line.quantity for line in arrival.lines),
+                    arrival.created_by_name or "-",
+                ]
+                for arrival in arrivals
+            ],
+            widths=[58, 112, 70, 65, 52, 45, 81],
+        ),
+    ]
+
+    if arrivals:
+        story.append(PageBreak())
+        story.append(design.p(tr("Detail des arrivages", "Arrival details"), "Heading1"))
+    for arrival in arrivals:
+        story += [
+            design.p(arrival.name, "Heading2"),
+            design.p(
+                " | ".join(filter(None, [
+                    f"{tr('Reference', 'Reference')}: {arrival.reference}" if arrival.reference else None,
+                    f"{tr('Fournisseur', 'Supplier')}: {arrival.supplier.nom}" if arrival.supplier else None,
+                    f"{tr('Agent', 'Agent')}: {arrival.created_by_name or '-'}",
+                    f"{tr('Statut', 'Status')}: {status_labels.get(arrival.status, arrival.status)}",
+                ]))
+            ),
+        ]
+        rows = []
+        for line in arrival.lines:
+            counts = {"disponible": 0, "en cours": 0, "vendu": 0, "indisponible": 0}
+            transferred = 0
+            for link in line.units:
+                key = _status_key(link.unit.statut)
+                counts[key] = counts.get(key, 0) + 1
+                if link.unit.enterprise_id != line.enterprise_id:
+                    transferred += 1
+            rows.append([
+                line.product.nom,
+                line.product.categorie.nom if line.product.categorie else "-",
+                line.quantity,
+                counts.get("disponible", 0),
+                counts.get("en cours", 0),
+                counts.get("vendu", 0),
+                counts.get("indisponible", 0),
+                transferred,
+            ])
+        story += [
+            design.table(
+                [
+                    tr("Produit", "Product"),
+                    tr("Categorie", "Category"),
+                    tr("Recues", "Received"),
+                    tr("Dispo.", "Avail."),
+                    tr("En cours", "In progress"),
+                    tr("Vendues", "Sold"),
+                    tr("Indispo.", "Unavail."),
+                    tr("Transf.", "Transf."),
+                ],
+                rows,
+                widths=[115, 78, 48, 48, 54, 48, 48, 44],
+            ),
+            Spacer(1, 14),
+        ]
+
+    design.build(buffer, story, pagesize=A4)
+    filename = f"rapport-arrivages-{generated_at.strftime('%Y%m%d-%H%M')}.pdf"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

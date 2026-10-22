@@ -56,8 +56,8 @@ def _with_available_quantities(db: Session, products: list[Produit]):
 def create_produit(
     nom: str = Form(...),
     categorie_id: int = Form(...),
-    prix_achat: float = Form(...),
-    prix_vente: float = Form(...),
+    prix_achat: float = Form(0),
+    prix_vente: float = Form(0),
     quantite: int = Form(...),
     fournisseur_id: Optional[int] = Form(None),
     rating: Optional[float] = Form(None),
@@ -67,7 +67,7 @@ def create_produit(
     commentaire: Optional[str] = Form(None),
     is_installe: Optional[bool] = Form(False),
     emplacement: Optional[str] = Form("magasin"),
-    image: UploadFile = File(...),
+    image: Optional[UploadFile] = File(None),
     # scanned_barcodes: Optional[List[str]] = Form(None),
     scanned_barcodes_raw: Optional[str] = Form(None),
 
@@ -102,17 +102,19 @@ def create_produit(
     )
 
     try:
-        # 📷 Enregistrement de l'image
-        original_filename = image.filename or "produit.jpg"
-        ext = original_filename.rsplit(".", 1)[-1].lower() if "." in original_filename else "jpg"
-        if ext not in {"jpg", "jpeg", "png", "webp"}:
-            raise HTTPException(status_code=400, detail="Format d'image non pris en charge")
-        image_filename = f"{datetime.utcnow().timestamp()}.{ext}"
-        upload_dir = os.path.join(os.getcwd(), "upload", "produits")
-        os.makedirs(upload_dir, exist_ok=True)
-        image_path = os.path.join(upload_dir, image_filename)
-        with open(image_path, "wb") as buffer:
-            shutil.copyfileobj(image.file, buffer)
+        image_url = None
+        if image is not None and image.filename:
+            original_filename = image.filename
+            ext = original_filename.rsplit(".", 1)[-1].lower() if "." in original_filename else "jpg"
+            if ext not in {"jpg", "jpeg", "png", "webp"}:
+                raise HTTPException(status_code=400, detail="Format d'image non pris en charge")
+            image_filename = f"{datetime.utcnow().timestamp()}.{ext}"
+            upload_dir = os.path.join(os.getcwd(), "upload", "produits")
+            os.makedirs(upload_dir, exist_ok=True)
+            image_path = os.path.join(upload_dir, image_filename)
+            with open(image_path, "wb") as buffer:
+                shutil.copyfileobj(image.file, buffer)
+            image_url = f"/static/produits/{image_filename}"
 
         # 🧱 Création du produit (sans champ quantite ni tracabilite)
         produit = Produit(
@@ -129,7 +131,7 @@ def create_produit(
             commentaire=commentaire,
             is_installe=is_installe,
             emplacement=emplacement,
-            image_url=f"/static/produits/{image_filename}",
+            image_url=image_url,
             user_id=parent_user_id,
             enterprise_id=enterprise_id,
             a_des_barcodes=False
@@ -298,6 +300,32 @@ def product_count_stats(
     ).one()
     return {"articles": int(articles or 0), "quantite_totale": int(quantity or 0)}
 
+
+@router.get("/characteristics/suggestions", response_model=List[str])
+def product_characteristic_suggestions(
+    limit: int = Query(8, ge=1, le=20),
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    """Retourne les caractéristiques réutilisables, les plus complètes d'abord."""
+    rows = (
+        db.query(
+            Produit.caracteristiques,
+            func.length(Produit.caracteristiques).label("text_length"),
+        )
+        .filter(
+            Produit.date_suppression.is_(None),
+            Produit.caracteristiques.isnot(None),
+            func.length(func.trim(Produit.caracteristiques)) > 0,
+            enterprise_scope_filter(Produit, current_user),
+        )
+        .group_by(Produit.caracteristiques)
+        .order_by(func.length(Produit.caracteristiques).desc())
+        .limit(limit)
+        .all()
+    )
+    return [value.strip() for value, _ in rows if value and value.strip()]
+
 # 🔍 Voir un produit par ID
 @router.get("/{produit_id}", response_model=ProduitOut)
 def get_produit(
@@ -325,8 +353,8 @@ def update_produit(
     produit_id: int,
     nom: str = Form(...),
     categorie_id: int = Form(...),
-    prix_achat: float = Form(...),
-    prix_vente: float = Form(...),
+    prix_achat: float = Form(0),
+    prix_vente: float = Form(0),
     fournisseur_id: Optional[int] = Form(None),
     quantite: int = Form(...),
     rating: Optional[float] = Form(None),

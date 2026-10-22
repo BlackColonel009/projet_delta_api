@@ -13,6 +13,7 @@ from app.models.model_stock_arrival import StockArrival, StockArrivalLine
 from app.models.model_unite_produit import UniteProduit
 from app.models.model_user import User
 from app.routes.stock_arrival import (
+    export_arrivals_report,
     product_arrival_units,
     transfer_stock,
     validate_arrival,
@@ -204,6 +205,13 @@ class StockArrivalWorkflowTests(unittest.TestCase):
 
         result = _with_available_quantities(self.db, [self.product])
         self.assertEqual(result[0].quantite, 0)
+
+    def test_arrivals_report_is_a_valid_pdf_response(self):
+        validate_arrival(self.arrival.id, self.db, self.owner)
+        response = export_arrivals_report(None, self.db, self.owner)
+        self.assertEqual(response.media_type, "application/pdf")
+        self.assertTrue(response.body.startswith(b"%PDF-"))
+        self.assertGreater(len(response.body), 2000)
 
 
 if __name__ == "__main__":
