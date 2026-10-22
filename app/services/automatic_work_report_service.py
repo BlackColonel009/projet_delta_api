@@ -23,7 +23,7 @@ from app.models.model_vehicle_rental import (
     VehicleRentalEvent,
     VehicleRentalPayment,
 )
-from app.services.work_report_formatting import format_work_report
+from app.services.work_report_formatting import normalize_report_list_style
 from app.models.model_property_rental import (
     PropertyInspection,
     PropertyMaintenance,
@@ -245,6 +245,44 @@ def _finish(lines: list[str]) -> str:
     return content
 
 
+def _format_automatic_report(content: str, style: str | None) -> str:
+    """Applique le motif choisi aux lignes métier du rapport automatique.
+
+    Les compteurs redémarrent dans chaque section et les titres restent
+    inchangés. Le formateur des rapports manuels ne peut pas être utilisé ici,
+    car les titres automatiques sont propres à chaque type d'entreprise.
+    """
+    selected_style = normalize_report_list_style(style)
+    lines = content.strip().splitlines()
+    formatted: list[str] = []
+    item_index = 0
+    prefixes = {
+        "numbered": lambda index: f"{index} - ",
+        "dash": lambda _index: "- ",
+        "dot": lambda _index: ". ",
+        "bullet": lambda _index: "• ",
+        "arrow": lambda _index: "→ ",
+        "check": lambda _index: "✓ ",
+        "plain": lambda _index: "",
+    }
+
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if stripped.startswith("• "):
+            item_index += 1
+            formatted.append(f"{prefixes[selected_style](item_index)}{stripped[2:].strip()}")
+            continue
+        if stripped:
+            item_index = 0
+        formatted.append(raw_line)
+    return "\n".join(formatted)
+
+
+def _summary(config: dict, entries: list[tuple[str | None, str]]) -> list[str]:
+    """Retourne uniquement les indicateurs dont la rubrique est activée."""
+    return [f"• {label}" for option, label in entries if option is None or config[option]]
+
+
 def _header(enterprise: Enterprise, report_day: date, summary: list[str]) -> list[str]:
     return [
         f"RAPPORT JOURNALIER AUTOMATIQUE — {report_day.strftime('%d/%m/%Y')}",
@@ -326,7 +364,17 @@ def _build_commerce_report(
         .order_by(Produit.date_creation)
         .all()
     )
-    product_ids = {product.id for product in products}
+    new_product_ids = {product.id for product in products}
+    if config["include_product_units"] and not config["include_products"]:
+        new_product_ids = {
+            row[0]
+            for row in db.query(Produit.id).filter(
+                Produit.enterprise_id == enterprise.id,
+                Produit.date_creation >= start,
+                Produit.date_creation <= end,
+                Produit.date_suppression.is_(None),
+            ).all()
+        }
     unit_rows = []
     if config["include_product_units"]:
         unit_rows = (
@@ -344,7 +392,7 @@ def _build_commerce_report(
             .group_by(UniteProduit.produit_id)
             .all()
         )
-    added_units = [row for row in unit_rows if row[0] not in product_ids]
+    added_units = [row for row in unit_rows if row[0] not in new_product_ids]
     added_product_names = {}
     if added_units:
         added_product_names = dict(
@@ -407,15 +455,15 @@ def _build_commerce_report(
     ):
         return EMPTY_MESSAGE
 
-    lines = _header(enterprise, report_day, [
-        f"• Ventes enregistrées : {len(sales)}",
-        f"• Produits enregistrés : {len(products)}",
-        f"• Ajouts d’unités au stock : {sum(int(row[1]) for row in added_units)}",
-        f"• Nouveaux arrivages : {len(arrivals)}",
-        f"• Interventions enregistrées : {len(interventions)}",
-        f"• Consignes enregistrées : {len(deposits)}",
-        f"• Actions de suivi proposées : {len(next_steps)}",
-    ])
+    lines = _header(enterprise, report_day, _summary(config, [
+        ("include_sales", f"Ventes enregistrées : {len(sales)}"),
+        ("include_products", f"Produits enregistrés : {len(products)}"),
+        ("include_product_units", f"Ajouts d’unités au stock : {sum(int(row[1]) for row in added_units)}"),
+        ("include_arrivals", f"Nouveaux arrivages : {len(arrivals)}"),
+        ("include_interventions", f"Interventions enregistrées : {len(interventions)}"),
+        ("include_consignments", f"Consignes enregistrées : {len(deposits)}"),
+        ("include_next_steps", f"Actions de suivi proposées : {len(next_steps)}"),
+    ]))
 
     if config["detail_level"] == "compact":
         _append_next_steps(lines, next_steps)
@@ -445,10 +493,14 @@ def _build_commerce_report(
                 f" — Prix de vente : {_money(product.prix_vente, currency)}"
                 if config["include_amounts"] else ""
             )
+            quantity = (
+                f" — Quantité initiale : {product.quantite or 0}"
+                if config["include_product_units"] else ""
+            )
             lines.append(
                 f"• {product.date_creation.strftime('%H:%M')} — {product.nom} — "
-                f"Catégorie : {product.categorie.nom if product.categorie else 'Non renseignée'} — "
-                f"Quantité initiale : {product.quantite or 0}{amount}."
+                f"Catégorie : {product.categorie.nom if product.categorie else 'Non renseignée'}"
+                f"{quantity}{amount}."
             )
         for product_id, quantity, created_at in added_units:
             lines.append(
@@ -525,11 +577,11 @@ def _build_laundry_report(db: Session, enterprise: Enterprise, report_day: date)
     )
     if not orders and not events and not payments:
         return EMPTY_MESSAGE
-    lines = _header(enterprise, report_day, [
-        f"• Commandes reçues : {len(orders)}",
-        f"• Changements de statut : {len(events)}",
-        f"• Paiements enregistrés : {len(payments)}",
-    ])
+    lines = _header(enterprise, report_day, _summary(config, [
+        (None, f"Commandes reçues : {len(orders)}"),
+        ("include_status_changes", f"Changements de statut : {len(events)}"),
+        ("include_payments", f"Paiements enregistrés : {len(payments)}"),
+    ]))
     if config["detail_level"] == "compact":
         return _finish(lines)
     if orders:
@@ -552,10 +604,13 @@ def _build_laundry_report(db: Session, enterprise: Enterprise, report_day: date)
     if payments:
         lines.extend(["", "PAIEMENTS"])
         for payment, order_number in payments:
-            amount = _money(payment.amount, enterprise.currency) if config["include_amounts"] else "Montant masqué"
+            amount = (
+                f" — {_money(payment.amount, enterprise.currency)}"
+                if config["include_amounts"] else ""
+            )
             lines.append(
                 f"• {payment.created_at.strftime('%H:%M')} — {order_number} — "
-                f"{amount} — {payment.payment_method} — Agent : {payment.agent_name}."
+                f"{payment.payment_method}{amount} — Agent : {payment.agent_name}."
             )
     return _finish(lines)
 
@@ -591,7 +646,7 @@ def _build_vehicle_report(db: Session, enterprise: Enterprise, report_day: date)
             VehicleRentalPayment.created_at <= end,
         ).order_by(VehicleRentalPayment.created_at).all()
     )
-    charges = (
+    charges = [] if not config["include_payments"] else (
         db.query(VehicleRentalCharge, VehicleReservation.reservation_number)
         .join(VehicleReservation, VehicleReservation.id == VehicleRentalCharge.reservation_id)
         .filter(
@@ -602,12 +657,12 @@ def _build_vehicle_report(db: Session, enterprise: Enterprise, report_day: date)
     )
     if not reservations and not events and not payments and not charges:
         return EMPTY_MESSAGE
-    lines = _header(enterprise, report_day, [
-        f"• Réservations créées : {len(reservations)}",
-        f"• Mouvements de véhicules : {len(events)}",
-        f"• Paiements enregistrés : {len(payments)}",
-        f"• Frais et pénalités : {len(charges)}",
-    ])
+    lines = _header(enterprise, report_day, _summary(config, [
+        (None, f"Réservations créées : {len(reservations)}"),
+        ("include_status_changes", f"Mouvements de véhicules : {len(events)}"),
+        ("include_payments", f"Paiements enregistrés : {len(payments)}"),
+        ("include_payments", f"Frais et pénalités : {len(charges)}"),
+    ]))
     if config["detail_level"] == "compact":
         return _finish(lines)
     if reservations:
@@ -632,11 +687,11 @@ def _build_vehicle_report(db: Session, enterprise: Enterprise, report_day: date)
     if payments or charges:
         lines.extend(["", "PAIEMENTS ET FRAIS"])
         for payment, number in payments:
-            amount = _money(payment.amount, enterprise.currency) if config["include_amounts"] else "Montant masqué"
-            lines.append(f"• {payment.created_at.strftime('%H:%M')} — {number} — {payment.kind} : {amount} ({payment.payment_method}).")
+            amount = f" : {_money(payment.amount, enterprise.currency)}" if config["include_amounts"] else ""
+            lines.append(f"• {payment.created_at.strftime('%H:%M')} — {number} — {payment.kind}{amount} ({payment.payment_method}).")
         for charge, number in charges:
-            amount = _money(charge.amount, enterprise.currency) if config["include_amounts"] else "Montant masqué"
-            lines.append(f"• {charge.created_at.strftime('%H:%M')} — {number} — {charge.label} : {amount}.")
+            amount = f" : {_money(charge.amount, enterprise.currency)}" if config["include_amounts"] else ""
+            lines.append(f"• {charge.created_at.strftime('%H:%M')} — {number} — {charge.label}{amount}.")
     return _finish(lines)
 
 
@@ -689,12 +744,12 @@ def _build_property_report(db: Session, enterprise: Enterprise, report_day: date
     )
     if not occupancies and not dues and not payments and not maintenance and not inspections:
         return EMPTY_MESSAGE
-    lines = _header(enterprise, report_day, [
-        f"• Contrats créés : {len(occupancies)}",
-        f"• Échéances du jour : {len(dues)}",
-        f"• Paiements enregistrés : {len(payments)}",
-        f"• Maintenances et états des lieux : {len(maintenance) + len(inspections)}",
-    ])
+    lines = _header(enterprise, report_day, _summary(config, [
+        (None, f"Contrats créés : {len(occupancies)}"),
+        (None, f"Échéances du jour : {len(dues)}"),
+        ("include_payments", f"Paiements enregistrés : {len(payments)}"),
+        ("include_maintenance", f"Maintenances et états des lieux : {len(maintenance) + len(inspections)}"),
+    ]))
     if config["detail_level"] == "compact":
         return _finish(lines)
     if occupancies:
@@ -709,11 +764,11 @@ def _build_property_report(db: Session, enterprise: Enterprise, report_day: date
     if dues or payments:
         lines.extend(["", "LOYERS ET PAIEMENTS"])
         for due in dues:
-            amount = _money(due.amount, enterprise.currency) if config["include_amounts"] else "Montant masqué"
-            lines.append(f"• Échéance {due.occupancy.contract_number} — {amount} — Statut : {due.status}.")
+            amount = f" — {_money(due.amount, enterprise.currency)}" if config["include_amounts"] else ""
+            lines.append(f"• Échéance {due.occupancy.contract_number}{amount} — Statut : {due.status}.")
         for payment, number in payments:
-            amount = _money(payment.amount, enterprise.currency) if config["include_amounts"] else "Montant masqué"
-            lines.append(f"• {payment.created_at.strftime('%H:%M')} — {number} — {payment.kind} : {amount} ({payment.payment_method}).")
+            amount = f" : {_money(payment.amount, enterprise.currency)}" if config["include_amounts"] else ""
+            lines.append(f"• {payment.created_at.strftime('%H:%M')} — {number} — {payment.kind}{amount} ({payment.payment_method}).")
     if maintenance or inspections:
         lines.extend(["", "MAINTENANCE ET ÉTATS DES LIEUX"])
         for item in maintenance:
@@ -750,7 +805,7 @@ def generate_daily_work_report(
     config = _config(enterprise)
     if raw_content == EMPTY_MESSAGE and not config["publish_when_empty"]:
         return existing
-    content = format_work_report(raw_content, config.get("list_style"))
+    content = _format_automatic_report(raw_content, config.get("list_style"))
     if existing:
         if refresh_existing:
             existing.contenu = content

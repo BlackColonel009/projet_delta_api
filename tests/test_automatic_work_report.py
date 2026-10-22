@@ -12,6 +12,8 @@ from app.services.automatic_work_report_service import (
     _intervention_next_step,
     _invoice_next_step,
     _invoice_state,
+    _format_automatic_report,
+    _summary,
     _utc_bounds,
 )
 from app.routes.rapport import _can_manage_automatic_report
@@ -148,6 +150,27 @@ class AutomaticWorkReportTests(unittest.TestCase):
                 "bullet",
             ),
             "Objet\n\nRésultats obtenus\n• Produit vendu\n• Paiement reçu",
+        )
+
+    def test_automatic_report_style_is_applied_and_restarts_per_section(self):
+        content = "SYNTHÈSE\n• Deux ventes\n• Un paiement\n\nVENTES\n• Vente A\n• Vente B"
+        self.assertEqual(
+            _format_automatic_report(content, "numbered"),
+            "SYNTHÈSE\n1 - Deux ventes\n2 - Un paiement\n\nVENTES\n1 - Vente A\n2 - Vente B",
+        )
+
+    def test_automatic_summary_omits_disabled_sections(self):
+        config = {"include_sales": False, "include_products": True}
+        self.assertEqual(
+            _summary(
+                config,
+                [
+                    ("include_sales", "Ventes : 0"),
+                    ("include_products", "Produits : 2"),
+                    (None, "Activité principale : 1"),
+                ],
+            ),
+            ["• Produits : 2", "• Activité principale : 1"],
         )
 
     def test_free_form_report_is_not_numbered(self):

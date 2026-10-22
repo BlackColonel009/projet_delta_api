@@ -316,8 +316,17 @@ async def send_facture_to_client_memory(
     language = language_of(current_user)
     tr = lambda fr, en: translated(language, fr, en)
 
-    if not facture.client or not facture.client.email:
-        raise HTTPException(status_code=400, detail="Le client n'a pas d'adresse email")
+    if not facture.client or not (facture.client.email or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "CLIENT_EMAIL_MISSING",
+                "message": tr(
+                    "Ce client n’a aucune adresse e-mail enregistrée. Ajoutez son e-mail dans sa fiche avant d’envoyer la facture.",
+                    "This customer has no email address on file. Add an email to the customer record before sending the invoice.",
+                ),
+            },
+        )
 
     if invoice_format == "professional":
         enforce_feature_access(db, current_user, "professional_invoice")

@@ -393,15 +393,24 @@ async def email_facture_depot(
     facture = _query(db, facture_id, actor_enterprise_id(current_user)).first()
     if not facture:
         raise HTTPException(404, "Facture de dépôt non trouvée")
+    language = language_of(current_user)
+    tr = lambda fr, en: translated(language, fr, en)
     client = getattr(facture.depot, "client", None)
-    if not client or not getattr(client, "email", None):
-        raise HTTPException(400, "Le client n'a pas d'adresse e-mail.")
+    if not client or not (getattr(client, "email", None) or "").strip():
+        raise HTTPException(
+            400,
+            {
+                "code": "CLIENT_EMAIL_MISSING",
+                "message": tr(
+                    "Ce client n’a aucune adresse e-mail enregistrée. Ajoutez son e-mail dans sa fiche avant d’envoyer la facture.",
+                    "This customer has no email address on file. Add an email to the customer record before sending the invoice.",
+                ),
+            },
+        )
     if invoice_format == "professional":
         enforce_feature_access(db, current_user, "professional_invoice")
 
     company = facture.user
-    language = language_of(current_user)
-    tr = lambda fr, en: translated(language, fr, en)
     pdf_buffer = _document(
         facture,
         False,

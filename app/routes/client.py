@@ -1,9 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from types import SimpleNamespace
 from typing import List, Optional
 from app.database import get_db
 from app.models.model_client import Client
-from app.schemas.client_schema import ClientCreate, ClientOut
+from app.schemas.client_schema import (
+    ClientCreate,
+    ClientOut,
+    ClientWelcomeEmailRequest,
+)
+from app.models.model_enterprise import Enterprise
+from app.models.model_user import User
+from app.core.mail import send_email_message
+from app.email.branded_templates import client_welcome_email
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
 from app.utils.security import get_current_user
@@ -19,6 +28,90 @@ from app.services.enterprise_service import (
 
 
 router = APIRouter(prefix="/clients", tags=["Clients"])
+
+
+@router.post("/{client_id}/welcome-email")
+async def send_client_welcome_email(
+    client_id: int,
+    data: ClientWelcomeEmailRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(
+        check_role(
+            [
+                RoleEnum.admin,
+                RoleEnum.commercial,
+                RoleEnum.secretaire,
+                RoleEnum.technicien,
+            ]
+        )
+    ),
+):
+    client = (
+        db.query(Client)
+        .filter(
+            Client.id == client_id,
+            enterprise_scope_filter(Client, current_user),
+        )
+        .first()
+    )
+    if not client:
+        raise HTTPException(status_code=404, detail="Client non trouvé")
+    if not client.email:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "CLIENT_EMAIL_MISSING",
+                "message": "Ce client n'a pas d'adresse e-mail enregistrée.",
+            },
+        )
+
+    enterprise = db.query(Enterprise).filter(
+        Enterprise.id == actor_enterprise_id(current_user)
+    ).first()
+    owner = db.query(User).filter(User.id == actor_owner_id(current_user)).first()
+    if not enterprise or not owner:
+        raise HTTPException(status_code=404, detail="Entreprise introuvable")
+
+    # Le template historique attend une identité de type utilisateur. Cette
+    # identité éphémère garantit ici le nom, le logo et la couleur de l'annexe
+    # active, sans modifier les paramètres globaux du propriétaire.
+    brand = SimpleNamespace(
+        societe_ou_entreprise=enterprise.name,
+        email=enterprise.email or owner.email,
+        logo_entreprise=enterprise.logo_url or owner.logo_entreprise,
+        facture_color=enterprise.invoice_color or owner.facture_color,
+        interface_language=data.language,
+    )
+    subject = (
+        f"Welcome to {enterprise.name} 🎉"
+        if data.language == "en"
+        else f"Bienvenue chez {enterprise.name} 🎉"
+    )
+    sent = await send_email_message(
+        to_email=client.email,
+        subject=subject,
+        body=client_welcome_email(user=brand, client_name=client.nom),
+        reply_to=enterprise.email or owner.email,
+        is_html=True,
+    )
+    if not sent:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "EMAIL_DELIVERY_FAILED",
+                "message": "Le service e-mail est momentanément indisponible.",
+            },
+        )
+
+    log_action(
+        db=db,
+        current_user=current_user,
+        action="Message de bienvenue client",
+        type_entite="client",
+        entite_id=client.id,
+        details=f"E-mail de bienvenue envoyé à {client.nom} ({client.email})",
+    )
+    return {"message": "E-mail de bienvenue envoyé avec succès."}
 
 # ➕ Créer un client
 @router.post("/", response_model=ClientOut)

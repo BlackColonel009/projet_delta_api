@@ -310,6 +310,46 @@ def loyalty_email(*, user, client_name: str, product_names: Iterable[str]) -> st
     )
 
 
+def client_welcome_email(*, user, client_name: str) -> str:
+    """Message de bienvenue aux couleurs et avec le logo de l'entreprise."""
+    identity = _company_identity(user)
+    content = f"""
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;background:{identity['primary_pale']};border:1px solid {identity['primary_soft']};border-radius:16px;">
+        <tr><td align="center" style="padding:24px 20px;">
+          <div style="font-size:34px;line-height:1;">👋 😊</div>
+          <div style="margin-top:13px;font-size:18px;line-height:1.5;color:{identity['primary_dark']};font-weight:900;">{_tr(user, 'Bienvenue dans notre communauté !', 'Welcome to our community!')}</div>
+          <div style="margin-top:9px;font-size:14px;line-height:1.7;color:#4b5563;">{_tr(user, 'Notre équipe est heureuse de vous compter parmi ses clients et reste à votre disposition pour vous accompagner.', 'Our team is delighted to have you as a customer and remains available to assist you.')}</div>
+        </td></tr>
+      </table>
+      <p style="margin:22px 0 0;font-size:16px;line-height:1.8;color:#374151;text-align:center;font-weight:700;">{_tr(user, 'Nous serons plus que ravis de vous revoir chez nous.', 'We will be more than happy to welcome you again.')} ✨</p>
+      <p style="margin:12px 0 0;font-size:14px;line-height:1.7;color:#4b5563;text-align:center;">{_tr(user, 'À très bientôt !', 'See you soon!')} 🌟</p>
+    """
+    email = getattr(user, "email", "") or ""
+    return _layout(
+        user=user,
+        preheader=_tr(
+            user,
+            f"Bienvenue chez {identity['company']}",
+            f"Welcome to {identity['company']}",
+        ),
+        eyebrow=_tr(user, "Un message pour vous", "A message for you"),
+        title=_tr(
+            user,
+            f"Bienvenue {client_name} ! 🎉",
+            f"Welcome {client_name}! 🎉",
+        ),
+        introduction=_tr(
+            user,
+            f"Toute l’équipe de {identity['company']} vous souhaite chaleureusement la bienvenue.",
+            f"Everyone at {identity['company']} warmly welcomes you.",
+        ),
+        content=content,
+        badge=_tr(user, "Bienvenue", "Welcome"),
+        cta_label=_tr(user, "Écrire à notre équipe", "Contact our team"),
+        cta_url=f"mailto:{quote(email, safe='@')}" if email else None,
+    )
+
+
 def product_recommendation_email(*, user, client_name: str, product) -> str:
     identity = _company_identity(user)
     image_url = public_url(getattr(product, "image_url", None))

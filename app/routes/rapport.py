@@ -432,7 +432,9 @@ def generate_automatic_report_now(
         db,
         enterprise,
         report_day,
-        refresh_existing=False,
+        # Le bouton de test doit refléter immédiatement la configuration qui
+        # vient d'être enregistrée, même si un rapport existe déjà aujourd'hui.
+        refresh_existing=True,
     )
     if report is None:
         raise HTTPException(

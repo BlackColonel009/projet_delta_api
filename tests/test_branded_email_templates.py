@@ -3,6 +3,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 from app.email.branded_templates import (
+    client_welcome_email,
     loyalty_email,
     payment_reminder_email,
     product_recommendation_email,
@@ -52,6 +53,16 @@ class BrandedEmailTemplateTests(unittest.TestCase):
         self.assertIn("Imprimante", html)
         self.assertIn("Cartouche", html)
         self.assertIn("Merci pour votre achat", html)
+
+    def test_client_welcome_email_uses_company_logo_and_warm_message(self):
+        html = client_welcome_email(
+            user=self.user,
+            client_name="Ama <VIP>",
+        )
+        self.assertIn("Bienvenue Ama &lt;VIP&gt;", html)
+        self.assertIn("Nous serons plus que ravis", html)
+        self.assertIn("Delta &amp; Fils", html)
+        self.assertIn(public_url("/static/logos/delta.png"), html)
 
     def test_recommendation_contains_product_and_pdf_explanation(self):
         product = SimpleNamespace(
