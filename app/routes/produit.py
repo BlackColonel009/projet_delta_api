@@ -8,6 +8,7 @@ from app.models.model_produit import Produit
 from app.schemas.produit_schema import ProduitCreate, ProduitOut
 from pydantic import BaseModel
 from datetime import datetime
+from uuid import uuid4
 from app.utils.logger import log_action
 from app.utils.permissions import All_required, check_role
 from app.utils.security import get_current_user
@@ -16,6 +17,7 @@ from app.schemas.user_schema import RoleEnum
 from app.models.model_unite_produit import UniteProduit
 from app.models.model_categorie import Categorie
 from app.models.model_fournisseur import Fournisseur
+from app.models.model_galerie import GaleriePhoto
 from app.services.enterprise_service import (
     actor_enterprise_id,
     actor_owner_id,
@@ -70,6 +72,7 @@ def create_produit(
     image: Optional[UploadFile] = File(None),
     # scanned_barcodes: Optional[List[str]] = Form(None),
     scanned_barcodes_raw: Optional[str] = Form(None),
+    clone_source_product_id: Optional[int] = Form(None),
 
     # nombre_unites: Optional[int] = Form(0),  # ✅ nouveau champ pour auto
     db: Session = Depends(get_db),
@@ -78,6 +81,7 @@ def create_produit(
     parent_user_id = actor_owner_id(current_user)
     enterprise_id = actor_enterprise_id(current_user)
     image_path = None
+    cloned_gallery_paths: list[str] = []
 
     if not db.query(Categorie.id).filter(
         Categorie.id == categorie_id,
@@ -115,6 +119,33 @@ def create_produit(
             with open(image_path, "wb") as buffer:
                 shutil.copyfileobj(image.file, buffer)
             image_url = f"/static/produits/{image_filename}"
+        elif clone_source_product_id is not None:
+            source_product = db.query(Produit).filter(
+                Produit.id == clone_source_product_id,
+                Produit.date_suppression.is_(None),
+                enterprise_scope_filter(Produit, current_user),
+            ).first()
+            if not source_product:
+                raise HTTPException(
+                    status_code=404,
+                    detail="La fiche produit à cloner est introuvable.",
+                )
+            if source_product.image_url:
+                relative_source = source_product.image_url.split("/static/", 1)
+                if len(relative_source) == 2:
+                    source_path = os.path.join(
+                        os.getcwd(),
+                        "upload",
+                        relative_source[1].replace("/", os.sep),
+                    )
+                    if os.path.isfile(source_path):
+                        extension = os.path.splitext(source_path)[1] or ".jpg"
+                        image_filename = f"{uuid4().hex}{extension.lower()}"
+                        upload_dir = os.path.join(os.getcwd(), "upload", "produits")
+                        os.makedirs(upload_dir, exist_ok=True)
+                        image_path = os.path.join(upload_dir, image_filename)
+                        shutil.copy2(source_path, image_path)
+                        image_url = f"/static/produits/{image_filename}"
 
         # 🧱 Création du produit (sans champ quantite ni tracabilite)
         produit = Produit(
@@ -123,7 +154,9 @@ def create_produit(
             prix_achat=prix_achat,
             prix_vente=prix_vente,
             fournisseur_id=fournisseur_id,
-            quantite=quantite,
+            # Une fiche clonée est toujours créée sans unité. La valeur du
+            # client est ignorée pour garantir le stock initial à zéro.
+            quantite=0 if clone_source_product_id is not None else quantite,
             rating=rating,
             caracteristiques=caracteristiques,
             couleur=couleur,
@@ -158,6 +191,9 @@ def create_produit(
 
 
         # 🔍 Gestion des unités : SCAN manuel
+        if clone_source_product_id is not None:
+            scanned_barcodes = []
+
         if scanned_barcodes and len(scanned_barcodes) > 0:
             unites = []
             conflicts = []
@@ -222,7 +258,7 @@ def create_produit(
                 )
 
         # ⚙️ Sinon : génération automatique par nombre
-        elif quantite  > 0:
+        elif clone_source_product_id is None and quantite > 0:
             for _ in range(quantite):
                 create_generated_unit(
                     db,
@@ -241,6 +277,52 @@ def create_produit(
                 details=f"{quantite} unités générées avec QR pour produit {produit.nom}"
             )
 
+        if clone_source_product_id is not None:
+            for source_photo in source_product.galerie:
+                relative_gallery = source_photo.image_url.split("/static/", 1)
+                if len(relative_gallery) != 2:
+                    continue
+                gallery_source_path = os.path.join(
+                    os.getcwd(),
+                    "upload",
+                    relative_gallery[1].replace("/", os.sep),
+                )
+                if not os.path.isfile(gallery_source_path):
+                    continue
+                gallery_extension = (
+                    os.path.splitext(gallery_source_path)[1] or ".jpg"
+                )
+                gallery_filename = f"{uuid4().hex}{gallery_extension.lower()}"
+                gallery_directory = os.path.join(os.getcwd(), "upload", "galerie")
+                os.makedirs(gallery_directory, exist_ok=True)
+                shutil.copy2(
+                    gallery_source_path,
+                    os.path.join(gallery_directory, gallery_filename),
+                )
+                cloned_gallery_paths.append(
+                    os.path.join(gallery_directory, gallery_filename)
+                )
+                db.add(
+                    GaleriePhoto(
+                        produit_id=produit.id,
+                        enterprise_id=enterprise_id,
+                        image_url=f"/static/galerie/{gallery_filename}",
+                        date_ajout=datetime.utcnow(),
+                    )
+                )
+
+            log_action(
+                db=db,
+                current_user=current_user,
+                action="Clonage d'une fiche produit",
+                type_entite="produit",
+                entite_id=produit.id,
+                details=(
+                    f"Fiche {source_product.nom} clonée vers {produit.nom} "
+                    "sans unité et avec un stock initial nul."
+                ),
+            )
+
         db.commit()
         return {"message": "Produit créé avec succès", "produit_id": produit.id}
 
@@ -248,11 +330,17 @@ def create_produit(
         db.rollback()
         if image_path and os.path.exists(image_path):
             os.remove(image_path)
+        for cloned_path in cloned_gallery_paths:
+            if os.path.exists(cloned_path):
+                os.remove(cloned_path)
         raise
     except Exception as e:
         db.rollback()
         if image_path and os.path.exists(image_path):
             os.remove(image_path)
+        for cloned_path in cloned_gallery_paths:
+            if os.path.exists(cloned_path):
+                os.remove(cloned_path)
         print("❌ ERREUR lors de la création du produit :", str(e))
         raise HTTPException(status_code=500, detail="Erreur lors de l'enregistrement du produit")
 
