@@ -190,6 +190,7 @@ def list_arrivals(
 @router.get("/exports/report.pdf")
 def export_arrivals_report(
     status_filter: str | None = Query(None, alias="status", pattern="^(draft|validated|cancelled)$"),
+    arrival_id: int | None = Query(None, ge=1),
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])),
 ):
@@ -210,7 +211,11 @@ def export_arrivals_report(
     )
     if status_filter:
         query = query.filter(StockArrival.status == status_filter)
+    if arrival_id is not None:
+        query = query.filter(StockArrival.id == arrival_id)
     arrivals = query.order_by(StockArrival.created_at.desc(), StockArrival.id.desc()).all()
+    if arrival_id is not None and not arrivals:
+        raise HTTPException(status_code=404, detail="Arrivage introuvable")
 
     language = str(getattr(current_user, "interface_language", "fr") or "fr").lower()
     is_english = language.startswith("en")
@@ -230,10 +235,17 @@ def export_arrivals_report(
     total_units = sum(line.quantity for arrival in arrivals for line in arrival.lines)
     validated_count = sum(arrival.status == "validated" for arrival in arrivals)
     draft_count = sum(arrival.status == "draft" for arrival in arrivals)
-    story = design.cover(
-        tr("Rapport des nouveaux arrivages", "New arrivals report"),
-        tr(f"Filtre : {filter_label}", f"Filter: {filter_label}"),
+    report_title = (
+        tr(f"Rapport de l'arrivage : {arrivals[0].name}", f"Arrival report: {arrivals[0].name}")
+        if arrival_id is not None and arrivals
+        else tr("Rapport des nouveaux arrivages", "New arrivals report")
     )
+    report_subtitle = (
+        tr("Rapport individuel", "Individual report")
+        if arrival_id is not None
+        else tr(f"Filtre : {filter_label}", f"Filter: {filter_label}")
+    )
+    story = design.cover(report_title, report_subtitle)
     story += [
         design.p(tr("Synthese", "Summary"), "Heading1"),
         design.table(
@@ -328,7 +340,8 @@ def export_arrivals_report(
         ]
 
     design.build(buffer, story, pagesize=A4)
-    filename = f"rapport-arrivages-{generated_at.strftime('%Y%m%d-%H%M')}.pdf"
+    filename_prefix = f"rapport-arrivage-{arrival_id}" if arrival_id else "rapport-arrivages"
+    filename = f"{filename_prefix}-{generated_at.strftime('%Y%m%d-%H%M')}.pdf"
     return Response(
         content=buffer.getvalue(),
         media_type="application/pdf",
@@ -401,13 +414,17 @@ def update_arrival(
     arrival = _arrival_or_404(db, current_user, arrival_id, lock=True)
     previous_name = arrival.name
     arrival.name = data.name.strip()
+    arrival.notes = data.notes.strip() if data.notes and data.notes.strip() else None
     log_action(
         db=db,
         current_user=current_user,
         action="Modification d'un arrivage",
         type_entite="arrivage",
         entite_id=arrival.id,
-        details=f"Arrivage renommé de « {previous_name} » en « {arrival.name} ».",
+        details=(
+            f"Arrivage actualisé de « {previous_name} » en « {arrival.name} ». "
+            f"Note : {arrival.notes or 'aucune'}"
+        ),
         commit=False,
     )
     db.commit()

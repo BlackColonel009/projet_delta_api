@@ -12,6 +12,7 @@ class StockArrivalCreate(BaseModel):
 
 class StockArrivalUpdate(BaseModel):
     name: str = Field(min_length=2, max_length=180)
+    notes: Optional[str] = Field(default=None, max_length=2000)
 
     @field_validator("name")
     @classmethod
