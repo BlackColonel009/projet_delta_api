@@ -10,6 +10,18 @@ class StockArrivalCreate(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=2000)
 
 
+class StockArrivalUpdate(BaseModel):
+    name: str = Field(min_length=2, max_length=180)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 2:
+            raise ValueError("Le nom doit contenir au moins 2 caractères")
+        return normalized
+
+
 class StockArrivalLineCreate(BaseModel):
     product_id: int = Field(ge=1)
     quantity: int = Field(ge=1, le=10000)

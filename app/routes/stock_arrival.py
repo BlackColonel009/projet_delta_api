@@ -29,6 +29,7 @@ from app.schemas.stock_arrival_schema import (
     ArrivalTransferCreate,
     StockArrivalCreate,
     StockArrivalLineCreate,
+    StockArrivalUpdate,
     StockTransferCreate,
     StockTransferItem,
 )
@@ -387,6 +388,30 @@ def get_arrival(
     ).filter(StockArrival.id == arrival_id, StockArrival.enterprise_id == enterprise_id).first()
     if not arrival:
         raise HTTPException(status_code=404, detail="Arrivage introuvable")
+    return _serialize_arrival(arrival, detailed=True)
+
+
+@router.patch("/{arrival_id}")
+def update_arrival(
+    arrival_id: int,
+    data: StockArrivalUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])),
+):
+    arrival = _arrival_or_404(db, current_user, arrival_id, lock=True)
+    previous_name = arrival.name
+    arrival.name = data.name.strip()
+    log_action(
+        db=db,
+        current_user=current_user,
+        action="Modification d'un arrivage",
+        type_entite="arrivage",
+        entite_id=arrival.id,
+        details=f"Arrivage renommé de « {previous_name} » en « {arrival.name} ».",
+        commit=False,
+    )
+    db.commit()
+    db.refresh(arrival)
     return _serialize_arrival(arrival, detailed=True)
 
 
