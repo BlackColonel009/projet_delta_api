@@ -313,6 +313,10 @@ def export_arrivals_report(
                     transferred += 1
             rows.append([
                 line.product.nom,
+                (
+                    " ".join((line.product.caracteristiques or "-").split())[:240]
+                    or "-"
+                ),
                 line.product.categorie.nom if line.product.categorie else "-",
                 line.quantity,
                 counts.get("disponible", 0),
@@ -325,6 +329,7 @@ def export_arrivals_report(
             design.table(
                 [
                     tr("Produit", "Product"),
+                    tr("Caracteristiques", "Characteristics"),
                     tr("Categorie", "Category"),
                     tr("Recues", "Received"),
                     tr("Dispo.", "Avail."),
@@ -334,7 +339,7 @@ def export_arrivals_report(
                     tr("Transf.", "Transf."),
                 ],
                 rows,
-                widths=[115, 78, 48, 48, 54, 48, 48, 44],
+                widths=[78, 105, 58, 40, 40, 45, 40, 42, 35],
             ),
             Spacer(1, 14),
         ]
