@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     MAIL_SERVER: str = ""
     MAIL_FROM_NAME: str = "Trade Care"
     MAIL_ENABLED: bool = True
+    CONTACT_EMAIL: str = "imlogang009@gmail.com"
     # Port 587 : STARTTLS=true / SSL_TLS=false.
     # Port 465 : STARTTLS=false / SSL_TLS=true.
     MAIL_STARTTLS: bool = True

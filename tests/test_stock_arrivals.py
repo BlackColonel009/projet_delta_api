@@ -9,17 +9,26 @@ from app.database import Base
 from app.models.model_categorie import Categorie
 from app.models.model_enterprise import Enterprise
 from app.models.model_produit import Produit
-from app.models.model_stock_arrival import StockArrival, StockArrivalLine
+from app.models.model_stock_arrival import (
+    StockArrival,
+    StockArrivalLine,
+    StockArrivalUnit,
+)
 from app.models.model_unite_produit import UniteProduit
 from app.models.model_user import User
 from app.routes.stock_arrival import (
     export_arrivals_report,
+    link_existing_units_to_arrival,
     product_arrival_units,
     transfer_stock,
     validate_arrival,
 )
 from app.routes.produit import _with_available_quantities
-from app.schemas.stock_arrival_schema import StockTransferCreate, StockTransferItem
+from app.schemas.stock_arrival_schema import (
+    StockArrivalExistingUnitsLink,
+    StockTransferCreate,
+    StockTransferItem,
+)
 from app.services.enterprise_service import create_owner_foundation
 
 
@@ -90,10 +99,14 @@ class StockArrivalWorkflowTests(unittest.TestCase):
         self.engine.dispose()
 
     def _activate_primary(self):
-        self.owner.active_enterprise_id = self.primary.id
+        # Résoudre d'abord les identifiants : leur lecture peut rafraîchir la
+        # session et effacer les attributs de contexte non persistés du test.
+        primary_id = self.primary.id
+        group_id = self.group.id
+        self.owner.active_enterprise_id = primary_id
         self.owner.active_enterprise_is_primary = True
         self.owner.active_enterprise_business_type = "commerce"
-        self.owner.enterprise_group_id = self.group.id
+        self.owner.enterprise_group_id = group_id
 
     def test_validation_adds_units_only_once(self):
         result = validate_arrival(self.arrival.id, self.db, self.owner)
@@ -109,6 +122,80 @@ class StockArrivalWorkflowTests(unittest.TestCase):
         self.assertEqual(
             self.db.query(StockArrival).get(self.arrival.id).status,
             "validated",
+        )
+
+    def test_existing_stock_can_be_linked_without_duplication(self):
+        retrospective = StockArrival(
+            enterprise_id=self.primary.id,
+            user_id=self.owner.id,
+            name="Rattrapage ancien arrivage",
+            created_by_name="Propriétaire",
+        )
+        self.db.add(retrospective)
+        self.db.flush()
+        units = [
+            UniteProduit(
+                produit_id=self.product.id,
+                enterprise_id=self.primary.id,
+                tracabilite=f"OLD-{index}",
+                code_barre=f"OLD-{index}",
+                statut="disponible" if index == 1 else "vendu",
+            )
+            for index in (1, 2)
+        ]
+        self.db.add_all(units)
+        self.db.commit()
+
+        line = link_existing_units_to_arrival(
+            retrospective.id,
+            StockArrivalExistingUnitsLink(
+                product_id=self.product.id,
+                barcodes=["OLD-1", "OLD-2"],
+            ),
+            self.db,
+            self.owner,
+        )
+        self.assertEqual(line["quantity"], 2)
+        self.assertEqual(line["qr_count"], 2)
+        before = self.db.query(UniteProduit).count()
+
+        validate_arrival(retrospective.id, self.db, self.owner)
+
+        self.assertEqual(self.db.query(UniteProduit).count(), before)
+        self.assertEqual(
+            self.db.query(StockArrivalUnit)
+            .join(StockArrivalLine)
+            .filter(StockArrivalLine.arrival_id == retrospective.id)
+            .count(),
+            2,
+        )
+
+    def test_unknown_existing_barcode_does_not_create_arrival_line(self):
+        retrospective = StockArrival(
+            enterprise_id=self.primary.id,
+            user_id=self.owner.id,
+            name="Rattrapage invalide",
+            created_by_name="Propriétaire",
+        )
+        self.db.add(retrospective)
+        self.db.commit()
+
+        with self.assertRaises(HTTPException) as raised:
+            link_existing_units_to_arrival(
+                retrospective.id,
+                StockArrivalExistingUnitsLink(
+                    product_id=self.product.id,
+                    barcodes=["CODE-INCONNU"],
+                ),
+                self.db,
+                self.owner,
+            )
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(
+            self.db.query(StockArrivalLine)
+            .filter(StockArrivalLine.arrival_id == retrospective.id)
+            .count(),
+            0,
         )
 
     def test_transfer_moves_units_and_creates_linked_product(self):
@@ -208,7 +295,8 @@ class StockArrivalWorkflowTests(unittest.TestCase):
 
     def test_arrivals_report_is_a_valid_pdf_response(self):
         validate_arrival(self.arrival.id, self.db, self.owner)
-        response = export_arrivals_report(None, self.db, self.owner)
+        self._activate_primary()
+        response = export_arrivals_report(None, None, self.db, self.owner)
         self.assertEqual(response.media_type, "application/pdf")
         self.assertTrue(response.body.startswith(b"%PDF-"))
         self.assertGreater(len(response.body), 2000)

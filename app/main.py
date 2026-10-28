@@ -34,6 +34,7 @@ from app.routes import unite_produit
 from app.routes import rapport
 from app.routes import notification
 from app.routes import reset
+from app.routes import public_contact
 from app.utils.security import (
     hash_password, verify_password, create_access_token,
     get_current_user, get_current_sub_user,
@@ -172,6 +173,7 @@ app.include_router(File.router)
 app.include_router(tutoriel.router)
 
 app.include_router(reset.router)
+app.include_router(public_contact.router)
 
 app.include_router(
     followup.router_followup,

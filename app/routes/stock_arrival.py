@@ -8,6 +8,7 @@ from fastapi.responses import Response
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import PageBreak, Spacer
 from sqlalchemy import and_, func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.database import get_db
@@ -29,6 +30,7 @@ from app.schemas.stock_arrival_schema import (
     ArrivalTransferCreate,
     StockArrivalCreate,
     StockArrivalLineCreate,
+    StockArrivalExistingUnitsLink,
     StockArrivalUpdate,
     StockTransferCreate,
     StockTransferItem,
@@ -503,6 +505,234 @@ def add_arrival_line(
     return _serialize_line(line)
 
 
+def _existing_units_base_query(
+    db: Session,
+    *,
+    enterprise_id: int,
+    product_id: int,
+):
+    linked_unit_ids = db.query(StockArrivalUnit.unit_id)
+    return db.query(UniteProduit).filter(
+        UniteProduit.enterprise_id == enterprise_id,
+        UniteProduit.produit_id == product_id,
+        UniteProduit.statut != "supprimé",
+        ~UniteProduit.id.in_(linked_unit_ids),
+    )
+
+
+@router.get("/{arrival_id}/products/{product_id}/existing-units")
+def list_existing_units_for_arrival(
+    arrival_id: int,
+    product_id: int,
+    search: str | None = Query(None, max_length=120),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user=Depends(
+        check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])
+    ),
+):
+    arrival = _arrival_or_404(db, current_user, arrival_id)
+    _assert_draft(arrival)
+    product = db.query(Produit.id).filter(
+        Produit.id == product_id,
+        Produit.enterprise_id == arrival.enterprise_id,
+        Produit.date_suppression.is_(None),
+    ).first()
+    if not product:
+        raise HTTPException(
+            status_code=404,
+            detail="Fiche produit introuvable dans cette entreprise",
+        )
+    query = _existing_units_base_query(
+        db,
+        enterprise_id=arrival.enterprise_id,
+        product_id=product_id,
+    )
+    normalized_search = search.strip() if search else ""
+    if normalized_search:
+        pattern = f"%{normalized_search}%"
+        query = query.filter(
+            or_(
+                UniteProduit.code_barre.ilike(pattern),
+                UniteProduit.tracabilite.ilike(pattern),
+            )
+        )
+    units = (
+        query.order_by(
+            UniteProduit.date_creation.desc(),
+            UniteProduit.id.desc(),
+        )
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": unit.id,
+            "barcode": unit.code_barre,
+            "traceability": unit.tracabilite,
+            "status": unit.statut,
+            "created_at": unit.date_creation,
+        }
+        for unit in units
+    ]
+
+
+@router.post(
+    "/{arrival_id}/link-existing-units",
+    status_code=status.HTTP_201_CREATED,
+)
+def link_existing_units_to_arrival(
+    arrival_id: int,
+    data: StockArrivalExistingUnitsLink,
+    db: Session = Depends(get_db),
+    current_user=Depends(
+        check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock])
+    ),
+):
+    arrival = _arrival_or_404(db, current_user, arrival_id, lock=True)
+    _assert_draft(arrival)
+    product = db.query(Produit).filter(
+        Produit.id == data.product_id,
+        Produit.enterprise_id == arrival.enterprise_id,
+        Produit.date_suppression.is_(None),
+    ).first()
+    if not product:
+        raise HTTPException(
+            status_code=404,
+            detail="Fiche produit introuvable dans cette entreprise",
+        )
+    if db.query(StockArrivalLine.id).filter(
+        StockArrivalLine.arrival_id == arrival.id,
+        StockArrivalLine.product_id == product.id,
+    ).first():
+        raise HTTPException(
+            status_code=409,
+            detail="Ce produit figure déjà dans cet arrivage",
+        )
+
+    query = _existing_units_base_query(
+        db,
+        enterprise_id=arrival.enterprise_id,
+        product_id=product.id,
+    )
+    if data.unit_ids:
+        units = query.filter(UniteProduit.id.in_(data.unit_ids)).with_for_update().all()
+        if len(units) != len(data.unit_ids):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Une unité sélectionnée est introuvable, appartient à une autre "
+                    "fiche ou figure déjà dans un arrivage"
+                ),
+            )
+        by_id = {unit.id: unit for unit in units}
+        units = [by_id[unit_id] for unit_id in data.unit_ids]
+    elif data.barcodes:
+        units = query.filter(
+            or_(
+                UniteProduit.code_barre.in_(data.barcodes),
+                UniteProduit.tracabilite.in_(data.barcodes),
+            )
+        ).with_for_update().all()
+        resolved = {}
+        for code in data.barcodes:
+            match = next(
+                (
+                    unit
+                    for unit in units
+                    if unit.code_barre == code or unit.tracabilite == code
+                ),
+                None,
+            )
+            if match is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Le code {code} n'existe pas dans le stock de cette fiche "
+                        "ou figure déjà dans un arrivage"
+                    ),
+                )
+            resolved[match.id] = match
+        if len(resolved) != len(data.barcodes):
+            raise HTTPException(
+                status_code=409,
+                detail="Plusieurs codes désignent la même unité",
+            )
+        units = [
+            next(
+                unit
+                for unit in resolved.values()
+                if unit.code_barre == code or unit.tracabilite == code
+            )
+            for code in data.barcodes
+        ]
+    else:
+        units = (
+            query.order_by(
+                UniteProduit.date_creation.desc(),
+                UniteProduit.id.desc(),
+            )
+            .limit(data.quantity)
+            .with_for_update()
+            .all()
+        )
+        if len(units) != data.quantity:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Seulement {len(units)} unité(s) non rattachée(s) existent "
+                    f"pour cette fiche, au lieu de {data.quantity}"
+                ),
+            )
+
+    line = StockArrivalLine(
+        arrival_id=arrival.id,
+        enterprise_id=arrival.enterprise_id,
+        product_id=product.id,
+        quantity=len(units),
+        barcodes_json=[],
+        notes=data.notes,
+    )
+    db.add(line)
+    db.flush()
+    now = datetime.utcnow()
+    for unit in units:
+        db.add(
+            StockArrivalUnit(
+                arrival_line_id=line.id,
+                unit_id=unit.id,
+                barcode_snapshot=unit.code_barre,
+                traceability_snapshot=unit.tracabilite,
+                created_at=now,
+            )
+        )
+    arrival.updated_at = now
+    try:
+        log_action(
+            db=db,
+            current_user=current_user,
+            action="Rattachement d'un stock existant à un arrivage",
+            type_entite="arrivage",
+            entite_id=arrival.id,
+            details=(
+                f"{len(units)} unité(s) existante(s) de {product.nom} "
+                f"rattachée(s) à « {arrival.name} »."
+            ),
+            commit=False,
+        )
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Une unité vient déjà d'être rattachée à un autre arrivage",
+        )
+    db.refresh(line)
+    return _serialize_line(line, include_units=True)
+
+
 @router.delete("/{arrival_id}/lines/{line_id}")
 def delete_arrival_line(
     arrival_id: int,
@@ -546,46 +776,86 @@ def validate_arrival(
             if not product:
                 raise HTTPException(status_code=409, detail="Une fiche produit de l'arrivage n'est plus disponible")
             codes = list(line.barcodes_json or [])
-            if codes:
-                conflict = db.query(UniteProduit.code_barre).filter(
+            existing_links = list(line.units or [])
+            if existing_links:
+                if codes or len(existing_links) != line.quantity:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Le rattachement des unités existantes est incomplet. "
+                            "Aucun stock n'a été modifié"
+                        ),
+                    )
+                linked_ids = [link.unit_id for link in existing_links]
+                linked_units = db.query(UniteProduit).filter(
+                    UniteProduit.id.in_(linked_ids),
                     UniteProduit.enterprise_id == arrival.enterprise_id,
-                    or_(UniteProduit.code_barre.in_(codes), UniteProduit.tracabilite.in_(codes)),
-                ).first()
-                if conflict:
-                    raise HTTPException(status_code=409, detail=f"Le code {conflict[0]} existe déjà. Aucun stock n'a été modifié")
-            created_units = []
-            for code in codes:
-                unit = UniteProduit(
-                    produit_id=product.id,
-                    enterprise_id=arrival.enterprise_id,
-                    tracabilite=code,
-                    code_barre=code,
-                    statut="disponible",
-                    date_creation=now,
-                )
-                db.add(unit)
-                db.flush()
-                created_units.append(unit)
-            for _ in range(line.quantity - len(codes)):
-                created_units.append(create_generated_unit(
-                    db,
-                    produit_id=product.id,
-                    enterprise_id=arrival.enterprise_id,
-                    date_creation=now,
-                ))
-            for unit in created_units:
-                db.add(StockArrivalUnit(
-                    arrival_line_id=line.id,
-                    unit_id=unit.id,
-                    barcode_snapshot=unit.code_barre,
-                    traceability_snapshot=unit.tracabilite,
-                    created_at=now,
-                ))
+                    UniteProduit.produit_id == product.id,
+                    UniteProduit.statut != "supprimé",
+                ).with_for_update().all()
+                if len(linked_units) != len(linked_ids):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Une unité rattachée n'appartient plus à cette fiche ou "
+                            "à cette entreprise. Aucun stock n'a été modifié"
+                        ),
+                    )
+                units_for_line = linked_units
+            else:
+                if codes:
+                    conflict = db.query(UniteProduit.code_barre).filter(
+                        UniteProduit.enterprise_id == arrival.enterprise_id,
+                        or_(
+                            UniteProduit.code_barre.in_(codes),
+                            UniteProduit.tracabilite.in_(codes),
+                        ),
+                    ).first()
+                    if conflict:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                f"Le code {conflict[0]} existe déjà. "
+                                "Aucun stock n'a été modifié"
+                            ),
+                        )
+                units_for_line = []
+                for code in codes:
+                    unit = UniteProduit(
+                        produit_id=product.id,
+                        enterprise_id=arrival.enterprise_id,
+                        tracabilite=code,
+                        code_barre=code,
+                        statut="disponible",
+                        date_creation=now,
+                    )
+                    db.add(unit)
+                    db.flush()
+                    units_for_line.append(unit)
+                for _ in range(line.quantity - len(codes)):
+                    units_for_line.append(create_generated_unit(
+                        db,
+                        produit_id=product.id,
+                        enterprise_id=arrival.enterprise_id,
+                        date_creation=now,
+                    ))
+                for unit in units_for_line:
+                    db.add(StockArrivalUnit(
+                        arrival_line_id=line.id,
+                        unit_id=unit.id,
+                        barcode_snapshot=unit.code_barre,
+                        traceability_snapshot=unit.tracabilite,
+                        created_at=now,
+                    ))
             product.quantite = db.query(func.count(UniteProduit.id)).filter(
                 UniteProduit.produit_id == product.id,
                 UniteProduit.statut == "disponible",
             ).scalar() or 0
-            product.a_des_barcodes = bool(product.a_des_barcodes or codes)
+            product.a_des_barcodes = bool(
+                product.a_des_barcodes
+                or codes
+                or any(unit.code_barre for unit in units_for_line)
+            )
             product.date_modification = now
         arrival.status = "validated"
         arrival.validated_at = now

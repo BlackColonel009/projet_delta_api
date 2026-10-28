@@ -1,6 +1,6 @@
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class StockArrivalCreate(BaseModel):
@@ -36,6 +36,44 @@ class StockArrivalLineCreate(BaseModel):
         if len(normalized) != len(set(normalized)):
             raise ValueError("Les codes-barres doivent être uniques")
         return normalized
+
+
+class StockArrivalExistingUnitsLink(BaseModel):
+    product_id: int = Field(ge=1)
+    quantity: Optional[int] = Field(default=None, ge=1, le=10000)
+    unit_ids: list[int] = Field(default_factory=list, max_length=10000)
+    barcodes: list[str] = Field(default_factory=list, max_length=10000)
+    notes: Optional[str] = Field(default=None, max_length=1000)
+
+    @field_validator("unit_ids")
+    @classmethod
+    def unique_unit_ids(cls, values: list[int]) -> list[int]:
+        if len(values) != len(set(values)):
+            raise ValueError("Les unités sélectionnées doivent être uniques")
+        return values
+
+    @field_validator("barcodes")
+    @classmethod
+    def normalize_existing_barcodes(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values if value and value.strip()]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("Les codes-barres doivent être uniques")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_selection_mode(self):
+        modes = sum(
+            [
+                self.quantity is not None,
+                bool(self.unit_ids),
+                bool(self.barcodes),
+            ]
+        )
+        if modes != 1:
+            raise ValueError(
+                "Choisissez soit une quantité, soit des unités, soit des codes-barres"
+            )
+        return self
 
 
 class StockTransferItem(BaseModel):
