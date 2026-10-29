@@ -121,12 +121,18 @@ def record_payment(occupancy_id: int, data: PropertyPaymentCreate, db: Session =
     if not occupancy: raise HTTPException(404,"Contrat introuvable")
     due=None
     if data.kind=="rent":
-        if not data.due_id: raise HTTPException(400,"L'échéance est obligatoire pour un paiement de loyer")
-        due=db.query(PropertyPaymentDue).filter(PropertyPaymentDue.id==data.due_id,PropertyPaymentDue.occupancy_id==occupancy.id,PropertyPaymentDue.enterprise_id==enterprise_id).with_for_update().first()
-        if not due: raise HTTPException(404,"Échéance introuvable")
-        remaining=round(due.amount-due.paid_amount,2)
-        if data.amount>remaining+0.001: raise HTTPException(409,f"Le paiement dépasse le reste de l'échéance ({remaining:.2f})")
-        due.paid_amount=round(due.paid_amount+data.amount,2); due.status="paid" if due.paid_amount>=due.amount else "partial"; occupancy.paid_amount=round(occupancy.paid_amount+data.amount,2)
+        if data.due_id:
+            due=db.query(PropertyPaymentDue).filter(PropertyPaymentDue.id==data.due_id,PropertyPaymentDue.occupancy_id==occupancy.id,PropertyPaymentDue.enterprise_id==enterprise_id).with_for_update().first()
+            if not due: raise HTTPException(404,"Échéance introuvable")
+            remaining=round(due.amount-due.paid_amount,2)
+            if data.amount>remaining+0.001: raise HTTPException(409,f"Le paiement dépasse le reste de l'échéance ({remaining:.2f})")
+            due.paid_amount=round(due.paid_amount+data.amount,2); due.status="paid" if due.paid_amount>=due.amount else "partial"; occupancy.paid_amount=round(occupancy.paid_amount+data.amount,2)
+        elif occupancy.occupancy_type=="stay":
+            remaining=round(occupancy.total_amount-occupancy.paid_amount,2)
+            if data.amount>remaining+0.001: raise HTTPException(409,f"Le paiement dépasse le reste du séjour ({remaining:.2f})")
+            occupancy.paid_amount=round(occupancy.paid_amount+data.amount,2)
+        else:
+            raise HTTPException(400,"L'échéance est obligatoire pour un paiement de loyer")
     elif data.kind=="deposit":
         remaining=round(occupancy.deposit_snapshot-occupancy.deposit_held,2)
         if data.amount>remaining+0.001: raise HTTPException(409,"La caution dépasse le montant prévu")
@@ -173,17 +179,22 @@ def update_maintenance(maintenance_id:int,data:PropertyMaintenanceUpdate,db:Sess
 
 
 @router.get("/occupancies/{occupancy_id}/document")
-def occupancy_document(occupancy_id:int,document_type:str=Query("lease",pattern="^(lease|receipt|inspection)$"),due_id:int|None=None,db:Session=Depends(get_db),current_user=Depends(All_required())):
+def occupancy_document(occupancy_id:int,document_type:str=Query("lease",pattern="^(lease|receipt|inspection|invoice)$"),due_id:int|None=None,template:str=Query("professional",pattern="^(simple|professional)$"),db:Session=Depends(get_db),current_user=Depends(All_required())):
     _ensure(current_user);enterprise_id=actor_enterprise_id(current_user)
     item=db.query(PropertyOccupancy).options(selectinload(PropertyOccupancy.client),selectinload(PropertyOccupancy.unit).selectinload(PropertyUnit.property)).filter(PropertyOccupancy.id==occupancy_id,PropertyOccupancy.enterprise_id==enterprise_id).first()
     if not item:raise HTTPException(404,"Contrat introuvable")
     enterprise=db.query(Enterprise).filter(Enterprise.id==enterprise_id).first();buffer=BytesIO();doc=SimpleDocTemplate(buffer,pagesize=A4,leftMargin=18*mm,rightMargin=18*mm,topMargin=16*mm,bottomMargin=16*mm);styles=getSampleStyleSheet();primary=colors.HexColor(getattr(enterprise,"invoice_color",None) or "#5C6BC0")
-    titles={"lease":"CONTRAT DE LOCATION","receipt":"QUITTANCE DE LOYER","inspection":"ÉTAT DES LIEUX"};story=[Paragraph(enterprise.name if enterprise else "Trade Care",styles["Title"]),Paragraph(titles[document_type],styles["Heading1"]),Spacer(1,6*mm)]
+    titles={"lease":"CONTRAT DE LOCATION","receipt":"QUITTANCE DE LOYER","inspection":"ÉTAT DES LIEUX","invoice":"FACTURE DE LOCATION"};story=[]
+    if template=="professional" or document_type not in {"invoice","receipt"}:story.append(Paragraph(enterprise.name if enterprise else "Trade Care",styles["Title"]))
+    story.extend([Paragraph(titles[document_type],styles["Heading1"]),Spacer(1,6*mm)])
     rows=[["Référence",item.contract_number],["Locataire",item.client.nom],["Bien",item.unit.property.name],["Unité",item.unit.name],["Début",item.start_at.strftime("%d/%m/%Y")],["Fin",item.end_at.strftime("%d/%m/%Y") if item.end_at else "Durée indéterminée"],["Tarif",f"{item.rate_snapshot:,.0f} {getattr(enterprise,'currency','XOF')}"],["Caution",f"{item.deposit_snapshot:,.0f} {getattr(enterprise,'currency','XOF')}"],["Agent",item.created_by_name]]
     if document_type=="receipt":
         due=db.query(PropertyPaymentDue).filter(PropertyPaymentDue.id==due_id,PropertyPaymentDue.occupancy_id==item.id).first() if due_id else None
         if not due or due.status!="paid":raise HTTPException(409,"Une quittance exige une échéance entièrement payée")
         rows.extend([["Échéance",due.due_date.strftime("%d/%m/%Y")],["Montant acquitté",f"{due.paid_amount:,.0f} {getattr(enterprise,'currency','XOF')}"]])
+    if document_type=="invoice":
+        remaining=max(float(item.total_amount)-float(item.paid_amount),0)
+        rows.extend([["Montant total",f"{item.total_amount:,.0f} {getattr(enterprise,'currency','XOF')}"],["Montant payé",f"{item.paid_amount:,.0f} {getattr(enterprise,'currency','XOF')}"],["Reste à payer",f"{remaining:,.0f} {getattr(enterprise,'currency','XOF')}"]])
     table=Table(rows,colWidths=[55*mm,105*mm]);table.setStyle(TableStyle([("BACKGROUND",(0,0),(0,-1),primary),("TEXTCOLOR",(0,0),(0,-1),colors.white),("GRID",(0,0),(-1,-1),.35,colors.HexColor("#D6DAE4")),("PADDING",(0,0),(-1,-1),8)]));story.extend([table,Spacer(1,18*mm),Paragraph("Signature du locataire                                      Signature de l'entreprise",styles["BodyText"])]);doc.build(story);buffer.seek(0)
     return StreamingResponse(buffer,media_type="application/pdf",headers={"Content-Disposition":f'inline; filename="{document_type}_{item.contract_number}.pdf"'})
 

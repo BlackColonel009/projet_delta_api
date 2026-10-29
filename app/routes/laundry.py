@@ -1,11 +1,19 @@
 from datetime import datetime
+from io import BytesIO
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
 from app.models.model_client import Client
+from app.models.model_enterprise import Enterprise
 from app.models.model_laundry import (
     LaundryItem,
     LaundryOrder,
@@ -367,3 +375,152 @@ def laundry_dashboard(
         "received_amount": float(revenue or 0),
         "outstanding_amount": float(outstanding or 0),
     }
+
+
+@router.get("/orders/{order_id}/document")
+def laundry_document(
+    order_id: int,
+    document_type: str = Query("invoice", pattern="^(invoice|receipt)$"),
+    template: str = Query("professional", pattern="^(simple|professional)$"),
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    """Produce a service invoice or a paid receipt without creating duplicate stock/accounting rows."""
+    _ensure_laundry(current_user)
+    enterprise_id = actor_enterprise_id(current_user)
+    order = db.query(LaundryOrder).options(
+        selectinload(LaundryOrder.client),
+        selectinload(LaundryOrder.items).selectinload(LaundryItem.service),
+    ).filter(
+        LaundryOrder.id == order_id,
+        LaundryOrder.enterprise_id == enterprise_id,
+    ).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Commande de pressing introuvable")
+    if document_type == "receipt" and float(order.total) - float(order.paid_amount) > 0.01:
+        raise HTTPException(
+            status_code=409,
+            detail="Le reçu définitif est disponible uniquement lorsque la commande est soldée",
+        )
+
+    enterprise = db.query(Enterprise).filter(Enterprise.id == enterprise_id).first()
+    currency = getattr(enterprise, "currency", None) or "XOF"
+    accent = colors.HexColor(getattr(enterprise, "invoice_color", None) or "#5C6BC0")
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(
+        name="LaundryMuted",
+        parent=styles["BodyText"],
+        textColor=colors.HexColor("#687084"),
+        fontSize=9,
+        leading=13,
+    ))
+    styles.add(ParagraphStyle(
+        name="LaundryRight",
+        parent=styles["BodyText"],
+        alignment=2,
+        fontSize=9,
+    ))
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=16 * mm,
+        rightMargin=16 * mm,
+        topMargin=15 * mm,
+        bottomMargin=16 * mm,
+        title=f"{document_type} {order.order_number}",
+    )
+    title = "REÇU DE PAIEMENT" if document_type == "receipt" else "FACTURE DE PRESSING"
+    story = []
+    if template == "professional":
+        company = [
+            Paragraph(f"<b>{getattr(enterprise, 'name', None) or 'Trade Care'}</b>", styles["Title"]),
+            Paragraph(getattr(enterprise, "address", None) or "", styles["LaundryMuted"]),
+            Paragraph(" · ".join(filter(None, [getattr(enterprise, "phone", None), getattr(enterprise, "email", None)])), styles["LaundryMuted"]),
+        ]
+        heading = [
+            Paragraph(f"<font color='#{accent.hexval()[2:]}'><b>{title}</b></font>", styles["Heading1"]),
+            Paragraph(order.order_number, styles["LaundryRight"]),
+            Paragraph(order.received_at.strftime("%d/%m/%Y %H:%M"), styles["LaundryRight"]),
+        ]
+        header = Table([[company, heading]], colWidths=[105 * mm, 65 * mm])
+        header.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+        story.extend([header, Spacer(1, 8 * mm)])
+    else:
+        story.extend([
+            Paragraph(title, styles["Heading1"]),
+            Paragraph(f"{order.order_number} · {order.received_at:%d/%m/%Y}", styles["LaundryMuted"]),
+            Spacer(1, 6 * mm),
+        ])
+
+    client_rows = [
+        ["Client", getattr(order.client, "nom", None) or "Client"],
+        ["Téléphone", getattr(order.client, "telephone", None) or "—"],
+        ["Statut", order.status],
+        ["Agent", order.created_by_name],
+    ]
+    client_table = Table(client_rows, colWidths=[42 * mm, 128 * mm])
+    client_table.setStyle(TableStyle([
+        ("LINEBEFORE", (0, 0), (0, -1), 3, accent),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7F8FB")),
+        ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#687084")),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("PADDING", (0, 0), (-1, -1), 7),
+    ]))
+    story.extend([client_table, Spacer(1, 7 * mm)])
+
+    lines = [["Prestation / article", "Qté", "P.U.", "Total"]]
+    for item in order.items:
+        service_name = item.service.name if item.service else "Prestation"
+        description = item.category
+        if item.description:
+            description = f"{description}<br/><font color='#687084'>{item.description}</font>"
+        lines.append([
+            Paragraph(f"<b>{service_name}</b><br/>{description}", styles["BodyText"]),
+            str(item.quantity),
+            f"{item.unit_price_snapshot:,.0f}",
+            f"{item.line_total:,.0f}",
+        ])
+    lines_table = Table(lines, colWidths=[90 * mm, 18 * mm, 30 * mm, 32 * mm], repeatRows=1)
+    lines_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), accent),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
+        ("GRID", (0, 0), (-1, -1), .35, colors.HexColor("#D8DCE6")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("PADDING", (0, 0), (-1, -1), 7),
+    ]))
+    story.extend([lines_table, Spacer(1, 6 * mm)])
+
+    balance = max(float(order.total) - float(order.paid_amount), 0)
+    totals = Table([
+        ["Sous-total", f"{order.subtotal:,.0f} {currency}"],
+        ["Remise", f"{order.discount:,.0f} {currency}"],
+        ["Total", f"{order.total:,.0f} {currency}"],
+        ["Payé", f"{order.paid_amount:,.0f} {currency}"],
+        ["Reste à payer", f"{balance:,.0f} {currency}"],
+    ], colWidths=[42 * mm, 42 * mm], hAlign="RIGHT")
+    totals.setStyle(TableStyle([
+        ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+        ("FONTNAME", (0, 2), (-1, 2), "Helvetica-Bold"),
+        ("BACKGROUND", (0, 2), (-1, 2), accent),
+        ("TEXTCOLOR", (0, 2), (-1, 2), colors.white),
+        ("LINEABOVE", (0, -1), (-1, -1), .6, colors.HexColor("#D8DCE6")),
+        ("PADDING", (0, 0), (-1, -1), 7),
+    ]))
+    story.extend([
+        totals,
+        Spacer(1, 12 * mm),
+        Paragraph("Merci pour votre confiance.", styles["LaundryMuted"]),
+        Paragraph("Signature du client                                      Signature de l’entreprise", styles["BodyText"]),
+    ])
+    doc.build(story)
+    buffer.seek(0)
+    filename = f"{document_type}_{order.order_number}.pdf"
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )

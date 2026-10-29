@@ -230,19 +230,30 @@ def financial_summary(reservation_id: int, db: Session = Depends(get_db), curren
 
 
 @router.get("/reservations/{reservation_id}/document")
-def rental_document(reservation_id: int, document_type: str = Query("contract", pattern="^(booking|contract|departure|return)$"), db: Session = Depends(get_db), current_user=Depends(All_required())):
+def rental_document(
+    reservation_id: int,
+    document_type: str = Query("contract", pattern="^(booking|contract|departure|return|invoice|receipt)$"),
+    template: str = Query("professional", pattern="^(simple|professional)$"),
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
     _ensure_vehicle_business(current_user)
     enterprise_id = actor_enterprise_id(current_user)
     reservation = db.query(VehicleReservation).options(selectinload(VehicleReservation.vehicle), selectinload(VehicleReservation.client)).filter(VehicleReservation.id == reservation_id, VehicleReservation.enterprise_id == enterprise_id).first()
     if not reservation:
         raise HTTPException(status_code=404, detail="Réservation introuvable")
     enterprise = db.query(Enterprise).filter(Enterprise.id == enterprise_id).first()
-    titles = {"booking": "BON DE RÉSERVATION", "contract": "CONTRAT DE LOCATION", "departure": "FICHE DE DÉPART", "return": "FICHE DE RETOUR"}
+    if document_type == "receipt" and float(reservation.estimated_total) - float(reservation.paid_amount) > 0.01:
+        raise HTTPException(status_code=409, detail="Le reçu est disponible uniquement lorsque la location est soldée")
+    titles = {"booking": "BON DE RÉSERVATION", "contract": "CONTRAT DE LOCATION", "departure": "FICHE DE DÉPART", "return": "FICHE DE RETOUR", "invoice": "FACTURE DE LOCATION", "receipt": "REÇU DE PAIEMENT"}
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=18*mm, rightMargin=18*mm, topMargin=16*mm, bottomMargin=16*mm)
     styles = getSampleStyleSheet()
     primary = colors.HexColor(getattr(enterprise, "invoice_color", None) or "#5C6BC0")
-    story = [Paragraph(enterprise.name if enterprise else "Trade Care", styles["Title"]), Paragraph(titles[document_type], styles["Heading1"]), Spacer(1, 6*mm)]
+    story = []
+    if template == "professional" or document_type not in {"invoice", "receipt"}:
+        story.append(Paragraph(enterprise.name if enterprise else "Trade Care", styles["Title"]))
+    story.extend([Paragraph(titles[document_type], styles["Heading1"]), Spacer(1, 6*mm)])
     data = [
         ["Référence", reservation.reservation_number], ["Client", reservation.client.nom],
         ["Véhicule", f"{reservation.vehicle.brand} {reservation.vehicle.model}"], ["Immatriculation", reservation.vehicle.registration_number],
@@ -252,6 +263,13 @@ def rental_document(reservation_id: int, document_type: str = Query("contract", 
     ]
     if document_type in {"departure", "return"}:
         data.extend([["Kilométrage départ", reservation.start_mileage or "—"], ["Kilométrage retour", reservation.end_mileage or "—"], ["Carburant départ", reservation.start_fuel_level or "—"], ["Carburant retour", reservation.end_fuel_level or "—"]])
+    if document_type in {"invoice", "receipt"}:
+        remaining = max(float(reservation.estimated_total) - float(reservation.paid_amount), 0)
+        data.extend([
+            ["Montant total", f"{reservation.estimated_total:,.0f} {getattr(enterprise, 'currency', 'XOF')}"],
+            ["Montant payé", f"{reservation.paid_amount:,.0f} {getattr(enterprise, 'currency', 'XOF')}"],
+            ["Reste à payer", f"{remaining:,.0f} {getattr(enterprise, 'currency', 'XOF')}"],
+        ])
     table = Table(data, colWidths=[55*mm, 105*mm])
     table.setStyle(TableStyle([("BACKGROUND", (0,0), (0,-1), primary), ("TEXTCOLOR", (0,0), (0,-1), colors.white), ("GRID", (0,0), (-1,-1), .35, colors.HexColor("#D6DAE4")), ("FONTNAME", (0,0), (0,-1), "Helvetica-Bold"), ("PADDING", (0,0), (-1,-1), 8)]))
     story.extend([table, Spacer(1, 18*mm), Paragraph("Signature du client                                         Signature de l'entreprise", styles["BodyText"])])
