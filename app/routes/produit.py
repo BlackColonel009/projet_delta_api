@@ -362,7 +362,16 @@ def list_produits(
         enterprise_scope_filter(Produit, current_user),
     )
     if search:
-        query = query.filter(Produit.nom.ilike(f"%{search.strip()}%"))
+        pattern = f"%{search.strip()}%"
+        query = query.outerjoin(
+            Categorie,
+            Produit.categorie_id == Categorie.id,
+        ).filter(
+            or_(
+                Produit.nom.ilike(pattern),
+                Categorie.nom.ilike(pattern),
+            )
+        )
     if categorie_id is not None:
         query = query.filter(Produit.categorie_id == categorie_id)
     products = (
@@ -521,50 +530,90 @@ def update_produit(
     produit.emplacement = emplacement
     produit.date_modification = datetime.utcnow()
 
-    # ➕ Ajout de nouveaux codes-barres si fournis
+    # ➕ Ajout ou rattachement de nouveaux codes-barres si fournis.
+    # Les codes scannés passent d'abord par le statut temporaire : ils doivent
+    # donc être rattachés à la fiche au lieu d'être silencieusement ignorés.
+    added_codes = []
+    already_linked_codes = []
     if scanned_barcodes:
         try:
             barcodes = json.loads(scanned_barcodes)
-            new_count = 0
-            normalized_barcodes = list(dict.fromkeys(
-                code.strip() for code in barcodes
-                if isinstance(code, str) and code.strip()
-            ))
-            for code in normalized_barcodes:
-                exists = db.query(UniteProduit).filter(
+        except (json.JSONDecodeError, TypeError):
+            raise HTTPException(
+                status_code=400,
+                detail="Format JSON invalide pour scanned_barcodes",
+            )
+        if not isinstance(barcodes, list):
+            raise HTTPException(
+                status_code=400,
+                detail="La liste des codes-barres est invalide",
+            )
+
+        normalized_barcodes = list(dict.fromkeys(
+            code.strip() for code in barcodes
+            if isinstance(code, str) and code.strip()
+        ))
+        conflicts = []
+        now = datetime.utcnow()
+        for code in normalized_barcodes:
+            unit = db.query(UniteProduit).filter(
+                UniteProduit.enterprise_id == enterprise_id,
+                or_(
                     UniteProduit.code_barre == code,
-                    UniteProduit.enterprise_id == enterprise_id,
-                ).first()
-                if not exists:
-                    new_unite = UniteProduit(
-                        produit_id=produit.id,
-                        enterprise_id=enterprise_id,
-                        tracabilite=code,
-                        code_barre=code,
-                        statut="disponible",
-                        date_creation=datetime.utcnow(),
-                    )
-                    db.add(new_unite)
-                    new_count += 1
+                    UniteProduit.tracabilite == code,
+                ),
+            ).first()
+            if unit is not None:
+                if unit.produit_id == produit.id:
+                    already_linked_codes.append(code)
+                    continue
+                if unit.produit_id is not None:
+                    conflicts.append(code)
+                    continue
+                unit.produit_id = produit.id
+                unit.statut = "disponible"
+                unit.date_modification = now
+                added_codes.append(code)
+                continue
 
-            if new_count > 0:
-                produit.a_des_barcodes = True
-                db.flush()
-                produit.quantite = db.query(UniteProduit).filter(
-                    UniteProduit.produit_id == produit.id,
-                    UniteProduit.statut == "disponible",
-                ).count()
+            db.add(UniteProduit(
+                produit_id=produit.id,
+                enterprise_id=enterprise_id,
+                tracabilite=code,
+                code_barre=code,
+                statut="disponible",
+                date_creation=now,
+            ))
+            added_codes.append(code)
 
-                log_action(
-                    db=db,
-                    current_user=current_user,
-                    action="Ajout unités lors update",
-                    type_entite="produit",
-                    entite_id=produit.id,
-                    details=f"{new_count} unités ajoutées manuellement (update)"
-                )
-        except:
-            raise HTTPException(status_code=400, detail="Format JSON invalide pour scanned_barcodes")
+        if conflicts:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Certains codes-barres appartiennent déjà à une autre fiche : "
+                    + ", ".join(conflicts[:5])
+                ),
+            )
+
+        if added_codes:
+            produit.a_des_barcodes = True
+            db.flush()
+            produit.quantite = db.query(UniteProduit).filter(
+                UniteProduit.produit_id == produit.id,
+                func.lower(UniteProduit.statut) == "disponible",
+            ).count()
+            log_action(
+                db=db,
+                current_user=current_user,
+                action="Ajout unités lors update",
+                type_entite="produit",
+                entite_id=produit.id,
+                details=(
+                    f"{len(added_codes)} unités ajoutées manuellement (update)"
+                ),
+                commit=False,
+            )
 
     db.commit()
 
@@ -577,7 +626,13 @@ def update_produit(
         details=f"Produit de nom: {produit.nom} mis à jour (avec ou sans image)"
     )
 
-    return {"message": "Produit modifié avec succès."}
+    return {
+        "message": "Produit modifié avec succès.",
+        "added_count": len(added_codes),
+        "added_codes": added_codes,
+        "already_linked": already_linked_codes,
+        "quantity": produit.quantite,
+    }
 
 # ❌ Suppression logique d'un produit
 @router.delete("/{produit_id}")

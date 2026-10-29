@@ -14,7 +14,7 @@ from app.models.model_user import User
 from app.core.mail import send_email_message
 from app.email.branded_templates import client_welcome_email
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from app.utils.security import get_current_user
 from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
@@ -163,10 +163,25 @@ def list_clients(
         enterprise_scope_filter(Client, current_user)
     )
     if search:
-        term = f"%{search.strip()}%"
-        query = query.filter(
-            (Client.nom.ilike(term)) | (Client.telephone.ilike(term))
-        )
+        search_value = search.strip()
+        term = f"%{search_value}%"
+        filters = [
+            Client.nom.ilike(term),
+            Client.email.ilike(term),
+            Client.telephone.ilike(term),
+        ]
+
+        # Permet de retrouver un numéro même si l'utilisateur ne saisit pas
+        # les espaces, le préfixe +, les tirets ou les parenthèses enregistrés.
+        normalized_phone = search_value
+        phone_column = Client.telephone
+        for separator in (" ", "+", "-", "(", ")", "."):
+            normalized_phone = normalized_phone.replace(separator, "")
+            phone_column = func.replace(phone_column, separator, "")
+        if normalized_phone:
+            filters.append(phone_column.ilike(f"%{normalized_phone}%"))
+
+        query = query.filter(or_(*filters))
     return query.order_by(Client.id.desc()).offset(offset).limit(limit).all()
 
 

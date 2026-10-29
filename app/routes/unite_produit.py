@@ -25,7 +25,7 @@ from app.utils.enterprise_context import (
     ActiveEnterpriseContext,
     get_active_enterprise_context,
 )
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import contains_eager, joinedload
 from datetime import datetime
 from typing import List, Optional
@@ -450,8 +450,11 @@ def store_temp_barcodes(
     for code in barcodes:
         # Vérifie si le code existe déjà
         exist = db.query(UniteProduit).filter(
-            UniteProduit.code_barre == code,
             UniteProduit.enterprise_id == enterprise_id,
+            or_(
+                UniteProduit.code_barre == code,
+                UniteProduit.tracabilite == code,
+            ),
         ).first()
         if exist:
             continue  # ne pas dupliquer
@@ -505,8 +508,11 @@ def lier_barcodes_a_produit(
 
     for code in normalized_codes:
         unite = db.query(UniteProduit).filter(
-            UniteProduit.code_barre == code,
             UniteProduit.enterprise_id == enterprise_id,
+            or_(
+                UniteProduit.code_barre == code,
+                UniteProduit.tracabilite == code,
+            ),
         ).first()
         if unite:
             if unite.produit_id == produit_id:
