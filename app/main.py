@@ -9,7 +9,7 @@ from jose import JWTError
 import jwt
 from app.repo_scheduler.scheduler import start_scheduler
 from app.utils.policy import afficher_banner
-from app.routes import admin_subscription, app_download, auth, client_produit, depot, depot_service, depot_tarif, enterprise_context, facture_depot, followup, galerie, laundry, legacy_migration, property_rental, rapport_financier, stock_arrival, subscription_plan, subscription_request, tutoriel, vehicle_rental  # Tu ajouteras d'autres routes ici
+from app.routes import admin_subscription, app_download, auth, client_produit, depot, depot_service, depot_tarif, enterprise_context, facture_depot, followup, galerie, laundry, legacy_migration, platform_contact_link, property_rental, rapport_financier, stock_arrival, subscription_plan, subscription_request, tutoriel, vehicle_rental  # Tu ajouteras d'autres routes ici
 from app.config import settings
 from app.routes import client
 from app.routes import produit
@@ -69,6 +69,7 @@ app.include_router(admin_subscription.router)
 app.include_router(subscription_plan.router)
 app.include_router(subscription_request.router)
 app.include_router(app_download.router)
+app.include_router(platform_contact_link.router)
 
 app.include_router(client.router)
 
