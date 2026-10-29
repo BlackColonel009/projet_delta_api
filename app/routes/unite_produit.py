@@ -170,17 +170,32 @@ def list_unites_for_produit(
 def list_unites_visibles(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
+    search: Optional[str] = Query(None, max_length=120),
+    statut: Optional[str] = Query(None, max_length=32),
     db: Session = Depends(get_db),
     current_user = Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
     parent_user_id = actor_owner_id(current_user)
 
-    unites = db.query(UniteProduit).join(UniteProduit.produit).options(
+    query = db.query(UniteProduit).join(UniteProduit.produit).options(
         contains_eager(UniteProduit.produit)
     ).filter(
         UniteProduit.statut.in_(["disponible", "indisponible", "vendu", "en cours"]),  # ✅ inclut les deux
         enterprise_scope_filter(Produit, current_user),
-    ).order_by(UniteProduit.date_creation.desc(), UniteProduit.id.desc()).offset(offset).limit(limit).all()
+    )
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(or_(
+            Produit.nom.ilike(term),
+            UniteProduit.tracabilite.ilike(term),
+            UniteProduit.code_barre.ilike(term),
+            UniteProduit.statut.ilike(term),
+        ))
+    if statut and statut.strip().lower() != "tous":
+        query = query.filter(UniteProduit.statut == statut.strip().lower())
+    unites = query.order_by(
+        UniteProduit.date_creation.desc(), UniteProduit.id.desc()
+    ).offset(offset).limit(limit).all()
 
     return [
         {
@@ -587,7 +602,10 @@ def get_produits_par_codes(
 
     for code in barcodes:
         unite = db.query(UniteProduit).filter(
-            UniteProduit.tracabilite == code,
+            or_(
+                UniteProduit.tracabilite == code,
+                UniteProduit.code_barre == code,
+            ),
             UniteProduit.produit_id.isnot(None),
             UniteProduit.statut == "disponible"
         ).join(UniteProduit.produit).filter(

@@ -1,5 +1,6 @@
 # ✅ app/routes/notification.py
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from typing import List
 from datetime import datetime, timedelta
@@ -76,6 +77,7 @@ def get_notifications(
     limit: int = 50,
     offset: int = 0,
     max_age_days: int | None = None,
+    search: str | None = Query(None, max_length=200),
     db: Session = Depends(get_db),
     current_user = Depends(All_required())
 ):
@@ -97,6 +99,14 @@ def get_notifications(
         query = query.filter(
             Notification.created_at >= datetime.utcnow() - timedelta(days=safe_days)
         )
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(or_(
+            Notification.titre.ilike(term),
+            Notification.message.ilike(term),
+            Notification.sub_user_name.ilike(term),
+            Notification.sub_user_role.ilike(term),
+        ))
 
     return (
         query.order_by(

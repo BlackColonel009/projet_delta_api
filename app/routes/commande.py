@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, selectinload
-from sqlalchemy import func, literal
+from sqlalchemy import func, literal, or_
 from datetime import datetime, timedelta
 from typing import Optional
 from app.database import get_db
@@ -223,7 +223,10 @@ def create_commande_vente(
                 print("codes reçus:", codes)
                 for code in codes:
                     unite = db.query(UniteProduit).filter(
-                        UniteProduit.tracabilite == code,
+                        or_(
+                            UniteProduit.tracabilite == code,
+                            UniteProduit.code_barre == code,
+                        ),
                         UniteProduit.produit_id == produit.id,
                         UniteProduit.enterprise_id == enterprise_id,
                         UniteProduit.statut == "disponible"
@@ -504,6 +507,7 @@ def create_commande_achat(
 @router_ventes.get("/", response_model=list[CommandeVenteOut])
 def get_commandes_ventes(
     start: Optional[str] = None,
+    search: Optional[str] = Query(None, max_length=120),
     offset: int = Query(0, ge=0),
     limit: int = Query(30, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -516,6 +520,16 @@ def get_commandes_ventes(
     if start:
         date_start = datetime.strptime(start, "%Y-%m-%d").date()
         query = query.filter(CommandeVente.date_commande >= date_start)
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(or_(
+            CommandeVente.client.has(Client.nom.ilike(term)),
+            CommandeVente.client.has(Client.telephone.ilike(term)),
+            CommandeVente.lignes.any(or_(
+                LigneCommandeVente.description.ilike(term),
+                LigneCommandeVente.produit.has(Produit.nom.ilike(term)),
+            )),
+        ))
     commandes = query.order_by(
             CommandeVente.date_commande.desc(), CommandeVente.id.desc()
         ).offset(offset).limit(limit).all()
@@ -567,6 +581,7 @@ def get_commande_vente(
 @router_achats.get("/", response_model=list[CommandeAchatOut])
 def get_commandes_achats(
     start: Optional[str] = None,
+    search: Optional[str] = Query(None, max_length=120),
     offset: int = Query(0, ge=0),
     limit: int = Query(30, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -579,6 +594,16 @@ def get_commandes_achats(
     if start:
         date_start = datetime.strptime(start, "%Y-%m-%d").date()
         query = query.filter(CommandeAchat.date_commande >= date_start)
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(or_(
+            CommandeAchat.fournisseur.has(Fournisseur.nom.ilike(term)),
+            CommandeAchat.fournisseur.has(Fournisseur.telephone.ilike(term)),
+            CommandeAchat.lignes.any(or_(
+                LigneCommandeAchat.description.ilike(term),
+                LigneCommandeAchat.produit.has(Produit.nom.ilike(term)),
+            )),
+        ))
     commandes = query.order_by(
             CommandeAchat.date_commande.desc(), CommandeAchat.id.desc()
         ).offset(offset).limit(limit).all()

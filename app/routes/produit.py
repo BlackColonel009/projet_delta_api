@@ -370,6 +370,10 @@ def list_produits(
             or_(
                 Produit.nom.ilike(pattern),
                 Categorie.nom.ilike(pattern),
+                Produit.caracteristiques.ilike(pattern),
+                Produit.couleur.ilike(pattern),
+                Produit.commentaire.ilike(pattern),
+                Produit.emplacement.ilike(pattern),
             )
         )
     if categorie_id is not None:

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import or_
 from typing import List, Optional
 from app.database import get_db
 from app.models.model_rapport import Rapport
@@ -240,15 +241,27 @@ def create_rapport_sub(
 def list_rapports(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
+    search: Optional[str] = Query(None, max_length=200),
     db: Session = Depends(get_db),
     current_user = Depends(All_required())
 ):
     rapports = (
         db.query(Rapport)
+        .outerjoin(Rapport.user)
+        .outerjoin(Rapport.sub_user)
         .options(joinedload(Rapport.user), joinedload(Rapport.sub_user))
         .filter(enterprise_scope_filter(Rapport, current_user))
         .order_by(Rapport.date_creation.desc())
     )
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        rapports = rapports.filter(or_(
+            Rapport.contenu.ilike(term),
+            User.username.ilike(term),
+            User.email.ilike(term),
+            SubUser.username.ilike(term),
+            SubUser.role.ilike(term),
+        ))
     if offset:
         rapports = rapports.offset(offset)
     rapports = rapports.limit(limit)

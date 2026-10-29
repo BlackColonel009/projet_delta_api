@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session, selectinload
 from typing import List
 from datetime import datetime
 from math import ceil
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
 from app.database import get_db
 from app.models.model_depot import Depot
@@ -231,10 +231,11 @@ def create_depot(
 def list_depots(
     offset: int = Query(0, ge=0),
     limit: int = Query(30, ge=1, le=100),
+    search: str | None = Query(None, max_length=120),
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.gestionnaire_stock]))
 ):
-    depots = (
+    query = (
         db.query(Depot)
         .options(
             selectinload(Depot.client),
@@ -242,7 +243,17 @@ def list_depots(
             selectinload(Depot.tarif_items),
         )
         .filter(enterprise_scope_filter(Depot, current_user))
-        .order_by(Depot.date_depot.desc(), Depot.id.desc())
+    )
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(or_(
+            Depot.description_bien.ilike(term),
+            Depot.statut.ilike(term),
+            Depot.client.has(Client.nom.ilike(term)),
+            Depot.client.has(Client.telephone.ilike(term)),
+        ))
+    depots = (
+        query.order_by(Depot.date_depot.desc(), Depot.id.desc())
         .offset(offset)
         .limit(limit)
         .all()

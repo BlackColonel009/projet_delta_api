@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from sqlalchemy import func, or_
 from app.database import get_db
 from app.models.model_fournisseur import Fournisseur
 from app.schemas.fournisseur_schema import FournisseurCreate, FournisseurOut
@@ -59,10 +60,19 @@ def list_fournisseurs(
         enterprise_scope_filter(Fournisseur, current_user)
     )
     if search:
-        term = f"%{search.strip()}%"
-        query = query.filter(
-            (Fournisseur.nom.ilike(term)) | (Fournisseur.telephone.ilike(term))
-        )
+        value = search.strip()
+        term = f"%{value}%"
+        phone_column = Fournisseur.telephone
+        normalized_phone = value
+        for separator in (" ", "+", "-", "(", ")", "."):
+            phone_column = func.replace(phone_column, separator, "")
+            normalized_phone = normalized_phone.replace(separator, "")
+        query = query.filter(or_(
+            Fournisseur.nom.ilike(term),
+            Fournisseur.email.ilike(term),
+            Fournisseur.telephone.ilike(term),
+            phone_column.ilike(f"%{normalized_phone}%"),
+        ))
     return query.order_by(Fournisseur.id.desc()).offset(offset).limit(limit).all()
 
 # 🔍 Voir un fournisseur par ID
