@@ -41,6 +41,7 @@ class SubscriptionPlanUpdate(BaseModel):
     max_products: int | None = Field(default=None, ge=0)
     max_clients: int | None = Field(default=None, ge=0)
     max_invoices_per_month: int | None = Field(default=None, ge=0)
+    max_invoice_shares_per_month: int | None = Field(default=None, ge=0)
     features: list[SubscriptionFeature] = Field(default_factory=list)
     is_active: bool = True
     is_featured: bool = False

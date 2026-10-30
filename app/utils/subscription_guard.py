@@ -31,6 +31,7 @@ class SubscriptionAccess:
     max_products: int | None
     max_clients: int | None
     max_invoices_per_month: int | None
+    max_invoice_shares_per_month: int | None = None
     unlimited: bool = False
 
     def has_feature(self, feature: str) -> bool:
@@ -100,6 +101,7 @@ def resolve_subscription_access(
             max_products=None,
             max_clients=None,
             max_invoices_per_month=None,
+            max_invoice_shares_per_month=None,
             unlimited=True,
         )
 
@@ -115,6 +117,7 @@ def resolve_subscription_access(
             max_products=None,
             max_clients=None,
             max_invoices_per_month=None,
+            max_invoice_shares_per_month=None,
             unlimited=True,
         )
 
@@ -167,6 +170,7 @@ def resolve_subscription_access(
         max_products=plan.max_products,
         max_clients=plan.max_clients,
         max_invoices_per_month=plan.max_invoices_per_month,
+        max_invoice_shares_per_month=plan.max_invoice_shares_per_month,
     )
 
 
@@ -278,6 +282,36 @@ def enforce_invoice_quota(db: Session, current_user) -> None:
         standard_count + depot_count,
         "factures mensuelles",
     )
+
+
+def enforce_invoice_share_quota(db: Session, current_user) -> SubscriptionAccess:
+    from app.models.model_invoice_share_event import InvoiceShareEvent
+
+    access = resolve_subscription_access(db, current_user)
+    start = datetime.utcnow().replace(
+        day=1,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    end = (
+        start.replace(year=start.year + 1, month=1)
+        if start.month == 12
+        else start.replace(month=start.month + 1)
+    )
+    usage = db.query(InvoiceShareEvent).filter(
+        InvoiceShareEvent.owner_user_id == access.owner_id,
+        InvoiceShareEvent.created_at >= start,
+        InvoiceShareEvent.created_at < end,
+    ).count()
+    enforce_quota_limit(
+        access,
+        "max_invoice_shares_per_month",
+        usage,
+        "partages de factures mensuels",
+    )
+    return access
 
 
 def company_has_feature(db: Session, owner_id: int, feature: str) -> bool:

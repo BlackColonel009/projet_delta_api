@@ -19,6 +19,7 @@ class SubscriptionPlan(Base):
     max_products = Column(Integer, nullable=True)
     max_clients = Column(Integer, nullable=True)
     max_invoices_per_month = Column(Integer, nullable=True)
+    max_invoice_shares_per_month = Column(Integer, nullable=True)
     features = Column(JSON, nullable=False, default=list)
     is_active = Column(Boolean, nullable=False, default=True)
     is_featured = Column(Boolean, nullable=False, default=False)

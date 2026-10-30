@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -11,6 +11,7 @@ from app.models.model_produit import Produit
 from app.models.model_client import Client
 from app.models.model_facture import Facture
 from app.models.model_facture_depot import FactureDepot
+from app.models.model_invoice_share_event import InvoiceShareEvent
 from app.models.model_user import User
 from app.models.model_enterprise import Enterprise, EnterpriseGroup
 from app.schemas.subscription_plan_schema import (
@@ -25,7 +26,11 @@ router = APIRouter(prefix="/subscriptions/plans", tags=["Subscription Plans"])
 
 
 @router.get("/public", response_model=list[SubscriptionPlanOut])
-def list_public_subscription_plans(db: Session = Depends(get_db)):
+def list_public_subscription_plans(
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    response.headers["Cache-Control"] = "no-store, max-age=0"
     return (
         db.query(SubscriptionPlan)
         .filter(SubscriptionPlan.is_active.is_(True))
@@ -86,6 +91,11 @@ def get_my_plan_access(
                 FactureDepot.date_facture < month_end,
             ).count()
         ),
+        "max_invoice_shares_per_month": db.query(InvoiceShareEvent).filter(
+            InvoiceShareEvent.owner_user_id == access.owner_id,
+            InvoiceShareEvent.created_at >= month_start,
+            InvoiceShareEvent.created_at < month_end,
+        ).count(),
     }
     return {
         "plan_code": access.plan_code,
@@ -98,6 +108,9 @@ def get_my_plan_access(
             "max_clients": access.quota("max_clients"),
             "max_invoices_per_month": access.quota(
                 "max_invoices_per_month"
+            ),
+            "max_invoice_shares_per_month": access.quota(
+                "max_invoice_shares_per_month"
             ),
         },
         "unlimited": access.unlimited,
@@ -152,8 +165,9 @@ def update_subscription_plan(
     if not plan:
         raise HTTPException(status_code=404, detail="Offre d’abonnement introuvable")
 
-    values = payload.model_dump()
-    values["features"] = [feature.value for feature in payload.features]
+    values = payload.model_dump(exclude_unset=True)
+    if "features" in values:
+        values["features"] = [feature.value for feature in payload.features]
     for field, value in values.items():
         setattr(plan, field, value)
     plan.updated_at = datetime.utcnow()

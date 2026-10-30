@@ -12,6 +12,7 @@ from io import BytesIO
 from app.database import get_db
 from app.models.model_facture import Facture
 from app.models.model_unite_produit import UniteProduit
+from app.models.model_invoice_share_event import InvoiceShareEvent
 from app.utils.permissions import All_required, check_role
 from app.schemas.user_schema import RoleEnum
 from app.models.model_facture import LigneFacture 
@@ -23,8 +24,11 @@ import tempfile
 
 from app.services.generate_facture_from_commande import generate_facture_pdf
 from app.services.simple_invoice_renderer import render_simple_invoice
-from app.services.enterprise_service import enterprise_scope_filter
-from app.utils.subscription_guard import enforce_feature_access
+from app.services.enterprise_service import actor_enterprise_id, enterprise_scope_filter
+from app.utils.subscription_guard import (
+    enforce_feature_access,
+    enforce_invoice_share_quota,
+)
 from app.utils.i18n import language_of, translated
 from app.core.mail import send_email_message
 
@@ -72,6 +76,68 @@ def preview_facture_pdf(
     return StreamingResponse(pdf_buffer, media_type="application/pdf", headers={
         "Content-Disposition": f"inline; filename=facture_{facture.id}.pdf"
     })
+
+
+@router.get("/{facture_id}/share-pdf")
+def share_facture_pdf(
+    facture_id: int,
+    invoice_format: Literal["simple", "professional"] = Query(
+        "simple",
+        alias="template",
+    ),
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    facture = db.query(Facture).options(
+        joinedload(Facture.lignes).joinedload(LigneFacture.produit),
+        joinedload(Facture.client),
+        joinedload(Facture.fournisseur),
+        joinedload(Facture.paiements),
+    ).filter(
+        Facture.id == facture_id,
+        enterprise_scope_filter(Facture, current_user),
+    ).first()
+    if not facture:
+        raise HTTPException(status_code=404, detail="Facture non trouvée")
+
+    if invoice_format == "professional":
+        enforce_feature_access(db, current_user, "professional_invoice")
+        access = enforce_invoice_share_quota(db, current_user)
+        pdf_path = generate_facture_pdf(facture, db)
+        event = InvoiceShareEvent(
+            owner_user_id=access.owner_id,
+            enterprise_id=actor_enterprise_id(current_user),
+            invoice_id=facture.id,
+            template=invoice_format,
+        )
+        db.add(event)
+        db.commit()
+        return FileResponse(
+            pdf_path,
+            media_type="application/pdf",
+            filename=f"facture_professionnelle_{facture.id}.pdf",
+            background=BackgroundTask(os.remove, pdf_path),
+        )
+
+    access = enforce_invoice_share_quota(db, current_user)
+    pdf_buffer = render_simple_invoice(facture, db, current_user)
+    event = InvoiceShareEvent(
+        owner_user_id=access.owner_id,
+        enterprise_id=actor_enterprise_id(current_user),
+        invoice_id=facture.id,
+        template=invoice_format,
+    )
+    db.add(event)
+    db.commit()
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="facture_{facture.id}.pdf"'
+            )
+        },
+    )
 
     total_paye = sum(p.montant for p in facture.paiements) if facture.paiements else 0.0
 
