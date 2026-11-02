@@ -1,6 +1,8 @@
 # 🔐 ROUTES AVANCÉES AUTHENTIFICATION
 # Fichier : app/routes/auth.py
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status, Body
 from sqlalchemy.orm import Session
 from fastapi.security import OAuth2PasswordRequestForm
@@ -18,6 +20,7 @@ from app.models.model_user import User, SubUser
 from app.models.model_role import Role
 from app.models.model_enterprise import Enterprise, EnterpriseMembership
 from app.services.subscription_service import create_free_subscription
+from app.services.privacy_policy_service import public_privacy_policy_metadata
 from app.services.enterprise_service import (
     actor_enterprise_id,
     attach_subuser_to_enterprise,
@@ -41,6 +44,12 @@ from app.utils.subscription_guard import (
 )
 
 router = APIRouter()
+
+
+@router.get("/privacy-policy", tags=["Authentification"])
+def get_public_privacy_policy():
+    """Métadonnées publiques de la politique exigée à l'inscription."""
+    return public_privacy_policy_metadata()
 
 
 @router.put("/interface-language", tags=["Users"])
@@ -116,6 +125,9 @@ def register_user(data: UserCreate, db: Session = Depends(get_db)):
         societe_ou_entreprise=data.societe_ou_entreprise,
         devise=data.devise or "€", 
         interface_language=data.interface_language,
+        privacy_policy_version=data.privacy_policy_version,
+        privacy_policy_accepted_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        privacy_policy_language=data.privacy_policy_language,
     )
     db.add(new_user)
     db.flush()

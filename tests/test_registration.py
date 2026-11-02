@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from app.routes.auth import register_user
 from app.schemas.user_schema import UserCreate
+from app.services.privacy_policy_service import PRIVACY_POLICY_VERSION
 
 
 class _Query:
@@ -51,6 +52,8 @@ class RegistrationTests(unittest.TestCase):
             email="owner@example.com",
             password="secret123",
             societe_ou_entreprise="Example SARL",
+            privacy_policy_accepted=True,
+            privacy_policy_version=PRIVACY_POLICY_VERSION,
         )
 
         with patch(
@@ -63,6 +66,11 @@ class RegistrationTests(unittest.TestCase):
         self.assertTrue(db.saved_user.is_main_user)
         self.assertEqual(db.saved_user.account_type, "bronze_free")
         self.assertEqual(db.saved_user.interface_language, "fr")
+        self.assertEqual(
+            db.saved_user.privacy_policy_version,
+            PRIVACY_POLICY_VERSION,
+        )
+        self.assertIsNotNone(db.saved_user.privacy_policy_accepted_at)
         create_subscription.assert_called_once_with(db, user_id=41)
 
     @patch("app.routes.auth.create_free_subscription")
@@ -79,6 +87,9 @@ class RegistrationTests(unittest.TestCase):
             is_main_user=False,
             account_type="paid",
             interface_language="en",
+            privacy_policy_accepted=True,
+            privacy_policy_version=PRIVACY_POLICY_VERSION,
+            privacy_policy_language="en",
         )
 
         with patch(

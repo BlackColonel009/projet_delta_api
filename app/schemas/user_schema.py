@@ -2,6 +2,8 @@ from pydantic import BaseModel, EmailStr, field_validator
 from typing import Literal, Optional
 from enum import Enum
 
+from app.services.privacy_policy_service import PRIVACY_POLICY_VERSION
+
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
@@ -10,6 +12,28 @@ class UserCreate(BaseModel):
     societe_ou_entreprise: Optional[str] = None  # ✅
     devise: Optional[str] = "€"
     interface_language: Literal["fr", "en"] = "fr"
+    privacy_policy_accepted: bool
+    privacy_policy_version: str
+    privacy_policy_language: Literal["fr", "en"] = "fr"
+
+    @field_validator("privacy_policy_accepted")
+    @classmethod
+    def require_privacy_acceptance(cls, value: bool) -> bool:
+        if value is not True:
+            raise ValueError(
+                "La politique de confidentialité doit être acceptée"
+            )
+        return value
+
+    @field_validator("privacy_policy_version")
+    @classmethod
+    def require_current_privacy_version(cls, value: str) -> str:
+        if value != PRIVACY_POLICY_VERSION:
+            raise ValueError(
+                "La politique de confidentialité a été mise à jour. "
+                "Veuillez lire et accepter la version actuelle."
+            )
+        return value
     
 class RoleEnum(str, Enum):
     directeur = "Directeur"
