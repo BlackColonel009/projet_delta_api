@@ -24,6 +24,10 @@ from app.services.enterprise_service import (
     enterprise_scope_filter,
 )
 from app.services.traceability_service import create_generated_unit
+from app.services.unit_reassignment_service import (
+    attach_reusable_unit,
+    refresh_available_product_quantity,
+)
 from app.utils.subscription_guard import (
     enforce_subscription_quota,
     require_subscription_feature,
@@ -197,6 +201,8 @@ def create_produit(
         if scanned_barcodes and len(scanned_barcodes) > 0:
             unites = []
             conflicts = []
+            moved_units = []
+            previous_product_ids = set()
             now = datetime.utcnow()
             for code in scanned_barcodes:
                 exists = db.query(UniteProduit).filter(
@@ -207,14 +213,16 @@ def create_produit(
                     )
                 ).first()
                 if exists:
-                    # Les codes validés par le scanner sont d'abord placés en
-                    # attente. La création de la fiche doit les rattacher ici,
-                    # dans la même transaction, au lieu d'imposer un 2e appel.
-                    if exists.produit_id is None:
-                        exists.produit_id = produit.id
-                        exists.statut = "disponible"
-                        exists.date_creation = now
-                        exists.date_modification = now
+                    attachment = attach_reusable_unit(
+                        exists,
+                        produit,
+                        enterprise_id=enterprise_id,
+                        now=now,
+                    )
+                    if attachment.was_added:
+                        if attachment.previous_product_id not in (None, produit.id):
+                            previous_product_ids.add(attachment.previous_product_id)
+                            moved_units.append(code)
                         unites.append(exists)
                         continue
                     conflicts.append(code)
@@ -244,6 +252,8 @@ def create_produit(
                 
                 # ✅ AJOUTE CETTE LIGNE ICI
                 produit.quantite = len(unites)
+                for previous_product_id in previous_product_ids:
+                    refresh_available_product_quantity(db, previous_product_id)
                 
                 db.flush()
                 db.refresh(produit)
@@ -254,7 +264,10 @@ def create_produit(
                     action="Ajout produit avec codes-barres",
                     type_entite="produit",
                     entite_id=produit.id,
-                    details=f"{len(unites)} unités scannées ajoutées au produit {produit.nom}"
+                    details=(
+                        f"{len(unites)} unités scannées ajoutées au produit {produit.nom}. "
+                        f"{len(moved_units)} unité(s) indisponible(s) réaffectée(s)."
+                    )
                 )
 
         # ⚙️ Sinon : génération automatique par nombre
@@ -363,6 +376,7 @@ def list_produits(
     )
     if search:
         pattern = f"%{search.strip()}%"
+        enterprise_id = actor_enterprise_id(current_user)
         query = query.outerjoin(
             Categorie,
             Produit.categorie_id == Categorie.id,
@@ -374,6 +388,13 @@ def list_produits(
                 Produit.couleur.ilike(pattern),
                 Produit.commentaire.ilike(pattern),
                 Produit.emplacement.ilike(pattern),
+                Produit.unites.any(
+                    (UniteProduit.enterprise_id == enterprise_id)
+                    & or_(
+                        UniteProduit.tracabilite.ilike(pattern),
+                        UniteProduit.code_barre.ilike(pattern),
+                    )
+                ),
             )
         )
     if categorie_id is not None:
@@ -558,6 +579,8 @@ def update_produit(
             if isinstance(code, str) and code.strip()
         ))
         conflicts = []
+        moved_codes = []
+        previous_product_ids = set()
         now = datetime.utcnow()
         for code in normalized_barcodes:
             unit = db.query(UniteProduit).filter(
@@ -568,15 +591,21 @@ def update_produit(
                 ),
             ).first()
             if unit is not None:
-                if unit.produit_id == produit.id:
+                attachment = attach_reusable_unit(
+                    unit,
+                    produit,
+                    enterprise_id=enterprise_id,
+                    now=now,
+                )
+                if attachment.action == "already_linked":
                     already_linked_codes.append(code)
                     continue
-                if unit.produit_id is not None:
+                if not attachment.was_added:
                     conflicts.append(code)
                     continue
-                unit.produit_id = produit.id
-                unit.statut = "disponible"
-                unit.date_modification = now
+                if attachment.previous_product_id not in (None, produit.id):
+                    previous_product_ids.add(attachment.previous_product_id)
+                    moved_codes.append(code)
                 added_codes.append(code)
                 continue
 
@@ -603,6 +632,8 @@ def update_produit(
         if added_codes:
             produit.a_des_barcodes = True
             db.flush()
+            for previous_product_id in previous_product_ids:
+                refresh_available_product_quantity(db, previous_product_id)
             produit.quantite = db.query(UniteProduit).filter(
                 UniteProduit.produit_id == produit.id,
                 func.lower(UniteProduit.statut) == "disponible",
@@ -614,7 +645,8 @@ def update_produit(
                 type_entite="produit",
                 entite_id=produit.id,
                 details=(
-                    f"{len(added_codes)} unités ajoutées manuellement (update)"
+                    f"{len(added_codes)} unités ajoutées manuellement (update), "
+                    f"dont {len(moved_codes)} réaffectée(s) depuis une autre fiche"
                 ),
                 commit=False,
             )

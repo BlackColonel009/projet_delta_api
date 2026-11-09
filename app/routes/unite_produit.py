@@ -15,6 +15,10 @@ from app.utils.permissions import All_required, check_role
 from app.schemas.user_schema import RoleEnum
 from app.utils.logger import log_action
 from app.services.traceability_service import create_generated_unit
+from app.services.unit_reassignment_service import (
+    attach_reusable_unit,
+    refresh_available_product_quantity,
+)
 from app.utils.subscription_guard import require_subscription_feature
 from app.services.enterprise_service import (
     actor_enterprise_id,
@@ -67,6 +71,8 @@ def add_unites_to_produit(
     #     )
 
     created = []
+    moved = []
+    previous_product_ids = set()
     
     if data.tracabilites:
         # 🧠 Mode manuel : utiliser les tracabilités données
@@ -83,22 +89,27 @@ def add_unites_to_produit(
                 status_code=400,
                 detail="Les traçabilités doivent être uniques et non vides.",
             )
-        existing = {
-            value
-            for (value,) in db.query(UniteProduit.tracabilite).filter(
-                UniteProduit.tracabilite.in_(normalized_traces)
-            ).all()
-        }
-        if existing:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Ces traçabilités existent déjà : "
-                    + ", ".join(sorted(existing)[:5])
-                ),
-            )
-
+        conflicts = []
+        now = datetime.utcnow()
         for tracabilite in normalized_traces:
+            existing = db.query(UniteProduit).filter(
+                UniteProduit.tracabilite == tracabilite,
+            ).first()
+            if existing is not None:
+                attachment = attach_reusable_unit(
+                    existing,
+                    produit,
+                    enterprise_id=enterprise_id,
+                    now=now,
+                )
+                if attachment.was_added:
+                    if attachment.previous_product_id not in (None, produit.id):
+                        previous_product_ids.add(attachment.previous_product_id)
+                        moved.append(tracabilite)
+                    created.append(tracabilite)
+                    continue
+                conflicts.append(tracabilite)
+                continue
             unite = UniteProduit(
                 produit_id=produit.id,
                 enterprise_id=enterprise_id,
@@ -108,6 +119,16 @@ def add_unites_to_produit(
             )
             db.add(unite)
             created.append(tracabilite)
+        if conflicts:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Ces traçabilités sont encore actives, vendues, en cours "
+                    "ou appartiennent à une autre entreprise : "
+                    + ", ".join(sorted(conflicts)[:5])
+                ),
+            )
 
     else:
         # ⚙️ Mode automatique
@@ -119,6 +140,13 @@ def add_unites_to_produit(
             )
             created.append(unite.tracabilite)
 
+    db.flush()
+    for previous_product_id in previous_product_ids:
+        refresh_available_product_quantity(db, previous_product_id)
+    produit.quantite = db.query(UniteProduit).filter(
+        UniteProduit.produit_id == produit.id,
+        UniteProduit.statut == "disponible",
+    ).count()
     db.commit()
 
     log_action(
@@ -127,7 +155,11 @@ def add_unites_to_produit(
         action="Ajout unités",
         type_entite="produit",
         entite_id=produit.id,
-        details=f"{data.nombre} unités ajoutées {'manuellement' if data.tracabilites else 'automatiquement'} pour produit {produit.nom}"
+        details=(
+            f"{data.nombre} unités ajoutées "
+            f"{'manuellement' if data.tracabilites else 'automatiquement'} "
+            f"pour produit {produit.nom}. {len(moved)} unité(s) réaffectée(s)."
+        )
     )
 
     return {"message": "Unités ajoutées avec succès", "tracabilites": created}
@@ -514,6 +546,8 @@ def lier_barcodes_a_produit(
     added = []
     already_linked = []
     conflicts = []
+    moved = []
+    previous_product_ids = set()
 
     normalized_codes = list(dict.fromkeys(
         code.strip() for code in barcodes if code and code.strip()
@@ -530,16 +564,21 @@ def lier_barcodes_a_produit(
             ),
         ).first()
         if unite:
-            if unite.produit_id == produit_id:
+            attachment = attach_reusable_unit(
+                unite,
+                produit,
+                enterprise_id=enterprise_id,
+                now=now,
+            )
+            if attachment.action == "already_linked":
                 already_linked.append(code)
                 continue
-            if unite.produit_id is not None:
+            if not attachment.was_added:
                 conflicts.append(code)
                 continue
-            unite.produit_id = produit_id
-            unite.statut = "disponible"
-            unite.date_creation = now
-            unite.date_modification = now
+            if attachment.previous_product_id not in (None, produit_id):
+                previous_product_ids.add(attachment.previous_product_id)
+                moved.append(code)
         else:
             unite = UniteProduit(
                 produit_id=produit_id,
@@ -563,6 +602,8 @@ def lier_barcodes_a_produit(
         )
 
     db.flush()
+    for previous_product_id in previous_product_ids:
+        refresh_available_product_quantity(db, previous_product_id)
     produit.a_des_barcodes = True
     produit.quantite = db.query(UniteProduit).filter(
         UniteProduit.produit_id == produit_id,
@@ -577,7 +618,10 @@ def lier_barcodes_a_produit(
         action="Ajout de codes-barres",
         type_entite="produit",
         entite_id=produit.id,
-        details=f"{len(added)} nouvelles unités ajoutées au produit {produit.nom}",
+        details=(
+            f"{len(added)} nouvelles unités ajoutées au produit {produit.nom}. "
+            f"{len(moved)} unité(s) indisponible(s) déplacée(s) vers cette fiche."
+        ),
     )
 
     return {
@@ -585,6 +629,7 @@ def lier_barcodes_a_produit(
         "added_count": len(added),
         "added_codes": added,
         "already_linked": already_linked,
+        "moved_codes": moved,
         "quantity": produit.quantite,
         "added_at": now.isoformat(),
     }

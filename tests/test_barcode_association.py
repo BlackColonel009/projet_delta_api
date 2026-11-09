@@ -5,6 +5,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from app.routes.unite_produit import lier_barcodes_a_produit
+from app.services.unit_reassignment_service import attach_reusable_unit
 
 
 class _FakeQuery:
@@ -48,6 +49,8 @@ class _FakeDb:
 
 class _FakeUnitModel:
     code_barre = None
+    tracabilite = None
+    enterprise_id = None
     produit_id = None
     statut = None
 
@@ -56,6 +59,38 @@ class _FakeUnitModel:
 
 
 class BarcodeAssociationTests(unittest.TestCase):
+    def test_reactivates_unavailable_unit_on_same_product(self):
+        product = SimpleNamespace(id=10, nom="Produit")
+        unit = SimpleNamespace(
+            produit_id=10,
+            produit=product,
+            enterprise_id=1,
+            statut="indisponible",
+            date_modification=None,
+        )
+
+        result = attach_reusable_unit(unit, product, enterprise_id=1)
+
+        self.assertEqual(result.action, "reactivated")
+        self.assertEqual(unit.statut, "disponible")
+
+    def test_never_moves_sold_unit(self):
+        old_product = SimpleNamespace(id=99, nom="Ancienne fiche")
+        target_product = SimpleNamespace(id=10, nom="Nouvelle fiche")
+        unit = SimpleNamespace(
+            produit_id=99,
+            produit=old_product,
+            enterprise_id=1,
+            statut="vendu",
+            date_modification=None,
+        )
+
+        result = attach_reusable_unit(unit, target_product, enterprise_id=1)
+
+        self.assertEqual(result.action, "conflict")
+        self.assertEqual(unit.produit_id, 99)
+        self.assertEqual(unit.statut, "vendu")
+
     @patch("app.routes.unite_produit.UniteProduit", _FakeUnitModel)
     @patch("app.routes.unite_produit.log_action")
     def test_creates_missing_unit_and_attaches_temporary_unit(self, _log_action):
@@ -68,6 +103,7 @@ class BarcodeAssociationTests(unittest.TestCase):
         )
         temporary_unit = SimpleNamespace(
             produit_id=None,
+            enterprise_id=1,
             statut="temp",
             date_creation=None,
             date_modification=None,
@@ -85,7 +121,11 @@ class BarcodeAssociationTests(unittest.TestCase):
             produit_id=10,
             barcodes=["CODE-1", "CODE-2", "CODE-1"],
             db=db,
-            current_user=SimpleNamespace(id=4, is_main_user=True),
+            current_user=SimpleNamespace(
+                id=4,
+                is_main_user=True,
+                active_enterprise_id=1,
+            ),
         )
 
         self.assertEqual(result["added_count"], 2)
@@ -107,7 +147,11 @@ class BarcodeAssociationTests(unittest.TestCase):
             a_des_barcodes=False,
             date_modification=None,
         )
-        conflicting_unit = SimpleNamespace(produit_id=99)
+        conflicting_unit = SimpleNamespace(
+            produit_id=99,
+            enterprise_id=1,
+            statut="disponible",
+        )
         db = _FakeDb(
             [
                 _FakeQuery(first_result=product),
@@ -120,12 +164,69 @@ class BarcodeAssociationTests(unittest.TestCase):
                 produit_id=10,
                 barcodes=["CODE-CONFLIT"],
                 db=db,
-                current_user=SimpleNamespace(id=4, is_main_user=True),
+                current_user=SimpleNamespace(
+                    id=4,
+                    is_main_user=True,
+                    active_enterprise_id=1,
+                ),
             )
 
         self.assertEqual(raised.exception.status_code, 409)
         self.assertEqual(db.rollbacks, 1)
         self.assertEqual(db.commits, 0)
+
+    @patch("app.routes.unite_produit.log_action")
+    @patch("app.routes.unite_produit.UniteProduit", _FakeUnitModel)
+    def test_moves_unavailable_unit_from_another_product(self, _log_action):
+        target_product = SimpleNamespace(
+            id=10,
+            nom="Bonne fiche",
+            quantite=0,
+            a_des_barcodes=False,
+            date_modification=None,
+        )
+        old_product = SimpleNamespace(
+            id=99,
+            nom="Mauvaise fiche",
+            quantite=1,
+            date_modification=None,
+        )
+        unavailable_unit = SimpleNamespace(
+            produit_id=99,
+            produit=old_product,
+            enterprise_id=1,
+            statut="indisponible",
+            date_creation=None,
+            date_modification=None,
+            commande_vente_id=None,
+        )
+        db = _FakeDb(
+            [
+                _FakeQuery(first_result=target_product),
+                _FakeQuery(first_result=unavailable_unit),
+                _FakeQuery(count_result=0),
+                _FakeQuery(first_result=old_product),
+                _FakeQuery(count_result=1),
+            ]
+        )
+
+        result = lier_barcodes_a_produit(
+            produit_id=10,
+            barcodes=["CODE-DEPLACE"],
+            db=db,
+            current_user=SimpleNamespace(
+                id=4,
+                is_main_user=True,
+                active_enterprise_id=1,
+            ),
+        )
+
+        self.assertEqual(unavailable_unit.produit_id, 10)
+        self.assertEqual(unavailable_unit.statut, "disponible")
+        self.assertEqual(old_product.quantite, 0)
+        self.assertEqual(target_product.quantite, 1)
+        self.assertEqual(result["moved_codes"], ["CODE-DEPLACE"])
+        self.assertEqual(db.commits, 1)
 
 
 if __name__ == "__main__":
