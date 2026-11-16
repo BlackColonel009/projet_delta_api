@@ -58,7 +58,7 @@ def _line_details(db, facture, line, tr) -> str:
     return "<br/>".join(details)
 
 
-def render_simple_invoice(facture, db, actor) -> BytesIO:
+def render_simple_invoice(facture, db, actor, *, show_totals: bool = True) -> BytesIO:
     language = language_of(actor)
     tr = lambda fr, en: translated(language, fr, en)
     code = facture.simple_template_snapshot or "simple_classic"
@@ -209,41 +209,49 @@ def render_simple_invoice(facture, db, actor) -> BytesIO:
 
     total_paid = sum(payment.montant for payment in facture.paiements or [])
     balance = max(float(facture.total_ttc or 0) - float(total_paid or 0), 0)
-    totals = Table([
-        [tr("Total HT", "Subtotal"), f"{facture.total_ht:,.2f} {currency}"],
-        [f"{tr('TVA', 'VAT')} ({facture.tva:.0f}%)", f"{facture.total_ttc - facture.total_ht:,.2f} {currency}"],
-        [tr("Total TTC", "Total incl. tax"), f"{facture.total_ttc:,.2f} {currency}"],
-        [tr("Reste à payer", "Balance due"), f"{balance:,.2f} {currency}"],
-    ], colWidths=[document.width * 0.6, document.width * 0.4])
-    totals.setStyle(TableStyle([
-        ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-        ("FONTNAME", (0, -2), (-1, -1), "Helvetica-Bold"),
-        ("BACKGROUND", (0, -2), (-1, -2), accent),
-        ("TEXTCOLOR", (0, -2), (-1, -2), colors.white),
-        ("LINEABOVE", (0, 0), (-1, 0), 0.5, grid_color),
-        ("LINEBELOW", (0, 0), (-1, -1), 0.35, grid_color),
-        ("TOPPADDING", (0, 0), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-    ]))
-    story.append(totals)
-    story.extend([
-        Spacer(1, 4 * mm),
-        Paragraph(
-            f"<b>{tr('Montant en lettres', 'Amount in words')} :</b> "
-            f"{amount_to_words(facture.total_ttc, currency, language)}",
-            small,
-        ),
-    ])
+    if show_totals:
+        totals = Table(
+            [
+                [tr("Total HT", "Subtotal"), f"{facture.total_ht:,.2f} {currency}"],
+                [
+                    f"{tr('TVA', 'VAT')} ({facture.tva:.0f}%)",
+                    f"{facture.total_ttc - facture.total_ht:,.2f} {currency}",
+                ],
+                [tr("Total TTC", "Total incl. tax"), f"{facture.total_ttc:,.2f} {currency}"],
+                [tr("Reste à payer", "Balance due"), f"{balance:,.2f} {currency}"],
+            ],
+            colWidths=[document.width * 0.6, document.width * 0.4],
+        )
+        totals.setStyle(TableStyle([
+            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+            ("FONTNAME", (0, -2), (-1, -1), "Helvetica-Bold"),
+            ("BACKGROUND", (0, -2), (-1, -2), accent),
+            ("TEXTCOLOR", (0, -2), (-1, -2), colors.white),
+            ("LINEABOVE", (0, 0), (-1, 0), 0.5, grid_color),
+            ("LINEBELOW", (0, 0), (-1, -1), 0.35, grid_color),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ]))
+        story.append(totals)
+        story.extend([
+            Spacer(1, 4 * mm),
+            Paragraph(
+                f"<b>{tr('Montant en lettres', 'Amount in words')} :</b> "
+                f"{amount_to_words(facture.total_ttc, currency, language)}",
+                small,
+            ),
+        ])
 
     issuer = facture.issuer_name_snapshot or facture.user.username or facture.user.email
     issuer_role = facture.issuer_role_snapshot or tr("Propriétaire", "Owner")
-    status = tr("PAYÉE", "PAID") if balance <= 0 else tr("NON SOLDÉE", "OUTSTANDING")
-    story.extend([
-        Spacer(1, 7 * mm),
-        Paragraph(f"<b>{status}</b>", ParagraphStyle(
-            "InvoiceStatus", parent=heading, fontSize=12, alignment=TA_RIGHT,
-        )),
-    ])
+    if show_totals:
+        status = tr("PAYÉE", "PAID") if balance <= 0 else tr("NON SOLDÉE", "OUTSTANDING")
+        story.extend([
+            Spacer(1, 7 * mm),
+            Paragraph(f"<b>{status}</b>", ParagraphStyle(
+                "InvoiceStatus", parent=heading, fontSize=12, alignment=TA_RIGHT,
+            )),
+        ])
     show_agent = getattr(
         getattr(facture, "enterprise", None), "show_invoice_agent", True
     )

@@ -131,7 +131,7 @@ def register_user(data: UserCreate, db: Session = Depends(get_db)):
     )
     db.add(new_user)
     db.flush()
-    create_owner_foundation(db, new_user)
+    create_owner_foundation(db, new_user, business_type=data.business_type)
     db.commit()
     
     # 🧠 Fix Render: propagation vers DB réelle

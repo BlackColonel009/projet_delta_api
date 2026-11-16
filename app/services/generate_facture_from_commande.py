@@ -109,7 +109,7 @@ def generate_facture_from_commande(
 from app.utils.amount_in_words import amount_to_words
 
 
-def generate_facture_pdf(facture, db: Session ):
+def generate_facture_pdf(facture, db: Session, *, show_totals: bool = True):
     devise = facture.user.devise or "XOF"
     language = language_of(facture.sub_user or facture.user)
     montant_en_lettres = amount_to_words(facture.total_ttc, devise, language)
@@ -197,6 +197,7 @@ def generate_facture_pdf(facture, db: Session ):
         color_highlight=palette["primary_soft"],
         color_on_primary=palette["on_primary"],
         template_code=template_code,
+        show_totals=show_totals,
     )
 
     buffer = BytesIO()

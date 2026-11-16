@@ -34,6 +34,12 @@ from app.core.mail import send_email_message
 
 router = APIRouter(prefix="/factures", tags=["Facturation"])
 
+
+def _show_invoice_totals(facture: Facture, requested: bool) -> bool:
+    """Only pro formas may hide their financial summary."""
+    return requested if facture.type.value == "proforma" else True
+
+
 @router.get("/{facture_id}/preview")
 def preview_facture_pdf(
     facture_id: int,
@@ -41,6 +47,7 @@ def preview_facture_pdf(
         "simple",
         alias="template",
     ),
+    show_totals: bool = Query(True),
     db: Session = Depends(get_db),
     current_user=Depends(All_required()),
 ):
@@ -64,7 +71,9 @@ def preview_facture_pdf(
 
     if invoice_format == "professional":
         enforce_feature_access(db, current_user, "professional_invoice")
-        pdf_path = generate_facture_pdf(facture, db)
+        pdf_path = generate_facture_pdf(
+            facture, db, show_totals=_show_invoice_totals(facture, show_totals)
+        )
         return FileResponse(
             pdf_path,
             media_type="application/pdf",
@@ -72,7 +81,12 @@ def preview_facture_pdf(
             background=BackgroundTask(os.remove, pdf_path),
         )
 
-    pdf_buffer = render_simple_invoice(facture, db, current_user)
+    pdf_buffer = render_simple_invoice(
+        facture,
+        db,
+        current_user,
+        show_totals=_show_invoice_totals(facture, show_totals),
+    )
     return StreamingResponse(pdf_buffer, media_type="application/pdf", headers={
         "Content-Disposition": f"inline; filename=facture_{facture.id}.pdf"
     })
@@ -85,6 +99,7 @@ def share_facture_pdf(
         "simple",
         alias="template",
     ),
+    show_totals: bool = Query(True),
     db: Session = Depends(get_db),
     current_user=Depends(All_required()),
 ):
@@ -103,7 +118,9 @@ def share_facture_pdf(
     if invoice_format == "professional":
         enforce_feature_access(db, current_user, "professional_invoice")
         access = enforce_invoice_share_quota(db, current_user)
-        pdf_path = generate_facture_pdf(facture, db)
+        pdf_path = generate_facture_pdf(
+            facture, db, show_totals=_show_invoice_totals(facture, show_totals)
+        )
         event = InvoiceShareEvent(
             owner_user_id=access.owner_id,
             enterprise_id=actor_enterprise_id(current_user),
@@ -120,7 +137,12 @@ def share_facture_pdf(
         )
 
     access = enforce_invoice_share_quota(db, current_user)
-    pdf_buffer = render_simple_invoice(facture, db, current_user)
+    pdf_buffer = render_simple_invoice(
+        facture,
+        db,
+        current_user,
+        show_totals=_show_invoice_totals(facture, show_totals),
+    )
     event = InvoiceShareEvent(
         owner_user_id=access.owner_id,
         enterprise_id=actor_enterprise_id(current_user),
@@ -357,6 +379,7 @@ async def send_facture_to_client_memory(
         "simple",
         alias="template",
     ),
+    show_totals: bool = Query(True),
     db: Session = Depends(get_db),
     current_user=Depends(All_required()),
 ):
@@ -396,7 +419,9 @@ async def send_facture_to_client_memory(
 
     if invoice_format == "professional":
         enforce_feature_access(db, current_user, "professional_invoice")
-        pdf_path = generate_facture_pdf(facture, db)
+        pdf_path = generate_facture_pdf(
+            facture, db, show_totals=_show_invoice_totals(facture, show_totals)
+        )
         try:
             sent = await send_email_message(
                 to_email=facture.client.email,
@@ -428,7 +453,12 @@ async def send_facture_to_client_memory(
             )
         }
 
-    buffer = render_simple_invoice(facture, db, current_user)
+    buffer = render_simple_invoice(
+        facture,
+        db,
+        current_user,
+        show_totals=_show_invoice_totals(facture, show_totals),
+    )
     with tempfile.NamedTemporaryFile(
         mode="wb",
         prefix=f"facture_simple_{facture.id}_",

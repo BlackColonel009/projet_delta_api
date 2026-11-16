@@ -12,7 +12,7 @@ from app.models.model_enterprise import (
     EnterpriseServiceProfile,
 )
 from app.models.model_user import SubUser, User
-from app.services.business_type_registry import BUSINESS_TYPE_REGISTRY
+from app.services.business_type_registry import BUSINESS_TYPE_REGISTRY, CREATABLE_BUSINESS_TYPES
 
 
 DEFAULT_SERVICE = "gestion_principale"
@@ -76,8 +76,12 @@ def unique_enterprise_code(db: Session, group_id: int, requested: str) -> str:
     return candidate
 
 
-def create_owner_foundation(db: Session, user: User) -> tuple[EnterpriseGroup, Enterprise]:
+def create_owner_foundation(
+    db: Session, user: User, *, business_type: str = "commerce"
+) -> tuple[EnterpriseGroup, Enterprise]:
     """Crée le groupe d'un nouveau propriétaire dans la transaction courante."""
+    if business_type not in CREATABLE_BUSINESS_TYPES:
+        raise ValueError("Type d'entreprise non disponible à la création")
     existing = db.query(EnterpriseGroup).filter(
         EnterpriseGroup.owner_user_id == user.id
     ).first()
@@ -99,7 +103,7 @@ def create_owner_foundation(db: Session, user: User) -> tuple[EnterpriseGroup, E
         code=unique_enterprise_code(db, group.id, company_name),
         is_primary=True,
         enterprise_type="principale",
-        business_type="commerce",
+        business_type=business_type,
         address=user.addresse,
         phone=user.telephone,
         email=user.email,
@@ -120,7 +124,10 @@ def create_owner_foundation(db: Session, user: User) -> tuple[EnterpriseGroup, E
                 enabled=True,
                 configuration_json={},
             )
-            for service_code in (DEFAULT_SERVICE, "consigne")
+            for service_code in (
+                (DEFAULT_SERVICE, "consigne") if business_type == "commerce"
+                else (BUSINESS_TYPE_REGISTRY[business_type]["service_code"],)
+            )
         ]
     )
     db.add(

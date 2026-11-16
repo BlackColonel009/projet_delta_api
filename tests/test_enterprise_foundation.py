@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta
 
 from fastapi import HTTPException
@@ -122,6 +123,54 @@ class EnterpriseFoundationTests(unittest.TestCase):
         ).one()
         self.assertEqual(membership.scope, "group")
         self.assertIsNone(membership.enterprise_id)
+
+    def test_specialized_primary_uses_only_its_business_service(self):
+        for business_type in ("laundry", "vehicle_rental", "property_rental"):
+            with self.subTest(business_type=business_type):
+                owner = self._owner(f"{business_type}@example.com", business_type)
+                group, primary = create_owner_foundation(
+                    self.db, owner, business_type=business_type
+                )
+                self.assertTrue(primary.is_primary)
+                self.assertEqual(primary.business_type, business_type)
+                profiles = self.db.query(EnterpriseServiceProfile).filter_by(
+                    enterprise_id=primary.id
+                ).all()
+                self.assertEqual([profile.service_code for profile in profiles], [business_type])
+                _, default = resolve_default_enterprise(self.db, owner)
+                self.assertEqual(default.id, primary.id)
+                # La réinitialisation du contexte ne doit jamais le changer en commerce.
+                _, existing = create_owner_foundation(self.db, owner)
+                self.assertEqual(existing.id, primary.id)
+                self.assertEqual(existing.business_type, business_type)
+
+    def test_registration_creates_selected_primary_business(self):
+        from app.routes.auth import register_user
+        from app.schemas.user_schema import UserCreate
+        from app.services.privacy_policy_service import PRIVACY_POLICY_VERSION
+        from pydantic import ValidationError
+
+        payload = dict(
+            email="new@example.com", password="test-only-password",
+            societe_ou_entreprise="Nouvelle entreprise",
+            privacy_policy_accepted=True,
+            privacy_policy_version=PRIVACY_POLICY_VERSION,
+        )
+        self.assertEqual(UserCreate(**payload).business_type, "commerce")
+        with self.assertRaises(ValidationError):
+            UserCreate(**payload, business_type="unknown")
+        with patch("app.routes.auth.hash_password", return_value="test-only"), \
+             patch("app.routes.auth.create_access_token", return_value="test-token"), \
+             patch("app.routes.auth.create_free_subscription"), patch("time.sleep"):
+            for business_type in ("commerce", "laundry", "vehicle_rental", "property_rental"):
+                with self.subTest(business_type=business_type):
+                    data = UserCreate(**{**payload, "email": f"new-{business_type}@example.com"}, business_type=business_type)
+                    response = register_user(data, self.db)
+                    self.assertEqual(response["access_token"], "test-token")
+                    owner = self.db.query(User).filter_by(email=data.email).one()
+                    _, primary = resolve_default_enterprise(self.db, owner)
+                    self.assertTrue(primary.is_primary)
+                    self.assertEqual(primary.business_type, business_type)
 
     def test_local_collaborator_cannot_switch_to_another_annex(self):
         owner = self._owner("owner2@example.com", "Groupe Deux")

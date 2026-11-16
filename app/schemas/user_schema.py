@@ -12,6 +12,7 @@ class UserCreate(BaseModel):
     societe_ou_entreprise: Optional[str] = None  # ✅
     devise: Optional[str] = "€"
     interface_language: Literal["fr", "en"] = "fr"
+    business_type: Literal["commerce", "laundry", "vehicle_rental", "property_rental"] = "commerce"
     privacy_policy_accepted: bool
     privacy_policy_version: str
     privacy_policy_language: Literal["fr", "en"] = "fr"

@@ -448,6 +448,7 @@
       </tbody>
     </table>
 
+    {% if show_totals %}
     <table class="totals-wrap">
       <tr>
         <td class="totals-spacer"></td>
@@ -475,6 +476,7 @@
     <div class="amount-words">
       {{ 'Amount in words:' if lang == 'en' else 'Montant en lettres :' }} <strong>{{ montant_en_lettres }}</strong>
     </div>
+    {% endif %}
     {% if show_agent_name %}
     <div class="amount-words">
       <strong>{{ 'Issued by:' if lang == 'en' else 'Émise par :' }}</strong>
