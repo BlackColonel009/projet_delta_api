@@ -17,9 +17,29 @@ class AppDownloadUpdateTests(unittest.TestCase):
         payload = AppDownloadUpdate(
             enabled=True,
             download_url="https://mega.nz/file/example",
+            version="1.2.3",
             sha256="A" * 64,
         )
         self.assertEqual(payload.sha256, "a" * 64)
+
+    def test_enabled_release_requires_valid_version(self):
+        with self.assertRaises(ValidationError):
+            AppDownloadUpdate(
+                enabled=True,
+                download_url="https://mega.nz/file/example",
+            )
+        with self.assertRaises(ValidationError):
+            AppDownloadUpdate(
+                enabled=True,
+                download_url="https://mega.nz/file/example",
+                version="version finale",
+            )
+        with self.assertRaises(ValidationError):
+            AppDownloadUpdate(
+                enabled=True,
+                download_url="https://mega.nz/file/example",
+                version="1.2.3+4",
+            )
 
     def test_disabled_release_can_clear_url(self):
         payload = AppDownloadUpdate(enabled=False, download_url="  ")

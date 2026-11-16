@@ -40,7 +40,9 @@ def get_public_app_downloads(
     response: Response,
     db: Session = Depends(get_db),
 ):
-    response.headers["Cache-Control"] = "public, max-age=300"
+    # Une application qui revient au premier plan doit voir immédiatement une
+    # nouvelle version publiée depuis le dashboard.
+    response.headers["Cache-Control"] = "no-store"
     return _catalog(db)
 
 

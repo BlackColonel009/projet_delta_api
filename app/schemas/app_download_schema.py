@@ -52,10 +52,21 @@ class AppDownloadUpdate(BaseModel):
             raise ValueError("L’empreinte SHA-256 doit contenir exactement 64 caractères hexadécimaux")
         return normalized
 
+    @field_validator("version")
+    @classmethod
+    def validate_version(cls, value: str | None):
+        if value is None:
+            return None
+        if not re.fullmatch(r"\d+\.\d+\.\d+", value):
+            raise ValueError("La version doit respecter le format 1.2.3")
+        return value
+
     @model_validator(mode="after")
     def enabled_release_requires_url(self):
         if self.enabled and not self.download_url:
             raise ValueError("Un lien HTTPS est obligatoire pour activer le téléchargement")
+        if self.enabled and not self.version:
+            raise ValueError("La version publiée est obligatoire pour activer la mise à jour")
         return self
 
 
