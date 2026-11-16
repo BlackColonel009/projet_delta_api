@@ -22,6 +22,7 @@ from app.schemas.facture_depot_schema import FactureDepotOut
 from app.schemas.facture_schema import (
     FactureOut,
     FactureCreate,
+    InvoiceCustomLineCreate,
     InvoiceLineDisplayUpdate,
     InvoiceOfficialDateUpdate,
 )
@@ -205,6 +206,105 @@ def update_invoice_line_display(
         },
     }
 
+
+@router.post("/{facture_id}/lines/custom", response_model=dict)
+def add_custom_invoice_line(
+    facture_id: int,
+    payload: InvoiceCustomLineCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([
+        RoleEnum.admin,
+        RoleEnum.directeur,
+        RoleEnum.gestionnaire_stock,
+        RoleEnum.commercial,
+        RoleEnum.caissier,
+        RoleEnum.comptable,
+    ])),
+):
+    """Ajoute une ligne propre à la facture, sans créer de produit ni toucher au stock."""
+
+    facture = db.query(Facture).filter(
+        Facture.id == facture_id,
+        enterprise_scope_filter(Facture, current_user),
+    ).first()
+    if not facture:
+        raise HTTPException(status_code=404, detail="Facture non trouvée")
+    if (facture.statut or "").strip().lower() == "annulée":
+        raise HTTPException(
+            status_code=409,
+            detail="Une ligne ne peut pas être ajoutée à une facture annulée.",
+        )
+
+    description = payload.description.strip()
+    if not description:
+        raise HTTPException(status_code=422, detail="La désignation est obligatoire")
+
+    unit = (payload.unite or "").strip()
+    total_line = round(payload.quantite * payload.prix_unitaire, 2)
+    line = LigneFacture(
+        facture_id=facture.id,
+        produit_id=None,
+        description=description,
+        caracteristiques_snapshot=serialize_characteristics(
+            {"Unité": unit} if unit else {}
+        ),
+        quantite=payload.quantite,
+        prix_unitaire=payload.prix_unitaire,
+        cout_achat_unitaire=0,
+        total_ligne=total_line,
+        user_id=actor_owner_id(current_user),
+        enterprise_id=facture.enterprise_id,
+    )
+    db.add(line)
+    db.flush()
+
+    facture.total_ht = round(
+        sum(float(item.total_ligne or 0) for item in facture.lignes),
+        2,
+    )
+    facture.total_ttc = round(
+        facture.total_ht * (1 + float(facture.tva or 0) / 100),
+        2,
+    )
+
+    total_paid = float(sum(payment.montant or 0 for payment in facture.paiements))
+    if total_paid > 0:
+        facture.statut = (
+            "payée" if total_paid + 0.01 >= facture.total_ttc else "partielle"
+        )
+
+    log_action(
+        db,
+        action="Ajout d'une ligne libre à une facture",
+        type_entite="facture",
+        entite_id=facture.id,
+        current_user=current_user,
+        details=(
+            f"Ligne libre #{line.id} ajoutée à la facture #{facture.id}; "
+            "aucun produit ni stock n'a été modifié."
+        ),
+        commit=False,
+    )
+    db.commit()
+    db.refresh(line)
+
+    return {
+        "message": "Ligne ajoutée à cette facture uniquement.",
+        "line": {
+            "id": line.id,
+            "description": line.description,
+            "quantite": line.quantite,
+            "prix_unitaire": line.prix_unitaire,
+            "total_ligne": line.total_ligne,
+            "caracteristiques": invoice_line_characteristics(line),
+            "produit": None,
+            "unites": [],
+        },
+        "total_ht": facture.total_ht,
+        "total_ttc": facture.total_ttc,
+        "statut": facture.statut,
+    }
+
 #changer le type de la facture
 @router.patch("/{facture_id}/type", response_model=dict)
 def update_facture_type(
@@ -384,9 +484,13 @@ def get_facture(
         produit = ligne.produit
         quantite = ligne.quantite or 0
 
-        # Prendre uniquement les unités correspondantes à la quantité de la ligne
-        unites_for_line = all_unites[index_unites : index_unites + quantite]
-        index_unites += quantite
+        # Une ligne libre est purement documentaire : elle ne doit jamais
+        # décaler l'association des unités QR des véritables produits.
+        if produit is None:
+            unites_for_line = []
+        else:
+            unites_for_line = all_unites[index_unites : index_unites + quantite]
+            index_unites += quantite
 
         lignes_data.append({
             "id": ligne.id,

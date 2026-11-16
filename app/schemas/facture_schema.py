@@ -33,6 +33,15 @@ class InvoiceLineDisplayUpdate(BaseModel):
     caracteristiques: Dict[str, str] = Field(default_factory=dict)
 
 
+class InvoiceCustomLineCreate(BaseModel):
+    """Ligne libre ajoutée uniquement au document, sans mouvement de stock."""
+
+    description: str = Field(min_length=1, max_length=500)
+    quantite: int = Field(default=1, gt=0, le=100000)
+    unite: Optional[str] = Field(default=None, max_length=80)
+    prix_unitaire: float = Field(ge=0, le=1_000_000_000_000)
+
+
 # class LigneFactureOut(LigneFactureIn):
 #     id: int
 #     total_ligne: float
