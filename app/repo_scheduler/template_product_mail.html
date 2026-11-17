@@ -188,6 +188,7 @@
       <div class="details-title">{{ 'Specifications' if lang == 'en' else 'Fiche technique' }}</div>
       <p class="details-text">{{ produit.caracteristiques or ('No description available' if lang == 'en' else 'Aucune description disponible') }}</p>
     </div>
+    <p class="details-text">{{ 'Contact our company for pricing.' if lang == 'en' else 'Pour connaître le prix, contactez notre entreprise.' }}</p>
 
     <div class="contact-wrap">
       <table class="contact-table" bgcolor="{{ theme.primary_dark }}">

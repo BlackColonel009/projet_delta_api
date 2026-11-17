@@ -360,8 +360,6 @@ def product_recommendation_email(*, user, client_name: str, product) -> str:
         else f'<div style="width:180px;height:150px;border-radius:12px;background:{identity["primary_soft"]};text-align:center;line-height:150px;font-size:42px;">★</div>'
     )
     description = getattr(product, "caracteristiques", None) or getattr(product, "commentaire", None)
-    price = getattr(product, "prix_vente", None)
-    currency = getattr(user, "devise", "") or ""
     content = f"""
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;background:#f9fafb;border:1px solid #edf0f2;border-radius:14px;">
         <tr>
@@ -369,7 +367,7 @@ def product_recommendation_email(*, user, client_name: str, product) -> str:
           <td valign="top" style="padding:18px 18px 18px 0;">
             <div style="font-size:20px;line-height:1.3;color:#111827;font-weight:900;">{_text(product.nom)}</div>
             <div style="margin-top:8px;font-size:14px;line-height:1.6;color:#4b5563;">{_text(description, _tr(user, 'Un article sélectionné spécialement pour vous.', 'An item selected especially for you.'))}</div>
-            <div style="margin-top:14px;font-size:18px;color:{identity['primary_dark']};font-weight:900;">{_money(price, currency)}</div>
+            <div style="margin-top:14px;font-size:16px;color:{identity['primary_dark']};font-weight:900;">{_tr(user, 'Pour connaître le prix, contactez notre entreprise.', 'Contact our company for pricing.')}</div>
           </td>
         </tr>
       </table>

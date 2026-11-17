@@ -79,8 +79,21 @@ class BrandedEmailTemplateTests(unittest.TestCase):
         )
         self.assertIn("PC Pro", html)
         self.assertIn("16 Go RAM", html)
-        self.assertIn("475 000,00 XOF", html)
+        self.assertIn("Pour connaître le prix, contactez notre entreprise.", html)
+        self.assertNotIn("475 000", html)
+        self.assertNotIn("475000", html)
         self.assertIn("jointe à cet email au format PDF", html)
+
+    def test_english_recommendation_hides_price(self):
+        self.user.interface_language = "en"
+        product = SimpleNamespace(
+            nom="PC Pro", image_url=None, caracteristiques="16 GB RAM",
+            commentaire=None, prix_vente=475000,
+        )
+        html = product_recommendation_email(user=self.user, client_name="Kossi", product=product)
+        self.assertIn("Contact our company for pricing.", html)
+        self.assertNotIn("475000", html)
+        self.assertNotIn("475,000", html)
 
     def test_subscription_request_email_is_personalized_and_escaped(self):
         plan = SimpleNamespace(name="Diamant <Pro>")
