@@ -25,6 +25,7 @@ from app.schemas.facture_schema import (
     InvoiceCustomLineCreate,
     InvoiceLineDisplayUpdate,
     InvoiceOfficialDateUpdate,
+    InvoiceAdjustmentUpdate,
 )
 from fastapi.responses import FileResponse
 from app.utils.logger import log_action
@@ -47,12 +48,56 @@ from app.services.invoice_line_snapshot_service import (
     serialize_characteristics,
 )
 import os
+from decimal import Decimal
+from app.services.invoice_adjustments import invoice_rate, invoice_totals, money
 
 router = APIRouter(prefix="/factures", tags=["Facturation"])
 
 
 def _can_delete_unit_after_purchase_cancellation(status: str | None) -> bool:
     return (status or "").strip().lower() in ("disponible", "indisponible")
+
+
+@router.patch("/{facture_id}/adjustments")
+def update_invoice_adjustments(
+    facture_id: int,
+    payload: InvoiceAdjustmentUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(check_role([
+        RoleEnum.admin, RoleEnum.directeur, RoleEnum.commercial,
+        RoleEnum.caissier, RoleEnum.comptable,
+    ])),
+):
+    facture = db.query(Facture).filter(
+        Facture.id == facture_id, enterprise_scope_filter(Facture, current_user),
+    ).with_for_update().first()
+    if not facture:
+        raise HTTPException(status_code=404, detail="Facture non trouvée")
+    status = (facture.statut or '').strip().lower()
+    if status in {'payée', 'payee', 'paye', 'payé', 'soldée', 'soldee', 'soldé', 'solde', 'clôturée', 'cloturee', 'clôturé', 'cloture', 'annulée', 'annulee', 'annulé', 'annule'}:
+        raise HTTPException(status_code=409, detail="Une facture soldée, clôturée ou annulée ne peut pas être modifiée.")
+    paid = money(sum(p.montant or 0 for p in facture.paiements))
+    if money(facture.total_ttc) > 0 and paid >= money(facture.total_ttc):
+        raise HTTPException(status_code=409, detail="Cette facture est déjà soldée.")
+    old_subtotal = sum((money(line.total_ligne) for line in facture.lignes), Decimal(0))
+    if abs(old_subtotal - money(facture.remise_ht) - money(facture.total_ht)) > Decimal('0.01'):
+        raise HTTPException(status_code=409, detail="Les lignes et le total historique ne correspondent pas. Vérifiez la facture avant modification.")
+    _, net, tax, total = invoice_totals(facture.lignes, payload.remise_ht, Decimal(str(payload.taux_tva)))
+    if total <= paid:
+        raise HTTPException(status_code=409, detail="Le nouveau total doit rester supérieur aux paiements déjà reçus.")
+    previous = f"remise HT={facture.remise_ht or 0}, total TTC={facture.total_ttc}"
+    facture.remise_ht = float(money(payload.remise_ht))
+    facture.taux_tva_snapshot = payload.taux_tva
+    facture.afficher_remise = payload.afficher_remise
+    facture.total_ht = float(net)
+    facture.total_ttc = float(total)
+    facture.statut = 'partielle' if paid > 0 else facture.statut
+    log_action(db=db, current_user=current_user, action="Modification remise et TVA",
+               type_entite="facture", entite_id=facture.id,
+               details=f"{previous} → remise HT={facture.remise_ht}, TVA={payload.taux_tva}%, total TTC={total}, ligne remise affichée={payload.afficher_remise}", commit=False)
+    db.commit()
+    return {"message": "Remise et TVA mises à jour", "total_ht": float(net),
+            "total_ttc": float(total), "montant_tva": float(tax)}
 
 # ➕ Créer une facture complète
 @router.post("/", response_model=FactureOut)
@@ -155,7 +200,7 @@ def update_invoice_line_display(
     facture = db.query(Facture).filter(
         Facture.id == facture_id,
         enterprise_scope_filter(Facture, current_user),
-    ).first()
+    ).with_for_update().first()
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
 
@@ -226,7 +271,7 @@ def add_custom_invoice_line(
     facture = db.query(Facture).filter(
         Facture.id == facture_id,
         enterprise_scope_filter(Facture, current_user),
-    ).first()
+    ).with_for_update().first()
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
     if (facture.statut or "").strip().lower() == "annulée":
@@ -234,6 +279,11 @@ def add_custom_invoice_line(
             status_code=409,
             detail="Une ligne ne peut pas être ajoutée à une facture annulée.",
         )
+
+    rate = invoice_rate(facture)
+    previous_subtotal = sum((money(item.total_ligne) for item in facture.lignes), Decimal(0))
+    if abs(previous_subtotal - money(facture.remise_ht) - money(facture.total_ht)) > Decimal('0.01'):
+        raise HTTPException(status_code=409, detail="Les lignes et le total historique ne correspondent pas.")
 
     description = payload.description.strip()
     if not description:
@@ -257,15 +307,12 @@ def add_custom_invoice_line(
     )
     db.add(line)
     db.flush()
+    db.expire(facture, ['lignes'])
 
-    facture.total_ht = round(
-        sum(float(item.total_ligne or 0) for item in facture.lignes),
-        2,
-    )
-    facture.total_ttc = round(
-        facture.total_ht * (1 + float(facture.tva or 0) / 100),
-        2,
-    )
+    _, net, _, total = invoice_totals(facture.lignes, facture.remise_ht, rate)
+    facture.total_ht = float(net)
+    facture.total_ttc = float(total)
+    facture.taux_tva_snapshot = float(rate)
 
     total_paid = float(sum(payment.montant or 0 for payment in facture.paiements))
     if total_paid > 0:
@@ -519,6 +566,10 @@ def get_facture(
         })
 
     total_paye = sum(p.montant for p in facture.paiements)
+    try:
+        effective_rate = float(invoice_rate(facture))
+    except HTTPException:
+        effective_rate = None
 
     return {
         "id": facture.id,
@@ -531,6 +582,9 @@ def get_facture(
         "statut": facture.statut,
         "remarques": facture.remarques,
         "total_ht": facture.total_ht,
+        "remise_ht": facture.remise_ht or 0,
+        "afficher_remise": facture.afficher_remise,
+        "taux_tva_snapshot": effective_rate,
         "total_ttc": facture.total_ttc,
         "total_paye": total_paye,
         "tva": facture.tva,
@@ -601,6 +655,9 @@ def list_factures(
             total_ttc=f.total_ttc,
             statut=f.statut,
             total_ht=f.total_ht,
+            remise_ht=f.remise_ht or 0,
+            taux_tva_snapshot=f.taux_tva_snapshot,
+            afficher_remise=f.afficher_remise,
             tva=f.tva,
             type=f.type,
             client_id=f.client_id,

@@ -1,7 +1,7 @@
 # 📦 MODELES POUR FACTURATION
 # Fichier : app/models/model_facture.py
 
-from sqlalchemy import Column, ForeignKey, Integer, String, Float, DateTime, ForeignKey, Enum, Text, Index
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Float, DateTime, ForeignKey, Enum, Text, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from enum import Enum as PyEnum
@@ -31,6 +31,9 @@ class Facture(Base):
     total_ht = Column(Float, default=0.0)
     total_ttc = Column(Float, default=0.0)
     tva = Column(Float, default=0.0)
+    remise_ht = Column(Float, nullable=False, default=0, server_default="0")
+    taux_tva_snapshot = Column(Float, nullable=True)
+    afficher_remise = Column(Boolean, nullable=False, default=True, server_default="true")
     devise = Column(String, default="FCFA")
     
     commande_achat_id = Column(Integer, ForeignKey("commandes_achats.id"), nullable=True)

@@ -466,10 +466,23 @@ def create_commande_achat(
         commande.tva = taux_tva * total_ht if data.tva_appliquee else 0
         commande.total_ttc = total_ht + commande.tva
 
-        # Une seule validation : commande, lignes, stock et unités réussissent
-        # ensemble ou sont tous annulés.
+        db.flush()
+        access = resolve_subscription_access(db, current_user)
+        generate_facture_from_commande(
+            db, commande, "achat",
+            professional_invoice=access.has_feature("professional_invoice"),
+            current_actor=current_user,
+            official_date=data.invoice_date,
+            commit=False,
+        )
+        log_action(
+            db=db, current_user=current_user, action="Création  achat",
+            type_entite="commande_achat", entite_id=commande.id,
+            details=f"Commande #{commande.id} pour fournisseur {fournisseur.nom} — Total TTC: {commande.total_ttc:.2f}",
+            commit=False,
+        )
+        # Commande, stock, facture et historique forment une seule transaction.
         db.commit()
-        db.refresh(commande)
     except HTTPException:
         db.rollback()
         raise
@@ -481,26 +494,6 @@ def create_commande_achat(
         ) from error
 
     
-    log_action(
-        db=db,
-        current_user=current_user,
-        action="Création  achat",
-        type_entite="commande_achat",
-        entite_id=commande.id,
-        details=f"Commande #{commande.id} pour fournisseur {fournisseur.nom} — Total TTC: {commande.total_ttc:.2f} €"
-    )
-
-
-    access = resolve_subscription_access(db, current_user)
-    generate_facture_from_commande(
-        db,
-        commande,
-        "achat",
-        professional_invoice=access.has_feature("professional_invoice"),
-        current_actor=current_user,
-        official_date=data.invoice_date,
-    )
-
     return {"message": "Commande achat creee", "commande_id": commande.id}
 
 # 📋 Lister les commandes ventes

@@ -48,6 +48,7 @@ def generate_facture_from_commande(
     professional_invoice: bool = True,
     current_actor=None,
     official_date: datetime | None = None,
+    commit: bool = True,
 ):
     actor = current_actor or current_sub
     sub_user_id = actor.id if isinstance(actor, SubUser) else None
@@ -77,8 +78,7 @@ def generate_facture_from_commande(
         **snapshot,
     )
     db.add(facture)
-    db.commit()
-    db.refresh(facture)
+    db.flush()
 
     for ligne in commande.lignes:
         db.add(LigneFacture(
@@ -99,7 +99,11 @@ def generate_facture_from_commande(
             enterprise_id=commande.enterprise_id,
         ))
 
-    db.commit()
+    if commit:
+        db.commit()
+        db.refresh(facture)
+    else:
+        db.flush()
 
     # La facture est créée, mais jamais générée ni envoyée automatiquement.
     # L'utilisateur choisit ensuite explicitement le format et l'envoi depuis

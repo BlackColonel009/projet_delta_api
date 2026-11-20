@@ -42,6 +42,12 @@ class InvoiceCustomLineCreate(BaseModel):
     prix_unitaire: float = Field(ge=0, le=1_000_000_000_000)
 
 
+class InvoiceAdjustmentUpdate(BaseModel):
+    remise_ht: float = Field(ge=0, le=1_000_000_000_000, allow_inf_nan=False)
+    taux_tva: float = Field(ge=0, le=100, allow_inf_nan=False)
+    afficher_remise: bool = True
+
+
 # class LigneFactureOut(LigneFactureIn):
 #     id: int
 #     total_ligne: float
@@ -72,6 +78,9 @@ class FactureOut(BaseModel):
     statut: str
     remarques: Optional[str]
     total_ht: float
+    remise_ht: float = 0
+    taux_tva_snapshot: Optional[float] = None
+    afficher_remise: bool = True
     total_ttc: float
     total_paye: float
     technical_created_at: Optional[datetime] = None

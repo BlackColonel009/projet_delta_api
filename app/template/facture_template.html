@@ -454,13 +454,23 @@
         <td class="totals-spacer"></td>
         <td class="totals-cell">
           <table class="totals">
+            {% if facture.remise_ht and facture.afficher_remise %}
+            <tr>
+              <td class="label">{{ 'Subtotal before discount' if lang == 'en' else 'Sous-total HT' }}</td>
+              <td class="right">{{ '%.2f'|format(facture.total_ht + facture.remise_ht) }} {{ devise }}</td>
+            </tr>
+            <tr>
+              <td><strong>{{ 'Discount before tax' if lang == 'en' else 'Remise HT' }}</strong></td>
+              <td class="right"><strong>-{{ '%.2f'|format(facture.remise_ht) }} {{ devise }}</strong></td>
+            </tr>
+            {% endif %}
             <tr>
               <td class="label">{{ 'Subtotal' if lang == 'en' else 'Total HT' }}</td>
               <td class="right">{{ '%.2f'|format(facture.total_ht) }} {{ devise }}</td>
             </tr>
-            {% if facture.tva > 0 %}
+            {% if facture.total_ttc > facture.total_ht %}
             <tr>
-              <td class="label">{{ 'VAT' if lang == 'en' else 'TVA' }} ({{ societe.tva }}%)</td>
+              <td class="label">{{ 'VAT' if lang == 'en' else 'TVA' }}</td>
               <td class="right">{{ '%.2f'|format(facture.total_ttc - facture.total_ht) }} {{ devise }}</td>
             </tr>
             {% endif %}

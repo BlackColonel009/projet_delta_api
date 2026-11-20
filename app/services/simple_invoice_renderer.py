@@ -210,11 +210,18 @@ def render_simple_invoice(facture, db, actor, *, show_totals: bool = True) -> By
     total_paid = sum(payment.montant for payment in facture.paiements or [])
     balance = max(float(facture.total_ttc or 0) - float(total_paid or 0), 0)
     if show_totals:
+        reduction = float(getattr(facture, "remise_ht", 0) or 0)
+        show_discount = reduction > 0 and getattr(facture, "afficher_remise", True)
+        discount_rows = [
+            [tr("Sous-total HT", "Subtotal before discount"), f"{facture.total_ht + reduction:,.2f} {currency}"],
+            [Paragraph(f"<b>{tr('Remise HT', 'Discount before tax')}</b>", body),
+             Paragraph(f"<b>-{reduction:,.2f} {currency}</b>", right)],
+        ] if show_discount else []
         totals = Table(
-            [
+            discount_rows + [
                 [tr("Total HT", "Subtotal"), f"{facture.total_ht:,.2f} {currency}"],
                 [
-                    f"{tr('TVA', 'VAT')} ({facture.tva:.0f}%)",
+                    tr('TVA', 'VAT'),
                     f"{facture.total_ttc - facture.total_ht:,.2f} {currency}",
                 ],
                 [tr("Total TTC", "Total incl. tax"), f"{facture.total_ttc:,.2f} {currency}"],

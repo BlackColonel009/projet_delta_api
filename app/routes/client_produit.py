@@ -6,14 +6,16 @@ from reportlab.pdfgen import canvas
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import List
 from app.database import get_db
 from app.models.model_client_produit import ClientProduit
 from app.models.model_client import Client
+from app.models.model_facture import Facture, LigneFacture, TypeFacture
 from app.schemas.client_produit_schema import ClientProduitOut
 from app.schemas.user_schema import RoleEnum
 from app.utils.permissions import check_role
-from app.services.enterprise_service import enterprise_scope_filter
+from app.services.enterprise_service import enterprise_scope_filter, actor_enterprise_id, actor_owner_id
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.lib import colors
@@ -22,12 +24,47 @@ router = APIRouter(prefix="/client-produits", tags=["ClientProduit"])
 
 CLIENT_PRODUCT_ROLES = [
     RoleEnum.admin,
+    RoleEnum.directeur,
     RoleEnum.commercial,
     RoleEnum.caissier,
     RoleEnum.comptable,
     RoleEnum.gestionnaire_stock,
     RoleEnum.secretaire,
 ]
+
+
+def _client_product_scope(actor):
+    scope = ClientProduit.enterprise_id == actor_enterprise_id(actor)
+    if getattr(actor, 'active_enterprise_is_primary', False):
+        return or_(scope, (ClientProduit.enterprise_id.is_(None)) &
+                   ClientProduit.client.has(Client.user_id == actor_owner_id(actor)))
+    return scope
+
+
+def _invoice_line_purchases(db, current_user, client_id, line_id=None):
+    """Lit les lignes libres des ventes depuis leur source, sans copie ni doublon."""
+    query = db.query(LigneFacture, Facture).join(
+        Facture, Facture.id == LigneFacture.facture_id
+    ).filter(
+        Facture.client_id == client_id,
+        enterprise_scope_filter(Facture, current_user),
+        Facture.type == TypeFacture.vente,
+        or_(Facture.statut.is_(None), Facture.statut.notin_(["annulée", "annulee", "annulé", "annule"])),
+        LigneFacture.produit_id.is_(None),
+    )
+    if line_id is not None:
+        query = query.filter(LigneFacture.id == line_id)
+    return [
+        {
+            "id": -line.id, "client_id": invoice.client_id,
+            "commande_id": invoice.commande_id, "produit_id": None,
+            "note": None, "nom_produit": line.description,
+            "categorie_produit": None, "prix_unitaire_backup": line.prix_unitaire,
+            "quantite": line.quantite, "prix_unitaire": line.prix_unitaire,
+            "date_achat": invoice.date_creation,
+        }
+        for line, invoice in query.all()
+    ]
 
 # 📋 Liste des produits achetés (actifs uniquement)
 @router.get("/client/{client_id}", response_model=List[ClientProduitOut])
@@ -42,11 +79,12 @@ def get_produits_by_client(
     ).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client introuvable")
-    return db.query(ClientProduit).filter(
+    items = db.query(ClientProduit).filter(
         ClientProduit.client_id == client_id,
-        enterprise_scope_filter(ClientProduit, current_user),
+        _client_product_scope(current_user),
         (ClientProduit.note == None) | (ClientProduit.note == "")
     ).all()
+    return items + _invoice_line_purchases(db, current_user, client_id)
 
 # 🔍 Détail d’un produit acheté (si actif uniquement)
 @router.get("/{id}", response_model=ClientProduitOut)
@@ -55,9 +93,18 @@ def get_client_produit(
     db: Session = Depends(get_db),
     current_user=Depends(check_role(CLIENT_PRODUCT_ROLES)),
 ):
+    if id < 0:
+        line = db.query(LigneFacture, Facture).join(
+            Facture, Facture.id == LigneFacture.facture_id
+        ).filter(LigneFacture.id == -id, enterprise_scope_filter(Facture, current_user)).first()
+        if line:
+            items = _invoice_line_purchases(db, current_user, line[1].client_id, -id)
+            if items:
+                return items[0]
+        raise HTTPException(status_code=404, detail="Achat client introuvable")
     item = db.query(ClientProduit).filter(
         ClientProduit.id == id,
-        enterprise_scope_filter(ClientProduit, current_user),
+        _client_product_scope(current_user),
         (ClientProduit.note == None) | (ClientProduit.note == "")
     ).first()
     if not item:
@@ -73,9 +120,11 @@ def delete_client_produit(
     db: Session = Depends(get_db),
     current_user=Depends(check_role([RoleEnum.admin, RoleEnum.commercial])),
 ):
+    if id < 0:
+        raise HTTPException(status_code=409, detail="Cette ligne appartient à une facture et ne peut pas être supprimée depuis les achats du client.")
     item = db.query(ClientProduit).filter(
         ClientProduit.id == id,
-        enterprise_scope_filter(ClientProduit, current_user),
+        _client_product_scope(current_user),
     ).first()
     if not item:
         raise HTTPException(status_code=404, detail="Achat client non trouvé")
@@ -103,13 +152,17 @@ def export_client_produits_pdf(
 
     produits_all = db.query(ClientProduit).filter(
         ClientProduit.client_id == client_id,
-        enterprise_scope_filter(ClientProduit, current_user),
+        _client_product_scope(current_user),
     ).all()
-    if not produits_all:
+    invoice_lines = _invoice_line_purchases(db, current_user, client_id)
+    if not produits_all and not invoice_lines:
         raise HTTPException(status_code=404, detail="Aucun produit trouvé pour ce client")
 
     # Filtres
-    actifs = [p for p in produits_all if not p.note]
+    from types import SimpleNamespace
+    actifs = [p for p in produits_all if not p.note] + [
+        SimpleNamespace(**line) for line in invoice_lines
+    ]
     rejetes = [p for p in produits_all if p.note == "rejeté"]
     supprimes = [p for p in produits_all if p.note == "supprimé"]
 
