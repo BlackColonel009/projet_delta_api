@@ -675,6 +675,88 @@ def get_produits_par_codes(
     }
 
 
+@router.post("/check-availability")
+def check_barcode_availability(
+    barcodes: List[str] = Body(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(All_required()),
+):
+    """Vérifie en une requête la disponibilité de tous les codes scannés.
+
+    Une suggestion n'est faite que si le code de la base correspond exactement
+    au code scanné après retrait d'un caractère en début ou en fin.
+    """
+    cleaned_codes = list(dict.fromkeys(
+        code.strip() for code in barcodes if isinstance(code, str) and code.strip()
+    ))
+    if len(cleaned_codes) > 500:
+        raise HTTPException(status_code=422, detail="Maximum 500 codes par vérification")
+    if not cleaned_codes:
+        return {"results": []}
+
+    candidates = set(cleaned_codes)
+    suggestions_by_scan = {}
+    for code in cleaned_codes:
+        suggestions = set()
+        if len(code) > 1:
+            suggestions.update((code[1:], code[:-1]))
+        suggestions_by_scan[code] = suggestions
+        candidates.update(suggestions)
+
+    units = db.query(UniteProduit).join(UniteProduit.produit).filter(
+        or_(
+            UniteProduit.tracabilite.in_(candidates),
+            UniteProduit.code_barre.in_(candidates),
+        ),
+        enterprise_scope_filter(Produit, current_user),
+    ).all()
+
+    units_by_code = {}
+    for unit in units:
+        for stored_code in (unit.tracabilite, unit.code_barre):
+            if stored_code:
+                units_by_code.setdefault(stored_code, []).append(unit)
+
+    results = []
+    for code in cleaned_codes:
+        exact = units_by_code.get(code, [])
+        if exact:
+            available = any(_normalized_status(unit.statut) == "disponible" for unit in exact)
+            unit = next(
+                (item for item in exact if _normalized_status(item.statut) == "disponible"),
+                exact[0],
+            )
+            results.append({
+                "scanned_code": code,
+                "status": "available" if available else "unavailable",
+                "stored_code": code,
+                "unit_status": unit.statut,
+                "product_name": unit.produit.nom if unit.produit else None,
+            })
+            continue
+
+        matching_codes = {
+            candidate
+            for candidate in suggestions_by_scan[code]
+            if units_by_code.get(candidate)
+        }
+        if len(matching_codes) == 1:
+            suggested_code = next(iter(matching_codes))
+            matched_units = units_by_code[suggested_code]
+            unit = matched_units[0]
+            results.append({
+                "scanned_code": code,
+                "status": "suggestion",
+                "stored_code": suggested_code,
+                "unit_status": unit.statut,
+                "product_name": unit.produit.nom if unit.produit else None,
+            })
+        else:
+            results.append({"scanned_code": code, "status": "not_found"})
+
+    return {"results": results}
+
+
 # ✅ 3. Rechercher une unité via code_barre
 @router.get("/by-barcode/{code}", response_model=UniteProduitOut)
 def get_unite_by_barcode(
