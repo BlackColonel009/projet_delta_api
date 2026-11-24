@@ -252,6 +252,8 @@ def creer_vente_par_tracabilite(
 
     # ✅ Marquer l’unité comme vendue
     unite.statut = "vendu"
+    # Conserve le lien de vente pour l’historique client et les exports produit.
+    unite.commande_vente_id = commande.id
 
     # ✅ Diminuer le stock produit (si encore utilisé en doublon)
     produit.quantite -= data.quantite
