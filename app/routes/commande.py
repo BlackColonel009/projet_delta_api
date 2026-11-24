@@ -17,6 +17,10 @@ from app.models.model_unite_produit import UniteProduit
 from app.models.model_user import User
 from app.services.generate_facture_from_commande import generate_facture_from_commande
 from app.services.traceability_service import create_generated_unit
+from app.services.unit_reassignment_service import (
+    count_available_units,
+    sellable_product_quantity,
+)
 from app.schemas.commande_schema import (
     CommandeAchatCreate,
     CommandeAchatOut,
@@ -184,7 +188,8 @@ def create_commande_vente(
         if not produit:
             raise HTTPException(status_code=404, detail=f"Produit introuvable pour l'ID {ligne_data.produit_id}")
 
-        if produit.quantite < ligne_data.quantite:
+        stock_available = sellable_product_quantity(db, produit, enterprise_id)
+        if stock_available < ligne_data.quantite:
             raise HTTPException(status_code=400, detail=f"Stock insuffisant pour {produit.nom} Contactez vite votre fournisseur!")
 
 
@@ -229,7 +234,7 @@ def create_commande_vente(
                         ),
                         UniteProduit.produit_id == produit.id,
                         UniteProduit.enterprise_id == enterprise_id,
-                        UniteProduit.statut == "disponible"
+                        func.lower(func.trim(func.coalesce(UniteProduit.statut, ""))) == "disponible"
                     ).with_for_update().first()
                     if not unite:
                         raise HTTPException(
@@ -248,7 +253,7 @@ def create_commande_vente(
                 unites_dispo = db.query(UniteProduit).filter(
                     UniteProduit.produit_id == produit.id,
                     UniteProduit.enterprise_id == enterprise_id,
-                    UniteProduit.statut == "disponible"
+                    func.lower(func.trim(func.coalesce(UniteProduit.statut, ""))) == "disponible"
                 ).with_for_update().limit(ligne_data.quantite).all()
 
                 if len(unites_dispo) < ligne_data.quantite:
@@ -260,12 +265,7 @@ def create_commande_vente(
                     unite.date_modification = datetime.utcnow()
                     
             # 🔁 Mise à jour du stock disponible APRÈS modification des unités
-            quantite_restante = db.query(UniteProduit).filter(
-                UniteProduit.produit_id == produit.id,
-                UniteProduit.enterprise_id == enterprise_id,
-                UniteProduit.statut == "disponible"
-            ).count()
-            produit.quantite = quantite_restante    
+            produit.quantite = count_available_units(db, produit.id, enterprise_id)
                 
             # 🧠 Création d'un enregistrement ClientProduit
             client_produit = ClientProduit(

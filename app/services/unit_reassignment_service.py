@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
+from sqlalchemy import func
 
 
 REUSABLE_UNIT_STATUSES = {
@@ -102,23 +103,51 @@ def attach_reusable_unit(
     return UnitAttachmentResult("conflict")
 
 
+def count_available_units(db, product_id: Optional[int], enterprise_id: Optional[int] = None) -> int:
+    """Compte les unités disponibles avec le même statut normalisé partout."""
+    if product_id is None:
+        return 0
+    from app.models.model_unite_produit import UniteProduit
+
+    query = (
+        db.query(UniteProduit)
+        .filter(
+            UniteProduit.produit_id == product_id,
+            func.lower(func.trim(func.coalesce(UniteProduit.statut, ""))) == "disponible",
+        )
+    )
+    if enterprise_id is not None:
+        query = query.filter(UniteProduit.enterprise_id == enterprise_id)
+    return int(query.count() or 0)
+
+
+def product_has_tracked_units(db, product) -> bool:
+    if bool(getattr(product, "a_des_barcodes", False)):
+        return True
+    from app.models.model_unite_produit import UniteProduit
+
+    return db.query(UniteProduit.id).filter(
+        UniteProduit.produit_id == product.id,
+    ).first() is not None
+
+
+def sellable_product_quantity(db, product, enterprise_id: int) -> int:
+    """Use real available QR/barcode units whenever the product is tracked."""
+    if product_has_tracked_units(db, product):
+        return count_available_units(db, product.id, enterprise_id)
+    return max(0, int(product.quantite or 0))
+
+
 def refresh_available_product_quantity(db, product_id: Optional[int]) -> int:
     if product_id is None:
         return 0
     # Imports locaux pour garder ce service indépendant des routes.
     from app.models.model_produit import Produit
-    from app.models.model_unite_produit import UniteProduit
 
-    quantity = (
-        db.query(UniteProduit)
-        .filter(
-            UniteProduit.produit_id == product_id,
-            UniteProduit.statut == "disponible",
-        )
-        .count()
-    )
     product = db.query(Produit).filter(Produit.id == product_id).first()
-    if product is not None:
-        product.quantite = quantity
-        product.date_modification = _utcnow()
+    if product is None:
+        return 0
+    quantity = count_available_units(db, product_id, product.enterprise_id)
+    product.quantite = quantity
+    product.date_modification = _utcnow()
     return quantity

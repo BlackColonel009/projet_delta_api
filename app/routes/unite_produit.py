@@ -17,6 +17,7 @@ from app.utils.logger import log_action
 from app.services.traceability_service import create_generated_unit
 from app.services.unit_reassignment_service import (
     attach_reusable_unit,
+    count_available_units,
     refresh_available_product_quantity,
 )
 from app.utils.subscription_guard import require_subscription_feature
@@ -143,10 +144,7 @@ def add_unites_to_produit(
     db.flush()
     for previous_product_id in previous_product_ids:
         refresh_available_product_quantity(db, previous_product_id)
-    produit.quantite = db.query(UniteProduit).filter(
-        UniteProduit.produit_id == produit.id,
-        UniteProduit.statut == "disponible",
-    ).count()
+    produit.quantite = count_available_units(db, produit.id, enterprise_id)
     db.commit()
 
     log_action(
@@ -380,13 +378,8 @@ def cleanup_company_stock(
                 .all()
             )
             for product in products:
-                product.quantite = (
-                    db.query(UniteProduit)
-                    .filter(
-                        UniteProduit.produit_id == product.id,
-                        UniteProduit.statut == "disponible",
-                    )
-                    .count()
+                product.quantite = count_available_units(
+                    db, product.id, enterprise_context.enterprise_id
                 )
                 product.date_modification = datetime.utcnow()
 
@@ -454,10 +447,9 @@ def delete_unite_produit(
     db.commit()
 
     # 🔁 Recalculer la quantité restante
-    quantite_restante = db.query(UniteProduit).filter(
-        UniteProduit.produit_id == produit.id,
-        UniteProduit.statut == "disponible"
-    ).count()
+    quantite_restante = count_available_units(
+        db, produit.id, actor_enterprise_id(current_user)
+    )
 
     # Mettre à jour le champ produit.quantite
     produit.quantite = quantite_restante
@@ -605,10 +597,7 @@ def lier_barcodes_a_produit(
     for previous_product_id in previous_product_ids:
         refresh_available_product_quantity(db, previous_product_id)
     produit.a_des_barcodes = True
-    produit.quantite = db.query(UniteProduit).filter(
-        UniteProduit.produit_id == produit_id,
-        UniteProduit.statut == "disponible",
-    ).count()
+    produit.quantite = count_available_units(db, produit_id, enterprise_id)
     produit.date_modification = now
     db.commit()
 
@@ -652,7 +641,7 @@ def get_produits_par_codes(
                 UniteProduit.code_barre == code,
             ),
             UniteProduit.produit_id.isnot(None),
-            UniteProduit.statut == "disponible"
+            func.lower(func.trim(func.coalesce(UniteProduit.statut, ""))) == "disponible"
         ).join(UniteProduit.produit).filter(
             enterprise_scope_filter(Produit, current_user),
         ).first()

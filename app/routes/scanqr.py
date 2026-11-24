@@ -18,6 +18,12 @@ from app.utils.permissions import check_role
 from app.schemas.user_schema import RoleEnum
 from app.utils.logger import log_action
 from app.models.model_unite_produit import UniteProduit
+from app.services.enterprise_service import actor_enterprise_id
+from app.services.unit_reassignment_service import (
+    count_available_units,
+    refresh_available_product_quantity,
+    normalize_unit_status,
+)
 from app.utils.subscription_guard import require_subscription_feature
 
 
@@ -205,19 +211,28 @@ def creer_vente_par_tracabilite(
         current_user.id if current_user.is_main_user
         else current_user.parent_user_id
     )
-    unite = db.query(UniteProduit).filter(UniteProduit.tracabilite == data.tracabilite).first()
+    enterprise_id = actor_enterprise_id(current_user)
+    unite = db.query(UniteProduit).filter(
+        UniteProduit.tracabilite == data.tracabilite,
+        UniteProduit.enterprise_id == enterprise_id,
+    ).with_for_update().first()
     if not unite:
         raise HTTPException(status_code=404, detail="Unité non trouvée.")
 
-    if unite.statut != "disponible":
+    if normalize_unit_status(unite.statut) != "disponible":
         raise HTTPException(status_code=400, detail=f"Unité déjà utilisée : statut = {unite.statut}")
 
     produit = unite.produit
     if not produit or produit.user_id != parent_user_id:
         raise HTTPException(status_code=404, detail="Unité non trouvée.")
 
-    if produit.quantite < data.quantite:
-        raise HTTPException(status_code=400, detail="Stock insuffisant pour cette vente.")
+    if data.quantite != 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Un code QR identifie une seule unité : la quantité vendue doit être 1.",
+        )
+    if count_available_units(db, produit.id, enterprise_id) < 1:
+        raise HTTPException(status_code=400, detail="Aucune unité QR disponible pour cette vente.")
 
     prix_unitaire = produit.prix_vente
     total_ht = prix_unitaire * data.quantite
@@ -256,7 +271,8 @@ def creer_vente_par_tracabilite(
     unite.commande_vente_id = commande.id
 
     # ✅ Diminuer le stock produit (si encore utilisé en doublon)
-    produit.quantite -= data.quantite
+    db.flush()
+    refresh_available_product_quantity(db, produit.id)
 
     db.commit()
 

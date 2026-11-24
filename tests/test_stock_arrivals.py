@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine
@@ -292,6 +293,27 @@ class StockArrivalWorkflowTests(unittest.TestCase):
 
         result = _with_available_quantities(self.db, [self.product])
         self.assertEqual(result[0].quantite, 0)
+
+    def test_product_listing_keeps_manual_stock_without_tracked_units(self):
+        manual_product = SimpleNamespace(
+            id=999,
+            quantite=7,
+            a_des_barcodes=False,
+            enterprise_id=self.primary.id,
+        )
+
+        result = _with_available_quantities(self.db, [manual_product])
+
+        self.assertEqual(result[0].quantite, 7)
+
+    def test_product_listing_uses_available_unit_count_for_tracked_stock(self):
+        validate_arrival(self.arrival.id, self.db, self.owner)
+        self.product.quantite = 0
+        self.db.flush()
+
+        result = _with_available_quantities(self.db, [self.product])
+
+        self.assertEqual(result[0].quantite, 2)
 
     def test_arrivals_report_is_a_valid_pdf_response(self):
         validate_arrival(self.arrival.id, self.db, self.owner)

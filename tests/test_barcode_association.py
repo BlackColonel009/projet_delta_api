@@ -5,7 +5,12 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from app.routes.unite_produit import lier_barcodes_a_produit
-from app.services.unit_reassignment_service import attach_reusable_unit
+from app.services.unit_reassignment_service import (
+    attach_reusable_unit,
+    count_available_units,
+    refresh_available_product_quantity,
+    sellable_product_quantity,
+)
 
 
 class _FakeQuery:
@@ -59,6 +64,45 @@ class _FakeUnitModel:
 
 
 class BarcodeAssociationTests(unittest.TestCase):
+    def test_refreshes_product_quantity_from_available_units(self):
+        product = SimpleNamespace(
+            id=10,
+            enterprise_id=1,
+            quantite=0,
+            date_modification=None,
+        )
+        db = _FakeDb(
+            [
+                _FakeQuery(first_result=product),
+                _FakeQuery(count_result=1),
+            ]
+        )
+
+        quantity = refresh_available_product_quantity(db, product.id)
+
+        self.assertEqual(quantity, 1)
+        self.assertEqual(product.quantite, 1)
+        self.assertIsNotNone(product.date_modification)
+
+    def test_available_unit_count_accepts_enterprise_scope(self):
+        db = _FakeDb([_FakeQuery(count_result=1)])
+
+        quantity = count_available_units(db, product_id=10, enterprise_id=1)
+
+        self.assertEqual(quantity, 1)
+
+    def test_tracked_stock_uses_available_units_when_cached_quantity_is_zero(self):
+        product = SimpleNamespace(
+            id=10,
+            quantite=0,
+            a_des_barcodes=True,
+        )
+        db = _FakeDb([_FakeQuery(count_result=1)])
+
+        quantity = sellable_product_quantity(db, product, enterprise_id=1)
+
+        self.assertEqual(quantity, 1)
+
     def test_reactivates_unavailable_unit_on_same_product(self):
         product = SimpleNamespace(id=10, nom="Produit")
         unit = SimpleNamespace(
@@ -189,6 +233,7 @@ class BarcodeAssociationTests(unittest.TestCase):
             id=99,
             nom="Mauvaise fiche",
             quantite=1,
+            enterprise_id=1,
             date_modification=None,
         )
         unavailable_unit = SimpleNamespace(
@@ -204,8 +249,8 @@ class BarcodeAssociationTests(unittest.TestCase):
             [
                 _FakeQuery(first_result=target_product),
                 _FakeQuery(first_result=unavailable_unit),
-                _FakeQuery(count_result=0),
                 _FakeQuery(first_result=old_product),
+                _FakeQuery(count_result=0),
                 _FakeQuery(count_result=1),
             ]
         )

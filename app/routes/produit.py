@@ -33,13 +33,15 @@ from app.services.enterprise_service import (
 from app.services.traceability_service import create_generated_unit
 from app.services.unit_reassignment_service import (
     attach_reusable_unit,
+    count_available_units,
+    product_has_tracked_units,
     refresh_available_product_quantity,
 )
 from app.utils.subscription_guard import (
     enforce_subscription_quota,
     require_subscription_feature,
 )
-from sqlalchemy import case, func, or_
+from sqlalchemy import and_, case, func, or_
 from reportlab.lib import colors as pdf_colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -106,22 +108,42 @@ def _initials_match(column, initials: str):
 
 
 def _with_available_quantities(db: Session, products: list[Produit]):
-    """Expose toujours le stock réellement disponible, jamais le stock historique vendu."""
+    """Expose le vrai stock : unités disponibles pour le stock tracé, compteur sinon."""
     if not products:
         return products
     product_ids = [product.id for product in products]
-    available = dict(
-        db.query(UniteProduit.produit_id, func.count(UniteProduit.id))
-        .filter(
-            UniteProduit.produit_id.in_(product_ids),
-            func.lower(UniteProduit.statut) == "disponible",
-        )
-        .group_by(UniteProduit.produit_id)
-        .all()
-    )
+    unit_stats = db.query(
+        UniteProduit.produit_id,
+        func.count(UniteProduit.id),
+        func.sum(
+            case(
+                (
+                    func.lower(func.trim(func.coalesce(UniteProduit.statut, "")))
+                    == "disponible",
+                    1,
+                ),
+                else_=0,
+            )
+        ),
+    ).join(
+        Produit, Produit.id == UniteProduit.produit_id
+    ).filter(
+        Produit.id.in_(product_ids),
+        or_(
+            UniteProduit.enterprise_id == Produit.enterprise_id,
+            and_(
+                UniteProduit.enterprise_id.is_(None),
+                Produit.enterprise_id.is_(None),
+            ),
+        ),
+    ).group_by(UniteProduit.produit_id).all()
+    tracked_ids = {row[0] for row in unit_stats if row[1] > 0}
+    available = {row[0]: int(row[2] or 0) for row in unit_stats}
+
     for product in products:
-        # set_committed_value évite de marquer l'objet comme modifié durant ce GET.
-        set_committed_value(product, "quantite", int(available.get(product.id, 0)))
+        if product.a_des_barcodes or product.id in tracked_ids:
+            # set_committed_value empêche un GET de modifier l'objet ORM.
+            set_committed_value(product, "quantite", available.get(product.id, 0))
     return products
 
 @router.post("/", response_model=dict)
@@ -317,11 +339,11 @@ def create_produit(
                 produit.a_des_barcodes = True
                 
                 # ✅ AJOUTE CETTE LIGNE ICI
-                produit.quantite = len(unites)
+                db.flush()
+                produit.quantite = count_available_units(db, produit.id, enterprise_id)
                 for previous_product_id in previous_product_ids:
                     refresh_available_product_quantity(db, previous_product_id)
                 
-                db.flush()
                 db.refresh(produit)
 
                 log_action(
@@ -991,7 +1013,13 @@ def update_produit(
     produit.prix_achat = prix_achat
     produit.prix_vente = prix_vente
     produit.fournisseur_id = fournisseur_id
-    produit.quantite = quantite
+    # La quantité du formulaire reste la source pour les produits non suivis
+    # par unité. Pour un produit QR/code-barres, elle est recalculée plus bas
+    # depuis les unités disponibles afin qu'une ancienne valeur (ex. 0) ne
+    # puisse pas écraser le stock réel lors d'une simple édition.
+    has_tracked_units = product_has_tracked_units(db, produit)
+    if not has_tracked_units:
+        produit.quantite = quantite
     produit.rating = rating
     produit.caracteristiques = caracteristiques
     produit.couleur = couleur
@@ -1081,10 +1109,7 @@ def update_produit(
             db.flush()
             for previous_product_id in previous_product_ids:
                 refresh_available_product_quantity(db, previous_product_id)
-            produit.quantite = db.query(UniteProduit).filter(
-                UniteProduit.produit_id == produit.id,
-                func.lower(UniteProduit.statut) == "disponible",
-            ).count()
+            produit.quantite = count_available_units(db, produit.id, enterprise_id)
             log_action(
                 db=db,
                 current_user=current_user,
@@ -1097,6 +1122,12 @@ def update_produit(
                 ),
                 commit=False,
             )
+
+    # Garde-fou final : chaque fiche possédant des unités tracées conserve un
+    # compteur égal aux unités disponibles, même si aucun nouveau code n'a été
+    # ajouté durant cette modification.
+    if produit.a_des_barcodes or has_tracked_units:
+        produit.quantite = count_available_units(db, produit.id, enterprise_id)
 
     db.commit()
 
@@ -1233,20 +1264,23 @@ def get_stock_disponible(
     db: Session = Depends(get_db),
     current_user=Depends(All_required()),
 ):
-    product_exists = db.query(Produit.id).filter(
+    product = db.query(Produit).filter(
         Produit.id == produit_id,
         enterprise_scope_filter(Produit, current_user),
     ).first()
-    if not product_exists:
+    if not product:
         raise HTTPException(status_code=404, detail="Produit non trouvé")
-    total = db.query(UniteProduit).filter(UniteProduit.produit_id == produit_id).count()
-    disponible = db.query(UniteProduit).filter(
+    total = db.query(UniteProduit).filter(
         UniteProduit.produit_id == produit_id,
-        UniteProduit.statut == "disponible"
+        UniteProduit.enterprise_id == product.enterprise_id,
     ).count()
+    disponible = count_available_units(db, produit_id, product.enterprise_id)
     en_cours = db.query(UniteProduit).filter(
         UniteProduit.produit_id == produit_id,
-        func.lower(UniteProduit.statut).in_(["en_cours", "en cours"])
+        UniteProduit.enterprise_id == product.enterprise_id,
+        func.lower(func.trim(func.coalesce(UniteProduit.statut, ""))).in_(
+            ["en_cours", "en cours"]
+        )
     ).count()
     return {"stock_total": total, "stock_reel": disponible, "stock_en_attente": en_cours}
 
